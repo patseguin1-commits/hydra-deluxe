@@ -505,10 +505,18 @@ def on_path_selected(sender, app_data, path):
                         
                         # Backends
                         # act.backends runs out to the full squeeze window for
-                        # scoring purposes; only show the ones near the deact.
+                        # scoring purposes; only show the ones near the deact,
+                        # plus whatever note is actually being squeezed out of
+                        # SP, however far past the display window it lands.
+                        sqout_offsets = [sq.offset for sq in act.sqinouts if isinstance(sq, hydata.SqOut)]
+                        sqout_ids = {
+                            id(bsq) for bsq in act.backends
+                            if any(abs(bsq.offset_ms - off) < 0.01 for off in sqout_offsets)
+                        }
                         shown_backends = [
                             bsq for bsq in act.backends
                             if abs(bsq.offset_ms) < hymisc.BACKEND_DISPLAY_WINDOW_MS
+                            or id(bsq) in sqout_ids
                         ]
                         if shown_backends:
                             dpg.add_text("Backends:")
@@ -520,11 +528,19 @@ def on_path_selected(sender, app_data, path):
                                 dpg.add_table_column(label="Rating", width_stretch=True)
                                     
                                 for bsq in shown_backends:
+                                    is_squeezed_out = id(bsq) in sqout_ids
                                     with dpg.table_row():
                                         dpg.add_text(f"{bsq.offset_ms:6.1f}")
                                         dpg.add_text(f"{bsq.chord.notationstr()}")
-                                        dpg.add_text(f"{bsq.points:4,d}")
-                                        dpg.add_text(f"{bsq.summarystr()}")
+                                        # A squeezed-out note only scores its reduced
+                                        # sqout value, not the full SP value.
+                                        dpg.add_text(f"{bsq.sqout_points if is_squeezed_out else bsq.points:4,d}")
+                                        sqtext = bsq.summarystr()
+                                        if is_squeezed_out:
+                                            sqtext += f" <-- squeezed out (-{bsq.points - bsq.sqout_points:,d})"
+                                        dpg.add_text(sqtext)
+                                        if is_squeezed_out:
+                                            dpg.bind_item_theme(dpg.last_item(), "warning_theme")
                         else:
                             dpg.add_text("Backends: None.")
                         dpg.add_spacer(height=16)
