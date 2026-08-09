@@ -7,9 +7,19 @@ match what the app would produce for the same songs.
     python hydra_batch.py <folder> [...]  # specific folders instead
     python hydra_batch.py --redo          # re-analyze charts already stored
     python hydra_batch.py --reindex       # only rebuild sort columns, no analysis
+    python hydra_batch.py --db <path>     # target a specific hyapp.db
 
 Safe to interrupt and re-run: charts already stored for the current chartmode
 are skipped unless --redo is given.
+
+Note on which database gets written: hymisc.ROOTPATH is the folder the app
+runs from, so running this from source targets the repo's own hyapp.db, not
+the one the built exe uses. To fill the packaged app's library, pass its
+_internal folder's database:
+
+    python hydra_batch.py --db dist/HydraTest/_internal/hyapp.db
+
+Or just use "Analyze library" inside Hydra, which always uses its own.
 
 """
 
@@ -61,12 +71,19 @@ def chartmode_key(difficulty, prodrums, bass2x):
 def main(argv):
     redo = '--redo' in argv
     reindex_only = '--reindex' in argv
+
+    dbpath = None
+    if '--db' in argv:
+        dbpath = argv[argv.index('--db') + 1]
+
     folder_args = [a for a in argv if not a.startswith('--')]
+    if dbpath in folder_args:
+        folder_args.remove(dbpath)
 
     difficulty, prodrums, bass2x, d_mode, d_value, ms_filter, ini_folders = load_settings()
     chartmode = chartmode_key(difficulty, prodrums, bass2x)
 
-    store = hystore.RecordStore()
+    store = hystore.RecordStore(dbpath)
 
     if reindex_only:
         print("Rebuilding sort columns from stored records...")
@@ -81,6 +98,7 @@ def main(argv):
         store.close()
         return 1
 
+    print(f"Database   : {store.dbpath}")
     print(f"Chart mode : {chartmode}")
     print(f"Depth      : {d_mode} {d_value}")
     print(f"Timing cap : {'none' if ms_filter is None else f'{ms_filter} ms'}")

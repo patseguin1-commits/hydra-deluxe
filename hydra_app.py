@@ -248,6 +248,9 @@ class HyAppState:
         self.current_path_copytext = None
         
         self.selected_scanitem = None
+
+        # Running library analysis, if any (see BatchJob).
+        self.batch = None
     
         self.scanmodal_height_short = 190
         self.scanmodal_height_long = 320
@@ -370,6 +373,172 @@ def on_scan():
     for errormsg in errors:
         dpg.add_text(errormsg, parent="scanprogress_failedcontainer")
     
+class BatchJob:
+    """One chart per rendered frame, so the UI keeps painting and Cancel works.
+
+    dearpygui runs callbacks inside the render, so looping over the whole
+    library inside the button callback would freeze the window until it
+    finished. Instead the main loop advances this a step at a time.
+
+    """
+    def __init__(self, scanitems, chartmode, redo):
+        self.items = scanitems
+        self.chartmode = chartmode
+        self.redo = redo
+
+        self.index = 0
+        self.analyzed = 0
+        self.skipped = 0
+        self.failed = 0
+        self.failures = []
+        self.cancelled = False
+
+    def is_done(self):
+        return self.cancelled or self.index >= len(self.items)
+
+    def step(self):
+        """Handle the next chart. Returns False once there's nothing left."""
+        if self.is_done():
+            return False
+
+        scanitem = self.items[self.index]
+        self.index += 1
+
+        if not self.redo and appstate.hydatabook.store.has_record(scanitem.md5, self.chartmode):
+            self.skipped += 1
+            return True
+
+        try:
+            record, tempomap = hyutil.analyze_chart_file(
+                scanitem.notespath,
+                appstate.usettings.view_difficulty,
+                appstate.usettings.view_prodrums,
+                appstate.usettings.view_bass2x,
+                appstate.usettings.depth_mode,
+                int(appstate.usettings.depth_value),
+                int(appstate.usettings.mslimit_value) if appstate.usettings.mslimit_enabled else None,
+                export_tempomap=True,
+            )
+        except Exception as e:
+            self.failed += 1
+            self.failures.append(f"{scanitem.artist} - {scanitem.title}: {e!r}")
+            return True
+
+        appstate.hydatabook.add_song(scanitem, tempomap)
+        appstate.hydatabook.add_record(scanitem.md5, self.chartmode, record)
+        self.analyzed += 1
+        return True
+
+
+def library_scanitems():
+    """Every chart in the library, as ScanItems."""
+    cxn = sqlite3.connect(hymisc.DBPATH)
+    try:
+        rows = cxn.execute("SELECT * FROM charts ORDER BY name").fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    cxn.close()
+
+    scanitems = []
+    for row in rows:
+        try:
+            scanitems.append(hyutil.ScanItem.from_db(row))
+        except Exception:
+            # A malformed row just isn't analyzable; skip it rather than
+            # taking the whole run down.
+            pass
+    return scanitems
+
+
+def on_batch():
+    """Start analyzing every chart in the library."""
+    if appstate.batch is not None:
+        return
+
+    scanitems = library_scanitems()
+    if not scanitems:
+        return
+
+    reset_batch_modal()
+    dpg.show_item("batchprogress")
+
+    appstate.batch = BatchJob(
+        scanitems,
+        appstate.usettings.chartmode_key(),
+        dpg.get_value("batch_redo"),
+    )
+    refresh_batch_progress()
+
+
+def refresh_batch_progress():
+    job = appstate.batch
+    total = len(job.items)
+
+    dpg.set_value("batch_bar", job.index / total if total else 1.0)
+    dpg.configure_item("batch_bar", overlay=f"{job.index}/{total}")
+    dpg.set_value(
+        "batch_counts",
+        f"{job.analyzed} analyzed, {job.skipped} already stored, {job.failed} failed."
+    )
+
+    if job.index < total:
+        nextitem = job.items[job.index]
+        dpg.set_value("batch_current", f"{nextitem.artist} - {nextitem.title}"[:64])
+
+
+def batch_step():
+    """Advance the running batch by one chart. Called once per frame."""
+    job = appstate.batch
+    if job is None:
+        return
+
+    if job.step():
+        refresh_batch_progress()
+        return
+
+    # Finished or cancelled.
+    dpg.set_value("batch_current", "")
+    dpg.set_value("batch_title", "Cancelled." if job.cancelled else "Finished.")
+    dpg.set_value("batch_bar", job.index / len(job.items) if job.items else 1.0)
+    dpg.show_item("batch_done")
+    dpg.hide_item("batch_cancelbutton")
+    dpg.show_item("batch_dismiss")
+
+    if job.failures:
+        dpg.configure_item("batchprogress", height=380)
+        dpg.show_item("batch_failedlabel")
+        dpg.show_item("batch_failedcontainer")
+        dpg.delete_item("batch_failedcontainer", children_only=True)
+        for msg in job.failures:
+            dpg.add_text(msg, parent="batch_failedcontainer")
+
+    appstate.batch = None
+
+
+def on_batch_cancel():
+    if appstate.batch is not None:
+        appstate.batch.cancelled = True
+
+
+def on_batch_dismiss():
+    dpg.hide_item("batchprogress")
+    cache_librarysize()
+    refresh_tableview()
+
+
+def reset_batch_modal():
+    dpg.configure_item("batchprogress", height=200)
+    dpg.set_value("batch_title", "Analyzing library...")
+    dpg.set_value("batch_current", "")
+    dpg.set_value("batch_counts", "")
+    dpg.set_value("batch_bar", 0.0)
+    dpg.hide_item("batch_done")
+    dpg.hide_item("batch_failedlabel")
+    dpg.hide_item("batch_failedcontainer")
+    dpg.hide_item("batch_dismiss")
+    dpg.show_item("batch_cancelbutton")
+
+
 def on_scan_dismiss():
     dpg.hide_item("scanprogress")
     
@@ -1011,6 +1180,8 @@ def build_main_ui():
         with dpg.group(horizontal=True):
             dpg.add_button(label="Add folder...", callback=on_add_chartfolder)
             dpg.add_button(tag="scanbutton", label="Scan charts", callback=on_scan)
+            dpg.add_button(tag="batchbutton", label="Analyze library", callback=on_batch)
+            dpg.add_checkbox(tag="batch_redo", label="redo existing")
         dpg.add_spacer(height=2)
         dpg.add_separator(label="Library", tag="librarytitle")
         
@@ -1070,6 +1241,20 @@ def build_main_ui():
             dpg.add_child_window(tag="scanprogress_failedcontainer", show=False, height=100, width=-18, horizontal_scrollbar=True)
             dpg.add_spacer(height=0)
             dpg.add_button(tag="scanprogress_dismiss", label="Continue", callback=on_scan_dismiss, show=False)
+
+    with dpg.window(tag="batchprogress", show=False, modal=True, no_title_bar=True, no_close=True, no_resize=True, no_move=True):
+        with dpg.group(indent=16):
+            dpg.add_text("Analyzing library...", tag="batch_title")
+            dpg.add_text("", tag="batch_current")
+            dpg.add_progress_bar(tag="batch_bar", width=-18)
+            dpg.add_text("", tag="batch_counts")
+            dpg.add_text("Done!", tag="batch_done", show=False)
+            dpg.add_text("Skipped failed songs:", tag="batch_failedlabel", show=False)
+            dpg.add_child_window(tag="batch_failedcontainer", show=False, height=120, width=-18, horizontal_scrollbar=True)
+            dpg.add_spacer(height=0)
+            with dpg.group(horizontal=True):
+                dpg.add_button(tag="batch_cancelbutton", label="Cancel", callback=on_batch_cancel)
+                dpg.add_button(tag="batch_dismiss", label="Continue", callback=on_batch_dismiss, show=False)
     
     with dpg.window(label="Song Details", tag="songdetails", show=False, modal=True, no_title_bar=False, no_close=False, no_resize=True, no_move=True):
         with dpg.group(tag="songdetails_upperpanel", horizontal=True, height=170):
@@ -1182,6 +1367,11 @@ if __name__ == '__main__':
         
         if setupframe <= 2:
             setupframe += 1
+
+        # Long-running library analysis advances one chart per frame so the
+        # window keeps repainting and Cancel stays clickable.
+        if appstate.batch is not None:
+            batch_step()
             
     dpg.start_dearpygui()
 

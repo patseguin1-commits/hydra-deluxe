@@ -177,6 +177,13 @@ class RecordStore:
 
     def add_record(self, hyhash, chartmode, record):
         """Store one record. Constant cost, whatever the library size."""
+        self._write_record(hyhash, chartmode, record)
+        self.cxn.commit()
+        self._cache.pop((hyhash, chartmode), None)
+
+    def _write_record(self, hyhash, chartmode, record):
+        """The single place a record row is built, so callers can't drift
+        out of step with the column list."""
         bestpath = ""
         if record.is_version_compatible() and record._paths:
             bestpath = record.best_path().pathstring()
@@ -184,6 +191,7 @@ class RecordStore:
         summary = summarize_record(record)
         cols = [name for name, _ in _SUMMARY_COLUMNS]
         placeholders = ",".join("?" * (5 + len(cols)))
+
         self.cxn.execute(
             f"INSERT OR REPLACE INTO records "
             f"(hyhash,chartmode,hyversion,bestpath,blob,{','.join(cols)}) "
@@ -197,8 +205,6 @@ class RecordStore:
                 *(summary[c] for c in cols),
             ),
         )
-        self.cxn.commit()
-        self._cache.pop((hyhash, chartmode), None)
 
     """Reading"""
 
@@ -382,20 +388,7 @@ class RecordStore:
                 if record.is_version_compatible():
                     _restore_timecodes(record, tempomap)
 
-                bestpath = ""
-                if record.is_version_compatible() and record._paths:
-                    bestpath = record.best_path().pathstring()
-
-                self.cxn.execute(
-                    "INSERT OR REPLACE INTO records VALUES (?,?,?,?,?)",
-                    (
-                        hyhash,
-                        chartmode,
-                        json.dumps(list(record.hyversion)),
-                        bestpath,
-                        _pack(record),
-                    ),
-                )
+                self._write_record(hyhash, chartmode, record)
                 records += 1
 
         self.cxn.commit()
