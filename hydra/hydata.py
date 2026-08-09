@@ -58,7 +58,10 @@ def json_save(obj):
         
             'skips': obj.skips,
             'tc': obj.timecode.ticks,
-            'chord': obj.chord.code(),
+            # An activation can have no chord (the details panel already
+            # guards for it), and calling .code() on that took the whole
+            # save down with an AttributeError.
+            'chord': obj.chord.code() if obj.chord is not None else None,
             'sp_meter': obj.sp_meter,
             
             'fe_pts': obj.frontend_points,
@@ -171,7 +174,7 @@ def json_load(_dict):
             o = Activation()
             o.skips = _dict['skips']
             o.timecode = _dict['tc']
-            o.chord = Chord.from_code(_dict['chord'])
+            o.chord = Chord.from_code(_dict['chord']) if _dict['chord'] is not None else None
             o.sp_meter = _dict['sp_meter']
             
             o.frontend_points = _dict['fe_pts']
@@ -372,6 +375,11 @@ class Path:
     def avg_mult(self):
         multscore = self.totalscore() - self.score_solo
         basescore = self.score_base + self.score_ghosts + self.score_accents
+        if not basescore:
+            # A chart with no scoring notes on this difficulty has no average
+            # multiplier to speak of. Without this the details panel and the
+            # record summary both die on ZeroDivisionError.
+            return 0.0
         return float(multscore / basescore)
 
     def copy(self):

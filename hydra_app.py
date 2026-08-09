@@ -445,8 +445,17 @@ class BatchJob:
             self.failures.append(f"{scanitem.artist} - {scanitem.title}: {e!r}")
             return True
 
-        appstate.hydatabook.add_song(scanitem, tempomap)
-        appstate.hydatabook.add_record(scanitem.md5, self.chartmode, record)
+        # Saving is inside the guard too: one chart that won't store should
+        # cost a line in the failure list, not the rest of the run.
+        try:
+            appstate.hydatabook.add_song(scanitem, tempomap)
+            appstate.hydatabook.add_record(scanitem.md5, self.chartmode, record)
+        except Exception as e:
+            log_error(f"batch saving {scanitem.title}")
+            self.failed += 1
+            self.failures.append(f"{scanitem.artist} - {scanitem.title}: save failed, {e!r}")
+            return True
+
         self.analyzed += 1
         return True
 
@@ -814,9 +823,23 @@ def on_run_chart(sender, app_data, user_data):
     dpg.configure_item("analyze_opt_bar", overlay="")
     dpg.set_value("analyze_opt_bar", 1)
     dpg.show_item("analyze_opt_done")
-    
-    appstate.hydatabook.add_song(appstate.selected_scanitem, tempomap)
-    appstate.hydatabook.add_record(appstate.selected_scanitem.md5, appstate.usettings.chartmode_key(), record)
+
+    # Storing the result must not be able to strand this modal. dearpygui
+    # swallows exceptions raised in callbacks, so anything thrown here used to
+    # leave the panel sitting on "Done!" forever with no way out.
+    try:
+        appstate.hydatabook.add_song(appstate.selected_scanitem, tempomap)
+        appstate.hydatabook.add_record(
+            appstate.selected_scanitem.md5, appstate.usettings.chartmode_key(), record
+        )
+    except Exception as e:
+        log_error(f"saving record for {appstate.selected_scanitem.title}")
+        dpg.configure_item("songdetails_progresspanel", height=180)
+        dpg.set_value("analyze_errorcontent", f"Analyzed, but saving failed: {e!r}")
+        dpg.show_item("analyze_errorlabel")
+        dpg.show_item("analyze_errorcontent")
+        dpg.show_item("analyze_dismissbutton")
+        return
 
     time.sleep(0.5)
     on_analyze_dismiss(None, None)
