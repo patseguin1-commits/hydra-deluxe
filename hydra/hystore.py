@@ -12,6 +12,7 @@ scan_library() drops and recreates 'charts', so records must not be in it.
 
 import json
 import sqlite3
+import threading
 import zlib
 
 from . import hydata
@@ -143,7 +144,15 @@ class RecordStore:
 
     def __init__(self, dbpath=None):
         self.dbpath = hymisc.DBPATH if dbpath is None else dbpath
-        self.cxn = sqlite3.connect(self.dbpath)
+
+        # dearpygui dispatches UI callbacks on a different thread from the
+        # one that builds the app, so a connection pinned to its creating
+        # thread raises ProgrammingError on every click. Share it across
+        # threads instead, and serialize access with the lock below - the
+        # sqlite3 module allows exactly that, provided callers don't overlap.
+        self.cxn = sqlite3.connect(self.dbpath, check_same_thread=False)
+        self._lock = threading.RLock()
+
         self.cxn.executescript(_SCHEMA)
         self._add_missing_columns()
         self.cxn.commit()
@@ -163,23 +172,25 @@ class RecordStore:
 
     def add_song(self, scanitem, tempomap):
         """Register a song so records can be stored against it."""
-        self.cxn.execute(
-            "INSERT OR IGNORE INTO songmeta VALUES (?,?,?,?,?)",
-            (
-                scanitem.md5,
-                scanitem.title,
-                scanitem.artist,
-                scanitem.charter,
-                json.dumps(tempomap, separators=(',', ':')),
-            ),
-        )
-        self.cxn.commit()
+        with self._lock:
+            self.cxn.execute(
+                "INSERT OR IGNORE INTO songmeta VALUES (?,?,?,?,?)",
+                (
+                    scanitem.md5,
+                    scanitem.title,
+                    scanitem.artist,
+                    scanitem.charter,
+                    json.dumps(tempomap, separators=(',', ':')),
+                ),
+            )
+            self.cxn.commit()
 
     def add_record(self, hyhash, chartmode, record):
         """Store one record. Constant cost, whatever the library size."""
-        self._write_record(hyhash, chartmode, record)
-        self.cxn.commit()
-        self._cache.pop((hyhash, chartmode), None)
+        with self._lock:
+            self._write_record(hyhash, chartmode, record)
+            self.cxn.commit()
+            self._cache.pop((hyhash, chartmode), None)
 
     def _write_record(self, hyhash, chartmode, record):
         """The single place a record row is built, so callers can't drift
@@ -214,42 +225,44 @@ class RecordStore:
         Returns None if there's no record.
 
         """
-        row = self.cxn.execute(
-            "SELECT hyversion, bestpath FROM records WHERE hyhash=? AND chartmode=?",
-            (hyhash, chartmode),
-        ).fetchone()
+        with self._lock:
+            row = self.cxn.execute(
+                "SELECT hyversion, bestpath FROM records WHERE hyhash=? AND chartmode=?",
+                (hyhash, chartmode),
+            ).fetchone()
 
-        if row is None:
-            return None
+            if row is None:
+                return None
 
-        return tuple(json.loads(row[0])), row[1]
+            return tuple(json.loads(row[0])), row[1]
 
     def get_record(self, hyhash, chartmode):
         """The full record, inflated on demand. None if there isn't one."""
-        key = (hyhash, chartmode)
-        if key in self._cache:
-            return self._cache[key]
+        with self._lock:
+            key = (hyhash, chartmode)
+            if key in self._cache:
+                return self._cache[key]
 
-        row = self.cxn.execute(
-            "SELECT blob FROM records WHERE hyhash=? AND chartmode=?", key
-        ).fetchone()
+            row = self.cxn.execute(
+                "SELECT blob FROM records WHERE hyhash=? AND chartmode=?", key
+            ).fetchone()
 
-        if row is None:
-            return None
+            if row is None:
+                return None
 
-        record = _unpack(row[0])
+            record = _unpack(row[0])
 
-        # An incompatible record is returned empty by json_load, so there are
-        # no timecodes to rebuild and no tempomap lookup worth doing.
-        if record.is_version_compatible():
-            if (tempomap := self.get_tempomap(hyhash)) is not None:
-                _restore_timecodes(record, tempomap)
+            # An incompatible record is returned empty by json_load, so there are
+            # no timecodes to rebuild and no tempomap lookup worth doing.
+            if record.is_version_compatible():
+                if (tempomap := self.get_tempomap(hyhash)) is not None:
+                    _restore_timecodes(record, tempomap)
 
-        if len(self._cache) >= _CACHE_LIMIT:
-            self._cache.clear()
-        self._cache[key] = record
+            if len(self._cache) >= _CACHE_LIMIT:
+                self._cache.clear()
+            self._cache[key] = record
 
-        return record
+            return record
 
     def get_tempomap(self, hyhash):
         """(res, tpm_map, bpm_map), or None if the song isn't registered.
@@ -258,25 +271,27 @@ class RecordStore:
         integer tick values, and plain json would hand them back as strings.
 
         """
-        row = self.cxn.execute(
-            "SELECT tempomap FROM songmeta WHERE hyhash=?", (hyhash,)
-        ).fetchone()
+        with self._lock:
+            row = self.cxn.execute(
+                "SELECT tempomap FROM songmeta WHERE hyhash=?", (hyhash,)
+            ).fetchone()
 
-        if row is None:
-            return None
+            if row is None:
+                return None
 
-        tm = json.loads(row[0], object_hook=hydata.json_load)
-        return (tm['res'], tm['tpm'], tm['bpm'])
+            tm = json.loads(row[0], object_hook=hydata.json_load)
+            return (tm['res'], tm['tpm'], tm['bpm'])
 
     """Maintenance"""
 
     def drop_stale_records(self):
         """Remove records that no longer match this Hydra version."""
-        current = json.dumps(list(hymisc.HYDRA_VERSION))
-        cur = self.cxn.execute("DELETE FROM records WHERE hyversion != ?", (current,))
-        self.cxn.commit()
-        self._cache.clear()
-        return cur.rowcount
+        with self._lock:
+            current = json.dumps(list(hymisc.HYDRA_VERSION))
+            cur = self.cxn.execute("DELETE FROM records WHERE hyversion != ?", (current,))
+            self.cxn.commit()
+            self._cache.clear()
+            return cur.rowcount
 
     def reindex(self):
         """Recompute the summary columns from stored blobs.
@@ -285,73 +300,78 @@ class RecordStore:
         useful if the summary definition changes.
 
         """
-        cols = [name for name, _ in _SUMMARY_COLUMNS]
-        assignments = ",".join(f"{c}=?" for c in cols)
+        with self._lock:
+            cols = [name for name, _ in _SUMMARY_COLUMNS]
+            assignments = ",".join(f"{c}=?" for c in cols)
 
-        rows = self.cxn.execute("SELECT hyhash, chartmode, blob FROM records").fetchall()
-        done = 0
-        for hyhash, chartmode, blob in rows:
-            summary = summarize_record(_unpack(blob))
-            self.cxn.execute(
-                f"UPDATE records SET {assignments} WHERE hyhash=? AND chartmode=?",
-                (*(summary[c] for c in cols), hyhash, chartmode),
-            )
-            done += 1
+            rows = self.cxn.execute("SELECT hyhash, chartmode, blob FROM records").fetchall()
+            done = 0
+            for hyhash, chartmode, blob in rows:
+                summary = summarize_record(_unpack(blob))
+                self.cxn.execute(
+                    f"UPDATE records SET {assignments} WHERE hyhash=? AND chartmode=?",
+                    (*(summary[c] for c in cols), hyhash, chartmode),
+                )
+                done += 1
 
-        self.cxn.commit()
-        return done
+            self.cxn.commit()
+            return done
 
     def list_records(self, chartmode=None, order_by='score', descending=True, limit=None):
         """Rows of (song metadata + summary) for browsing, without blobs."""
-        cols = [name for name, _ in _SUMMARY_COLUMNS]
-        if order_by not in cols + ['ref_name', 'ref_artist', 'ref_charter']:
-            raise ValueError(f"Cannot sort on {order_by!r}")
+        with self._lock:
+            cols = [name for name, _ in _SUMMARY_COLUMNS]
+            if order_by not in cols + ['ref_name', 'ref_artist', 'ref_charter']:
+                raise ValueError(f"Cannot sort on {order_by!r}")
 
-        sql = f"""
-            SELECT s.hyhash, s.ref_name, s.ref_artist, s.ref_charter,
-                   r.chartmode, r.bestpath, {','.join('r.' + c for c in cols)}
-            FROM records r JOIN songmeta s ON s.hyhash = r.hyhash
-        """
-        params = []
-        if chartmode is not None:
-            sql += " WHERE r.chartmode = ?"
-            params.append(chartmode)
+            sql = f"""
+                SELECT s.hyhash, s.ref_name, s.ref_artist, s.ref_charter,
+                       r.chartmode, r.bestpath, {','.join('r.' + c for c in cols)}
+                FROM records r JOIN songmeta s ON s.hyhash = r.hyhash
+            """
+            params = []
+            if chartmode is not None:
+                sql += " WHERE r.chartmode = ?"
+                params.append(chartmode)
 
-        prefix = 's.' if order_by.startswith('ref_') else 'r.'
-        sql += f" ORDER BY {prefix}{order_by} {'DESC' if descending else 'ASC'}"
-        if limit:
-            sql += f" LIMIT {int(limit)}"
+            prefix = 's.' if order_by.startswith('ref_') else 'r.'
+            sql += f" ORDER BY {prefix}{order_by} {'DESC' if descending else 'ASC'}"
+            if limit:
+                sql += f" LIMIT {int(limit)}"
 
-        keys = ['hyhash', 'ref_name', 'ref_artist', 'ref_charter',
-                'chartmode', 'bestpath'] + cols
-        return [dict(zip(keys, row)) for row in self.cxn.execute(sql, params)]
+            keys = ['hyhash', 'ref_name', 'ref_artist', 'ref_charter',
+                    'chartmode', 'bestpath'] + cols
+            return [dict(zip(keys, row)) for row in self.cxn.execute(sql, params)]
 
     def has_record(self, hyhash, chartmode):
-        return self.cxn.execute(
-            "SELECT 1 FROM records WHERE hyhash=? AND chartmode=?", (hyhash, chartmode)
-        ).fetchone() is not None
+        with self._lock:
+            return self.cxn.execute(
+                "SELECT 1 FROM records WHERE hyhash=? AND chartmode=?", (hyhash, chartmode)
+            ).fetchone() is not None
 
     def iter_blobs(self, chartmode=None):
         """Yields (songmeta dict, chartmode, inflated record) for every record."""
-        sql = """
-            SELECT s.hyhash, s.ref_name, s.ref_artist, s.ref_charter,
-                   r.chartmode, r.blob
-            FROM records r JOIN songmeta s ON s.hyhash = r.hyhash
-        """
-        params = []
-        if chartmode is not None:
-            sql += " WHERE r.chartmode = ?"
-            params.append(chartmode)
+        with self._lock:
+            sql = """
+                SELECT s.hyhash, s.ref_name, s.ref_artist, s.ref_charter,
+                       r.chartmode, r.blob
+                FROM records r JOIN songmeta s ON s.hyhash = r.hyhash
+            """
+            params = []
+            if chartmode is not None:
+                sql += " WHERE r.chartmode = ?"
+                params.append(chartmode)
 
-        for hyhash, name, artist, charter, mode, blob in self.cxn.execute(sql, params):
-            meta = {'hyhash': hyhash, 'ref_name': name,
-                    'ref_artist': artist, 'ref_charter': charter}
-            yield meta, mode, _unpack(blob)
+            for hyhash, name, artist, charter, mode, blob in self.cxn.execute(sql, params):
+                meta = {'hyhash': hyhash, 'ref_name': name,
+                        'ref_artist': artist, 'ref_charter': charter}
+                yield meta, mode, _unpack(blob)
 
     def counts(self):
-        songs = self.cxn.execute("SELECT COUNT(*) FROM songmeta").fetchone()[0]
-        records = self.cxn.execute("SELECT COUNT(*) FROM records").fetchone()[0]
-        return songs, records
+        with self._lock:
+            songs = self.cxn.execute("SELECT COUNT(*) FROM songmeta").fetchone()[0]
+            records = self.cxn.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+            return songs, records
 
     def migrate_json(self, jsonpath):
         """Import a legacy records.json. Returns (songs, records) imported.
@@ -360,36 +380,37 @@ class RecordStore:
         keyed, so a partial run just resumes.
 
         """
-        with open(jsonpath, 'r') as jsonfile:
-            book = json.load(jsonfile, object_hook=hydata.json_load)
+        with self._lock:
+            with open(jsonpath, 'r') as jsonfile:
+                book = json.load(jsonfile, object_hook=hydata.json_load)
 
-        if not book:
-            return 0, 0
+            if not book:
+                return 0, 0
 
-        songs = records = 0
-        for hyhash, info in book.items():
-            tempomap_dict = info['tempomap']
-            self.cxn.execute(
-                "INSERT OR IGNORE INTO songmeta VALUES (?,?,?,?,?)",
-                (
-                    hyhash,
-                    info.get('ref_name'),
-                    info.get('ref_artist'),
-                    info.get('ref_charter'),
-                    json.dumps(tempomap_dict, separators=(',', ':')),
-                ),
-            )
-            songs += 1
+            songs = records = 0
+            for hyhash, info in book.items():
+                tempomap_dict = info['tempomap']
+                self.cxn.execute(
+                    "INSERT OR IGNORE INTO songmeta VALUES (?,?,?,?,?)",
+                    (
+                        hyhash,
+                        info.get('ref_name'),
+                        info.get('ref_artist'),
+                        info.get('ref_charter'),
+                        json.dumps(tempomap_dict, separators=(',', ':')),
+                    ),
+                )
+                songs += 1
 
-            tempomap = (tempomap_dict['res'], tempomap_dict['tpm'], tempomap_dict['bpm'])
-            for chartmode, record in info['records'].items():
-                # json_save reads timecode.ticks, so the raw tick values that
-                # came out of the file have to become Timecodes again first.
-                if record.is_version_compatible():
-                    _restore_timecodes(record, tempomap)
+                tempomap = (tempomap_dict['res'], tempomap_dict['tpm'], tempomap_dict['bpm'])
+                for chartmode, record in info['records'].items():
+                    # json_save reads timecode.ticks, so the raw tick values that
+                    # came out of the file have to become Timecodes again first.
+                    if record.is_version_compatible():
+                        _restore_timecodes(record, tempomap)
 
-                self._write_record(hyhash, chartmode, record)
-                records += 1
+                    self._write_record(hyhash, chartmode, record)
+                    records += 1
 
-        self.cxn.commit()
-        return songs, records
+            self.cxn.commit()
+            return songs, records
