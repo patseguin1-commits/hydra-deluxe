@@ -37,6 +37,49 @@ CREATE TABLE IF NOT EXISTS records (
 );
 """
 
+# Denormalized summary of a record's best path, so the library and any
+# sorted listing can ORDER BY without inflating a single blob. Added after
+# the first schema shipped, so they are applied with ALTER TABLE.
+_SUMMARY_COLUMNS = [
+    ('score', 'INTEGER'),
+    ('actcount', 'INTEGER'),
+    ('maxskip', 'INTEGER'),
+    ('hardest_ms', 'REAL'),
+    ('avgmult', 'REAL'),
+    ('notecount', 'INTEGER'),
+    ('sqin_count', 'INTEGER'),
+    ('sqout_count', 'INTEGER'),
+    ('pathcount', 'INTEGER'),
+]
+
+
+def summarize_path(path):
+    """The sortable attributes of a single path."""
+    acts = list(path.all_activations())
+    difficulties = [d for d in (a.difficulty() for a in acts) if d is not None]
+
+    return {
+        'score': path.totalscore(),
+        'actcount': len(acts),
+        'maxskip': max((a.skips for a in acts), default=0),
+        # Hardest squeeze on the path, in ms. Higher is tighter.
+        'hardest_ms': max(difficulties) if difficulties else None,
+        'avgmult': path.avg_mult(),
+        'notecount': path.notecount,
+        'sqin_count': sum(1 for a in acts for s in a.sqinouts if isinstance(s, hydata.SqIn)),
+        'sqout_count': sum(1 for a in acts for s in a.sqinouts if isinstance(s, hydata.SqOut)),
+    }
+
+
+def summarize_record(record):
+    """Summary columns for a record, taken from its best path."""
+    if not record.is_version_compatible() or not record._paths:
+        return {name: None for name, _ in _SUMMARY_COLUMNS}
+
+    summary = summarize_path(record.best_path())
+    summary['pathcount'] = sum(1 for _ in record.all_paths())
+    return summary
+
 # Records are only read one at a time (the details panel), so a small cache is
 # plenty; it exists to stop repeat views re-inflating the same blob.
 _CACHE_LIMIT = 32
@@ -102,8 +145,16 @@ class RecordStore:
         self.dbpath = hymisc.DBPATH if dbpath is None else dbpath
         self.cxn = sqlite3.connect(self.dbpath)
         self.cxn.executescript(_SCHEMA)
+        self._add_missing_columns()
         self.cxn.commit()
         self._cache = {}
+
+    def _add_missing_columns(self):
+        """Bring an older database up to the current set of summary columns."""
+        existing = {row[1] for row in self.cxn.execute("PRAGMA table_info(records)")}
+        for name, coltype in _SUMMARY_COLUMNS:
+            if name not in existing:
+                self.cxn.execute(f"ALTER TABLE records ADD COLUMN {name} {coltype}")
 
     def close(self):
         self.cxn.close()
@@ -130,14 +181,20 @@ class RecordStore:
         if record.is_version_compatible() and record._paths:
             bestpath = record.best_path().pathstring()
 
+        summary = summarize_record(record)
+        cols = [name for name, _ in _SUMMARY_COLUMNS]
+        placeholders = ",".join("?" * (5 + len(cols)))
         self.cxn.execute(
-            "INSERT OR REPLACE INTO records VALUES (?,?,?,?,?)",
+            f"INSERT OR REPLACE INTO records "
+            f"(hyhash,chartmode,hyversion,bestpath,blob,{','.join(cols)}) "
+            f"VALUES ({placeholders})",
             (
                 hyhash,
                 chartmode,
                 json.dumps(list(record.hyversion)),
                 bestpath,
                 _pack(record),
+                *(summary[c] for c in cols),
             ),
         )
         self.cxn.commit()
@@ -214,6 +271,76 @@ class RecordStore:
         self.cxn.commit()
         self._cache.clear()
         return cur.rowcount
+
+    def reindex(self):
+        """Recompute the summary columns from stored blobs.
+
+        Needed once for records written before the columns existed, and
+        useful if the summary definition changes.
+
+        """
+        cols = [name for name, _ in _SUMMARY_COLUMNS]
+        assignments = ",".join(f"{c}=?" for c in cols)
+
+        rows = self.cxn.execute("SELECT hyhash, chartmode, blob FROM records").fetchall()
+        done = 0
+        for hyhash, chartmode, blob in rows:
+            summary = summarize_record(_unpack(blob))
+            self.cxn.execute(
+                f"UPDATE records SET {assignments} WHERE hyhash=? AND chartmode=?",
+                (*(summary[c] for c in cols), hyhash, chartmode),
+            )
+            done += 1
+
+        self.cxn.commit()
+        return done
+
+    def list_records(self, chartmode=None, order_by='score', descending=True, limit=None):
+        """Rows of (song metadata + summary) for browsing, without blobs."""
+        cols = [name for name, _ in _SUMMARY_COLUMNS]
+        if order_by not in cols + ['ref_name', 'ref_artist', 'ref_charter']:
+            raise ValueError(f"Cannot sort on {order_by!r}")
+
+        sql = f"""
+            SELECT s.hyhash, s.ref_name, s.ref_artist, s.ref_charter,
+                   r.chartmode, r.bestpath, {','.join('r.' + c for c in cols)}
+            FROM records r JOIN songmeta s ON s.hyhash = r.hyhash
+        """
+        params = []
+        if chartmode is not None:
+            sql += " WHERE r.chartmode = ?"
+            params.append(chartmode)
+
+        prefix = 's.' if order_by.startswith('ref_') else 'r.'
+        sql += f" ORDER BY {prefix}{order_by} {'DESC' if descending else 'ASC'}"
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+
+        keys = ['hyhash', 'ref_name', 'ref_artist', 'ref_charter',
+                'chartmode', 'bestpath'] + cols
+        return [dict(zip(keys, row)) for row in self.cxn.execute(sql, params)]
+
+    def has_record(self, hyhash, chartmode):
+        return self.cxn.execute(
+            "SELECT 1 FROM records WHERE hyhash=? AND chartmode=?", (hyhash, chartmode)
+        ).fetchone() is not None
+
+    def iter_blobs(self, chartmode=None):
+        """Yields (songmeta dict, chartmode, inflated record) for every record."""
+        sql = """
+            SELECT s.hyhash, s.ref_name, s.ref_artist, s.ref_charter,
+                   r.chartmode, r.blob
+            FROM records r JOIN songmeta s ON s.hyhash = r.hyhash
+        """
+        params = []
+        if chartmode is not None:
+            sql += " WHERE r.chartmode = ?"
+            params.append(chartmode)
+
+        for hyhash, name, artist, charter, mode, blob in self.cxn.execute(sql, params):
+            meta = {'hyhash': hyhash, 'ref_name': name,
+                    'ref_artist': artist, 'ref_charter': charter}
+            yield meta, mode, _unpack(blob)
 
     def counts(self):
         songs = self.cxn.execute("SELECT COUNT(*) FROM songmeta").fetchone()[0]
