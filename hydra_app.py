@@ -3,6 +3,7 @@ import pathlib
 import configparser
 import sqlite3
 import time
+import traceback
 
 import pyperclip
 
@@ -14,6 +15,26 @@ import hydra.hyutil as hyutil
 import hydra.hystore as hystore
 
 from timeit import default_timer as timer
+
+"""Error reporting"""
+
+
+def log_error(context):
+    """Record the current exception to a log beside the database.
+
+    A windowed build has no console, and dearpygui swallows exceptions raised
+    inside callbacks, so without this a failed refresh is completely silent.
+
+    """
+    try:
+        with open(hymisc.ROOTPATH / "hydra_errors.log", 'a', encoding='utf-8') as f:
+            f.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} :: {context} ---\n")
+            f.write(traceback.format_exc())
+            f.write("\n")
+    except Exception:
+        # Logging must never be the thing that breaks the app.
+        pass
+
 
 """Song Library (database)"""
 
@@ -430,11 +451,19 @@ class BatchJob:
         return True
 
 
-def library_scanitems():
-    """Every chart in the library, as ScanItems."""
+def library_scanitems(search=None):
+    """Charts in the library as ScanItems, matching the same filter the
+    library table uses so "Analyze search" covers exactly what's on screen."""
     cxn = sqlite3.connect(hymisc.DBPATH)
     try:
-        rows = cxn.execute("SELECT * FROM charts ORDER BY name").fetchall()
+        if search:
+            param = f"%{search}%"
+            rows = cxn.execute(
+                "SELECT * FROM charts WHERE name LIKE ? OR artist LIKE ? ORDER BY name",
+                (param, param),
+            ).fetchall()
+        else:
+            rows = cxn.execute("SELECT * FROM charts ORDER BY name").fetchall()
     except sqlite3.OperationalError:
         rows = []
     cxn.close()
@@ -450,17 +479,39 @@ def library_scanitems():
     return scanitems
 
 
+def refresh_batchbutton(matchcount=None):
+    """Label the batch button with what it will actually act on."""
+    if appstate.search:
+        count = "" if matchcount is None else f" ({matchcount})"
+        dpg.configure_item("batchbutton", label=f"Analyze search{count}")
+    else:
+        dpg.configure_item("batchbutton", label="Analyze library")
+
+
 def on_batch():
-    """Start analyzing every chart in the library."""
+    """Analyze the current search, or the whole library if nothing is typed."""
     if appstate.batch is not None:
         return
 
-    scanitems = library_scanitems()
-    if not scanitems:
-        return
+    scanitems = library_scanitems(appstate.search)
 
     reset_batch_modal()
     dpg.show_item("batchprogress")
+
+    if not scanitems:
+        # Don't leave the click doing nothing at all.
+        dpg.set_value("batch_title", "Nothing to analyze.")
+        dpg.set_value(
+            "batch_counts",
+            "No charts match your search." if appstate.search
+            else "Scan a song folder first."
+        )
+        dpg.hide_item("batch_cancelbutton")
+        dpg.show_item("batch_dismiss")
+        return
+
+    scope = f'search "{appstate.search}"' if appstate.search else "library"
+    dpg.set_value("batch_title", f"Analyzing {scope} ({len(scanitems)} charts)...")
 
     appstate.batch = BatchJob(
         scanitems,
@@ -909,13 +960,38 @@ def refresh_depthvalue():
 def refresh_depthmode():
     dpg.set_value("inp_depthmode", appstate.usettings.depth_mode)
 
+def reconcile_library_visibility():
+    """Make the empty/populated panels agree with the library size.
+
+    Kept separate and always run, so a failure while drawing rows can't
+    strand the "No songs scanned" message over a populated library.
+
+    """
+    if appstate.librarysize > 0:
+        dpg.hide_item("libraryempty")
+        dpg.show_item("librarypopulated")
+    else:
+        dpg.hide_item("librarypopulated")
+        dpg.show_item("libraryempty")
+
+
 def refresh_tableview():
-    """Display a particular page of the song library.
-    
+    """Display a particular page of the song library."""
+    try:
+        _draw_tableview()
+    except Exception:
+        log_error("refresh_tableview")
+    finally:
+        reconcile_library_visibility()
+
+
+def _draw_tableview():
+    """Fill in the visible page of the library table.
+
     Other info like the size of the library is already known and doesn't need
     the db to be accessed.
-    
-    """    
+
+    """
     cxn = sqlite3.connect(hymisc.DBPATH)
     cur = cxn.cursor()
 
@@ -937,18 +1013,21 @@ def refresh_tableview():
     for row in page_db_rows:
         try:
             scan_items.append(hyutil.ScanItem.from_db(row))
-        except hyutil.SongScanException as e:
-            # This has opportunity to be a UI error during the initial scan
+        except Exception:
+            # A row we can't read is just an unshowable song, not a reason to
+            # abandon the whole page. (This used to name a nonexistent
+            # exception class, so any failure here raised AttributeError and
+            # took the rest of the refresh down with it.)
             pass
-    
+
     for r in range(appstate.TABLE_ROWCOUNT):
         try:
             scan_item = scan_items[r]
-            dpg.set_value(f"table[{r}, {0}]", scan_item.title)
-            dpg.set_value(f"table[{r}, {1}]", scan_item.artist)
-            dpg.set_value(f"table[{r}, {2}]", scan_item.charter)
-            dpg.set_value(f"table[{r}, {3}]", scan_item.rootfolder)
-            
+            dpg.set_value(f"table[{r}, {0}]", scan_item.title or "")
+            dpg.set_value(f"table[{r}, {1}]", scan_item.artist or "")
+            dpg.set_value(f"table[{r}, {2}]", scan_item.charter or "")
+            dpg.set_value(f"table[{r}, {3}]", scan_item.rootfolder or "")
+
             summary = appstate.get_record_summary(scan_item.md5, appstate.usettings.chartmode_key())
             if summary:
                 hyversion, bestpath = summary
@@ -967,19 +1046,17 @@ def refresh_tableview():
                 dpg.set_value(f"table[{r}, {i}]", "-----")
             dpg.configure_item(f"table[{r}, {appstate.TABLE_COLCOUNT - 1}]", label="-----", user_data=None)
             dpg.bind_item_theme(f"table[{r}, {appstate.TABLE_COLCOUNT - 1}]", "newsong_theme")
-    
+        except Exception:
+            # One unrenderable row shouldn't strand the whole library view.
+            log_error(f"library row {r}")
+
     lastpage = fullcount // appstate.TABLE_ROWCOUNT
     dpg.set_value("librarypagelabel", f"{appstate.table_viewpage + 1}/{lastpage + 1}")
-        
+
     dpg.configure_item("pageleftbutton", enabled=appstate.table_viewpage > 0)
     dpg.configure_item("pagerightbutton", enabled=appstate.table_viewpage < lastpage)
-    
-    if appstate.librarysize > 0:
-        dpg.hide_item("libraryempty")    
-        dpg.show_item("librarypopulated")
-    else:
-        dpg.hide_item("librarypopulated")        
-        dpg.show_item("libraryempty")        
+
+    refresh_batchbutton(fullcount)
         
     
 
