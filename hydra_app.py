@@ -3,7 +3,6 @@ import pathlib
 import configparser
 import sqlite3
 import time
-import json
 
 import pyperclip
 
@@ -12,7 +11,7 @@ import dearpygui.demo as demo
 
 import hydra.hymisc as hymisc
 import hydra.hyutil as hyutil
-import hydra.hydata as hydata
+import hydra.hystore as hystore
 
 from timeit import default_timer as timer
 
@@ -173,57 +172,44 @@ class HyAppUserSettings:
 
 class HyAppRecordBook:
     """Code-accessible collection of records that have been generated.
-    
-    Is saved and loaded much like usersettings.
-    
-    Top level organization is by hyhash.
-    In each hyhash are ref values and a 'records' map of
-    chartmode_key: hydata.
-    
+
+    Backed by hystore.RecordStore (tables in hyapp.db), keyed by
+    (hyhash, chartmode). Nothing is held in memory: records are written one
+    row at a time and read back on demand.
+
     hyhash: Hash of the chart file. Not comparable to other apps' song hashes.
-    
+
     """
     def __init__(self):
-        """Load existing records from file or initialize it"""
-        # Initialize
-        self.book = {}
-        
+        """Open the record store, importing a legacy records.json if present."""
+        self.store = hystore.RecordStore()
+        self._migrate_legacy_json()
+
+    def _migrate_legacy_json(self):
+        """One-time import of records.json into the database.
+
+        The original file is kept, renamed, rather than deleted.
+
+        """
+        if not hymisc.BOOKPATH.exists():
+            return
+
+        print("Migrating records.json into the database:")
+        starttime = timer()
         try:
-            # Import from save file
-            with open(hymisc.BOOKPATH, 'r') as jsonfile:
-                print(f"Loading json:")
-                starttime = timer()
-                self.book = json.load(jsonfile, object_hook=hydata.json_load)
-                self._init_timecodes()
-                endtime = timer()
-                print(f"\tTook {endtime - starttime:.6f} seconds.")
-                if self.book is None:
-                    self.book = {}
-        except FileNotFoundError:
-            self.book = {}
-        
-        # Resave / create save file
-        self.savejson()
-    
-    def _init_timecodes(self):
-        """Replaces loaded timecode values (tick only) with full Timecodes."""
-        for info in self.book.values():
-            # Same tick? Just reuse the timecode instead of remaking
-            made_timecodes = {}
-            tempomap = (info['tempomap']['res'], info['tempomap']['tpm'], info['tempomap']['bpm'])
-            for record in info['records'].values():
-                for path in record.all_paths():
-                    for act in path._activations:
-                        if act.timecode not in made_timecodes:
-                            new_tc = hymisc.Timecode(act.timecode, *tempomap)
-                            made_timecodes[act.timecode] = new_tc
-                        act.timecode = made_timecodes[act.timecode]
-                        
-                        for bsq in act.backends:
-                            if bsq.timecode not in made_timecodes:
-                                new_tc = hymisc.Timecode(bsq.timecode, *tempomap)
-                                made_timecodes[bsq.timecode] = new_tc
-                            bsq.timecode = made_timecodes[bsq.timecode]
+            songs, records = self.store.migrate_json(hymisc.BOOKPATH)
+        except Exception as e:
+            # A bad legacy file shouldn't stop the app from starting; the
+            # records just stay unmigrated and the file is left alone.
+            print(f"\tFailed, leaving records.json in place: {e}")
+            return
+        endtime = timer()
+        print(f"\tMoved {records} records ({songs} songs) in {endtime - starttime:.6f} seconds.")
+
+        backup = hymisc.BOOKPATH.with_suffix(".json.migrated")
+        backup.unlink(missing_ok=True)
+        hymisc.BOOKPATH.rename(backup)
+        print(f"\tOriginal kept at {backup.name}.")
     
     def add_song(self, scanitem, tempomap):
         """Add an entry for the given scanned song.
@@ -236,40 +222,15 @@ class HyAppRecordBook:
         to md5s in the json.
         
         """
-        if scanitem.md5 in self.book:
-            return
-        
-        self.book[scanitem.md5] = {
-            # Some metadata for convenience if digging through the json
-            'ref_name': scanitem.title,
-            'ref_artist': scanitem.artist,
-            'ref_charter': scanitem.charter,
-            
-            'tempomap': tempomap,
-            
-            'records': {},
-        }
-        
-        self.savejson()
-        
+        self.store.add_song(scanitem, tempomap)
+
     def add_record(self, hyhash, chartmode, record):
         """Adds a record in the given place.
-        
+
         Requires the song to have been added beforehand.
-        
+
         """
-        self.book[hyhash]['records'][chartmode] = record
-        
-        self.savejson()
-        
-    def savejson(self):
-        """Save current state to json file."""
-        print(f"save json:")
-        starttime = timer()
-        with open(hymisc.BOOKPATH, 'w') as jsonfile:
-            json.dump(self.book, jsonfile, default=hydata.json_save, separators=(',', ':'))
-        endtime = timer()
-        print(f"\tTook {endtime - starttime:.6f} seconds.")
+        self.store.add_record(hyhash, chartmode, record)
  
 class HyAppState:
     """Manages Hydra's state."""
@@ -299,10 +260,15 @@ class HyAppState:
             
             
     def get_record(self, hyhash, chartmode):
-        try:
-            return self.hydatabook.book[hyhash]['records'][chartmode]
-        except KeyError:
-            return None
+        return self.hydatabook.store.get_record(hyhash, chartmode)
+
+    def get_record_summary(self, hyhash, chartmode):
+        """(hyversion, bestpath) for the library table, or None.
+
+        Avoids inflating a record just to label a row.
+
+        """
+        return self.hydatabook.store.get_summary(hyhash, chartmode)
             
     def get_selected_record(self):
         return self.get_record(self.selected_scanitem.md5, self.usettings.chartmode_key())
@@ -508,16 +474,7 @@ def on_path_selected(sender, app_data, path):
                         # scoring purposes; only show the ones near the deact,
                         # plus whatever note is actually being squeezed out of
                         # SP, however far past the display window it lands.
-                        sqout_offsets = [sq.offset for sq in act.sqinouts if isinstance(sq, hydata.SqOut)]
-                        sqout_ids = {
-                            id(bsq) for bsq in act.backends
-                            if any(abs(bsq.offset_ms - off) < 0.01 for off in sqout_offsets)
-                        }
-                        shown_backends = [
-                            bsq for bsq in act.backends
-                            if abs(bsq.offset_ms) < hymisc.BACKEND_DISPLAY_WINDOW_MS
-                            or id(bsq) in sqout_ids
-                        ]
+                        shown_backends = act.display_backends()
                         if shown_backends:
                             dpg.add_text("Backends:")
                             
@@ -528,7 +485,7 @@ def on_path_selected(sender, app_data, path):
                                 dpg.add_table_column(label="Rating", width_stretch=True)
                                     
                                 for bsq in shown_backends:
-                                    is_squeezed_out = id(bsq) in sqout_ids
+                                    is_squeezed_out = act.is_sqout_backend(bsq)
                                     with dpg.table_row():
                                         dpg.add_text(f"{bsq.offset_ms:6.1f}")
                                         dpg.add_text(f"{bsq.chord.notationstr()}")
@@ -823,10 +780,11 @@ def refresh_tableview():
             dpg.set_value(f"table[{r}, {2}]", scan_item.charter)
             dpg.set_value(f"table[{r}, {3}]", scan_item.rootfolder)
             
-            record = appstate.get_record(scan_item.md5, appstate.usettings.chartmode_key())
-            if record:
-                if record.is_version_compatible():
-                    dpg.configure_item(f"table[{r}, {appstate.TABLE_COLCOUNT - 1}]", label=record.best_path().pathstring(), user_data=scan_item)
+            summary = appstate.get_record_summary(scan_item.md5, appstate.usettings.chartmode_key())
+            if summary:
+                hyversion, bestpath = summary
+                if hyversion == hymisc.HYDRA_VERSION:
+                    dpg.configure_item(f"table[{r}, {appstate.TABLE_COLCOUNT - 1}]", label=bestpath, user_data=scan_item)
                     dpg.bind_item_theme(f"table[{r}, {appstate.TABLE_COLCOUNT - 1}]", "bestpath_theme")
                 else:
                     dpg.configure_item(f"table[{r}, {appstate.TABLE_COLCOUNT - 1}]", label="(Update...)", user_data=scan_item)

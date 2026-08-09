@@ -453,7 +453,28 @@ class Activation:
     
     def __str__(self):
         return self.notationstr()
-    
+
+    def is_sqout_backend(self, bsq):
+        """Is this backend the note being squeezed out of SP?"""
+        return any(
+            abs(bsq.offset_ms - sq.offset) < 0.01
+            for sq in self.sqinouts if isinstance(sq, SqOut)
+        )
+
+    def display_backends(self):
+        """The backends worth keeping: those near the deactivation, plus
+        whatever note is being squeezed out of SP however far out it lands.
+
+        Used both for the details panel and to trim records before storing
+        them, so the two can't drift apart.
+
+        """
+        return [
+            bsq for bsq in self.backends
+            if abs(bsq.offset_ms) < hymisc.BACKEND_DISPLAY_WINDOW_MS
+            or self.is_sqout_backend(bsq)
+        ]
+
     def notationstr(self):
         e = 'E' if self.is_e_critical() else ''
         return f"{e}{self.skips}{''.join(sq.symbol for sq in self.sqinouts)}"
