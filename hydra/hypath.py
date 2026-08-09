@@ -9,9 +9,14 @@ from . import hydata
 from . import hymisc
 
 
-# How far apart (ms) two events can be and still count as squeezable
-# together. Raised from the stock 140ms to widen the search.
+# How far apart (ms) a note and a deactivation can be and still be found as
+# a SqIn/SqOut. Raised from the stock 140ms to widen that search.
 SQUEEZE_WINDOW_MS = 500
+
+# How far from a deactivation a note is still collected as a backend.
+# Deliberately left at the stock 140ms: only the SqIn/SqOut search is widened,
+# so the backend lists stay the same as upstream.
+BACKEND_WINDOW_MS = 140
 
 
 class ScoreGraph:
@@ -164,10 +169,14 @@ class ScoreGraph:
         
         for recent_edge in self._recent_deact_edges:
             offset_ms = timestamp.timecode.ms - recent_edge.dest.timecode.ms
-            recent_edge.backends.append(copy.copy(backend))
-            recent_edge.backends[-1].offset_ms = offset_ms
-            
-            if recent_edge.backends[-1].is_sp and not recent_edge.sqinout_time:
+
+            # Recent edges are kept out to SQUEEZE_WINDOW_MS for SqIn detection,
+            # but only the ones inside the backend window get listed as backends.
+            if abs(offset_ms) < BACKEND_WINDOW_MS:
+                recent_edge.backends.append(copy.copy(backend))
+                recent_edge.backends[-1].offset_ms = offset_ms
+
+            if backend.is_sp and not recent_edge.sqinout_time:
                 # SqIn timing is only relevant for the 1st sp backend encountered
                 # If there are more than 1, it's probably a charting error, but ya know
                 recent_edge.sqinout_time = timestamp.timecode
@@ -255,10 +264,14 @@ class ScoreGraph:
         
         # notes just prior to this deactivation, which are normally in sp but could be squeezed out
         for recent_backend in self._recent_backends:
-            deact_edge.backends.append(copy.copy(recent_backend))
             offset_ms = recent_backend.timecode.ms - deact_edge.dest.timecode.ms
-            deact_edge.backends[-1].offset_ms = offset_ms
-            
+
+            # Recent backends are kept out to SQUEEZE_WINDOW_MS for SqOut
+            # detection, but only the ones inside the backend window get listed.
+            if abs(offset_ms) < BACKEND_WINDOW_MS:
+                deact_edge.backends.append(copy.copy(recent_backend))
+                deact_edge.backends[-1].offset_ms = offset_ms
+
             if recent_backend.is_sp and not deact_edge.sqinout_time:
                 deact_edge.sqinout_time = recent_backend.timecode
                 deact_edge.sqinout_timing = offset_ms
