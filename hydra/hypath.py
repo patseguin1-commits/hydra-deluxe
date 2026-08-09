@@ -9,6 +9,11 @@ from . import hydata
 from . import hymisc
 
 
+# How far apart (ms) two events can be and still count as squeezable
+# together. Raised from the stock 140ms to widen the search.
+SQUEEZE_WINDOW_MS = 500
+
+
 class ScoreGraph:
     """Description of a song in terms of pathing choices and outcomes.
     
@@ -83,8 +88,8 @@ class ScoreGraph:
             self.store_new_backend(timestamp, score_groups['sp'], score_groups['sp'] - score_groups['sqout_reduction'])
             
             if timestamp.flag_sp:
-                # If any deacts are only the squeeze window away (140ms), keep a non-extended copy of them (SqOut)
-                sqout_deacts = set([tc for tc in self._pending_deacts if tc.ms - timestamp.timecode.ms < 140])
+                # If any deacts are only the squeeze window away, keep a non-extended copy of them (SqOut)
+                sqout_deacts = set([tc for tc in self._pending_deacts if tc.ms - timestamp.timecode.ms < SQUEEZE_WINDOW_MS])
                 
                 # Deact timecodes that can be extended by this sp: current pending deacts as well as very recently handled deacts (SqIn)
                 extendable_tcs = self._pending_deacts.union(set([e.dest.timecode for e in self._recent_deact_edges]))
@@ -174,7 +179,7 @@ class ScoreGraph:
         return self._head_time.ms - timecode.ms
         
     def is_recent_to_head(self, timecode):
-        return self.head_time_offset(timecode) < 140
+        return self.head_time_offset(timecode) < SQUEEZE_WINDOW_MS
         
     def set_head_time(self, timecode):
         """ Update head time and any mechanics based on being 'recent'"""
