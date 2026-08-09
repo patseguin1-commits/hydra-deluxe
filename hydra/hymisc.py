@@ -21,6 +21,11 @@ ENGINE_LABEL = "Clone Hero v1.1.0.6142"
 """Feature flags"""
 FLAG_SKIPPED_DYNAMICS = False
 
+# Backends are collected out to hypath.SQUEEZE_WINDOW_MS because the scoring
+# pass needs them all, but only those within this window are worth showing.
+# Raise to match SQUEEZE_WINDOW_MS to see every backend the search considered.
+BACKEND_DISPLAY_WINDOW_MS = 140
+
 
 """Static paths and files"""
 

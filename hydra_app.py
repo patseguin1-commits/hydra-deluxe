@@ -504,7 +504,13 @@ def on_path_selected(sender, app_data, path):
                                 dpg.bind_item_theme(dpg.last_item(), "warning_theme")
                         
                         # Backends
-                        if act.backends:
+                        # act.backends runs out to the full squeeze window for
+                        # scoring purposes; only show the ones near the deact.
+                        shown_backends = [
+                            bsq for bsq in act.backends
+                            if abs(bsq.offset_ms) < hymisc.BACKEND_DISPLAY_WINDOW_MS
+                        ]
+                        if shown_backends:
                             dpg.add_text("Backends:")
                             
                             with dpg.table(width=-10, borders_outerH=True, borders_outerV=True):
@@ -513,7 +519,7 @@ def on_path_selected(sender, app_data, path):
                                 dpg.add_table_column(label="Points", width_fixed=True, init_width_or_weight=80)
                                 dpg.add_table_column(label="Rating", width_stretch=True)
                                     
-                                for bsq in act.backends:
+                                for bsq in shown_backends:
                                     with dpg.table_row():
                                         dpg.add_text(f"{bsq.offset_ms:6.1f}")
                                         dpg.add_text(f"{bsq.chord.notationstr()}")
