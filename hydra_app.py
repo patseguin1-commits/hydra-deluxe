@@ -1,7 +1,10 @@
 import os
 import pathlib
+import concurrent.futures
 import configparser
+import multiprocessing
 import sqlite3
+import threading
 import time
 import traceback
 
@@ -10,6 +13,7 @@ import pyperclip
 import dearpygui.dearpygui as dpg
 import dearpygui.demo as demo
 
+import hydra.hybatch as hybatch
 import hydra.hymisc as hymisc
 import hydra.hyutil as hyutil
 import hydra.hystore as hystore
@@ -252,6 +256,14 @@ class HyAppRecordBook:
 
         """
         self.store.add_record(hyhash, chartmode, record)
+
+    def add_row(self, row):
+        """Adds a record that was packed elsewhere, by a batch worker.
+
+        Same requirement: the song has to have been added beforehand.
+
+        """
+        self.store.add_row(row)
  
 class HyAppState:
     """Manages Hydra's state."""
@@ -394,70 +406,315 @@ def on_scan():
     for errormsg in errors:
         dpg.add_text(errormsg, parent="scanprogress_failedcontainer")
     
-class BatchJob:
-    """One chart per rendered frame, so the UI keeps painting and Cancel works.
+# Ceiling on batch workers. Peak memory scales with this: a full discography
+# chart can reach several hundred MB on its own, and charts sort together by
+# name, so the big ones really do arrive in a row.
+BATCH_MAX_WORKERS = 8
 
-    dearpygui runs callbacks inside the render, so looping over the whole
-    library inside the button callback would freeze the window until it
-    finished. Instead the main loop advances this a step at a time.
+# Long enough to cover spawning interpreters on a cold, busy disk; short
+# enough that a build which can't spawn at all falls back promptly.
+POOL_STARTUP_TIMEOUT = 60
+
+
+def batch_workercount():
+    """How many charts to path at once.
+
+    One core is left for the UI and for whatever else the machine is doing.
 
     """
-    def __init__(self, scanitems, chartmode, redo):
-        self.items = scanitems
+    return max(1, min((os.cpu_count() or 2) - 1, BATCH_MAX_WORKERS))
+
+
+def chart_weight(scanitem):
+    """Rough guess at what a chart will cost to path: its file size.
+
+    Sampled against 3,000 analyzed charts, size tracks note count at r=0.83,
+    which is all this needs: the point is to tell a discography from a single,
+    not to predict seconds. An .sng carries its audio in the same file, so its
+    size describes the song rather than the chart and is not comparable -
+    those sort as unknown, in the middle.
+
+    """
+    if scanitem.notespath.casefold().endswith('.sng'):
+        return None
+    try:
+        return os.path.getsize(scanitem.notespath)
+    except OSError:
+        return None
+
+
+def interleave_by_size(scanitems):
+    """Order charts so the expensive ones don't all run at once.
+
+    The library hands these over sorted by name, which files every
+    "<band> - Discography" and "<album> (Full Album)" next to each other under
+    D and F. With a window of 2 x workers, that put eight discographies in
+    flight simultaneously: every worker on a six-figure-note chart, no results
+    committed for ten minutes, and gigabytes resident. It reads exactly like a
+    hang, and it was the whole of what looked like one.
+
+    Dealing alternately from the big and small ends of the size order keeps a
+    mix in flight, so something is always finishing and peak memory is roughly
+    halved. Charts of unknown size sort in the middle and are dealt with the
+    rest.
+
+    """
+    weighed = [(chart_weight(item), i, item) for i, item in enumerate(scanitems)]
+    known = [w for w in weighed if w[0] is not None]
+    unknown = [w for w in weighed if w[0] is None]
+
+    # Unknown sizes take the median, so they land among the middling charts
+    # instead of all bunching at one end. With nothing to take a median from
+    # they all weigh the same, and the original order carries through.
+    if unknown:
+        median = sorted(w[0] for w in known)[len(known) // 2] if known else 0
+        unknown = [(median, i, item) for _, i, item in unknown]
+
+    # Index breaks ties so the order stays the same run to run.
+    by_size = sorted(known + unknown, key=lambda w: (-w[0], w[1]))
+
+    ordered = []
+    lo, hi = 0, len(by_size) - 1
+    while lo <= hi:
+        ordered.append(by_size[lo][2])
+        lo += 1
+        if lo <= hi:
+            ordered.append(by_size[hi][2])
+            hi -= 1
+    return ordered
+
+
+class BatchJob:
+    """Analyzes a list of charts, in parallel, away from the render thread.
+
+    Two things force this off the render thread. Pathing a full-album chart
+    takes seconds - one measured at 41s, a discography at over three
+    minutes - and a window that goes that long without pumping messages is
+    greyed out and titled "Not Responding" by Windows. That is what
+    "Analyze library" used to look like, since it advanced one chart per
+    rendered frame and so ran the analysis between frames.
+
+    The charts themselves go to worker processes rather than threads:
+    pathing is pure Python and CPU-bound, so threads would take the GIL in
+    turns and run no faster than one at a time. See hydra.hybatch.
+
+    This object's own thread hands out that work and stores what comes
+    back. It touches only its counters (under _lock) and the record store,
+    which is already safe to use from more than one thread. Every
+    dearpygui call stays on the render thread, in batch_poll().
+
+    """
+    def __init__(self, scanitems, chartmode, redo, settings, workers=None):
+        self.items = interleave_by_size(scanitems)
         self.chartmode = chartmode
         self.redo = redo
+        # Analysis arguments as they were when the run started, so a
+        # difficulty changed mid-run can't land under this chartmode key.
+        self.settings = settings
+        self.workers = batch_workercount() if workers is None else workers
 
-        self.index = 0
+        self._lock = threading.Lock()
+        self._cancel = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="hydra-batch", daemon=True)
+
+        # Guarded by _lock; read by the UI through progress().
         self.analyzed = 0
         self.skipped = 0
         self.failed = 0
         self.failures = []
-        self.cancelled = False
+        self.current = ""
+        self.finished = False
 
-    def is_done(self):
-        return self.cancelled or self.index >= len(self.items)
+    def start(self):
+        self._thread.start()
 
-    def step(self):
-        """Handle the next chart. Returns False once there's nothing left."""
-        if self.is_done():
-            return False
+    def cancel(self):
+        """Stop handing out charts. Ones already started still finish."""
+        self._cancel.set()
 
-        scanitem = self.items[self.index]
-        self.index += 1
+    def is_cancelled(self):
+        return self._cancel.is_set()
 
-        if not self.redo and appstate.hydatabook.store.has_record(scanitem.md5, self.chartmode):
-            self.skipped += 1
-            return True
+    def progress(self):
+        """A consistent snapshot of the counters, for the UI to paint."""
+        with self._lock:
+            return {
+                # Every chart lands in exactly one of the three counts, so
+                # their sum is how far the run has got.
+                'index': self.analyzed + self.skipped + self.failed,
+                'analyzed': self.analyzed,
+                'skipped': self.skipped,
+                'failed': self.failed,
+                'current': self.current,
+                'failures': list(self.failures),
+                'finished': self.finished,
+            }
 
+    """Running"""
+
+    def _run(self):
+        pool = self._open_pool() if self.workers > 1 else None
         try:
-            record, tempomap = hyutil.analyze_chart_file(
-                scanitem.notespath,
-                appstate.usettings.view_difficulty,
-                appstate.usettings.view_prodrums,
-                appstate.usettings.view_bass2x,
-                appstate.usettings.depth_mode,
-                int(appstate.usettings.depth_value),
-                int(appstate.usettings.mslimit_value) if appstate.usettings.mslimit_enabled else None,
-                export_tempomap=True,
-            )
+            if pool is None:
+                self._run_here()
+            else:
+                try:
+                    self._run_pool(pool)
+                finally:
+                    # Never wait here. Every result worth keeping has already
+                    # been collected, and a cancelled run must not hold the
+                    # app open behind a chart that takes minutes.
+                    pool.shutdown(wait=False, cancel_futures=True)
         except Exception as e:
-            self.failed += 1
-            self.failures.append(f"{scanitem.artist} - {scanitem.title}: {e!r}")
-            return True
+            # The thread dying quietly would leave the modal running forever.
+            # Whatever finished is stored and counted; say the rest didn't.
+            log_error("batch worker")
+            with self._lock:
+                self.failures.append(f"Analysis stopped early: {e!r}")
+        finally:
+            with self._lock:
+                self.current = ""
+                self.finished = True
 
-        # Saving is inside the guard too: one chart that won't store should
-        # cost a line in the failure list, not the rest of the run.
+    def _open_pool(self):
+        """A pool with a worker proven to answer, or None to work in here.
+
+        The round trip matters: a pool spawns lazily, so a machine that
+        won't give us worker processes only says so on the first submit -
+        by which point falling back to this thread would mean redoing
+        charts that have already been counted.
+
+        """
+        pool = concurrent.futures.ProcessPoolExecutor(self.workers)
+        try:
+            pool.submit(hybatch.ping).result(timeout=POOL_STARTUP_TIMEOUT)
+        except Exception:
+            log_error("batch worker pool")
+            pool.shutdown(wait=False, cancel_futures=True)
+            return None
+        return pool
+
+    def _run_pool(self, pool):
+        """Keep the workers fed, storing each result the moment it lands.
+
+        Results are taken as they complete, never in the order they were
+        submitted. A full-album chart occupies its worker for half a minute,
+        and if the count waited on it, the seven charts that finished behind
+        it would go unrecorded until it was done - leaving a progress bar
+        that sits still for thirty seconds and reads exactly like the freeze
+        this whole arrangement exists to prevent.
+
+        Only a window of charts is ever in flight: submitting all 18,000 at
+        once would hold every pending result in memory for no gain.
+
+        """
+        inflight = {}       # future -> scanitem, oldest submission first
+        window = 2 * self.workers
+        queued = iter(self.items)
+
+        def fill():
+            while len(inflight) < window and not self._cancel.is_set():
+                scanitem = next(queued, None)
+                if scanitem is None:
+                    return
+                if self._skip(scanitem):
+                    continue
+                future = pool.submit(hybatch.analyze_for_store, self._job(scanitem))
+                inflight[future] = scanitem
+
+        fill()
+        self._show_oldest(inflight)
+
+        while inflight:
+            if self._cancel.is_set():
+                # Drop whatever hasn't started; let the running charts
+                # finish so their work isn't thrown away.
+                for future in [f for f in inflight if f.cancel()]:
+                    del inflight[future]
+                if not inflight:
+                    return
+
+            done, _ = concurrent.futures.wait(
+                inflight, return_when=concurrent.futures.FIRST_COMPLETED)
+
+            for future in done:
+                scanitem = inflight.pop(future)
+                try:
+                    row, tempomap, error = future.result()
+                except Exception as e:
+                    # The worker went down, rather than the chart failing.
+                    log_error(f"batch worker for {scanitem.title}")
+                    self._fail(scanitem, f"{e!r}")
+                else:
+                    self._finish(scanitem, row, tempomap, error)
+
+            fill()
+            self._show_oldest(inflight)
+
+    def _show_oldest(self, inflight):
+        """Name the chart that's been running longest.
+
+        With several charts going at once there is no single current one, and
+        the oldest is the useful one to name: it is what the run is waiting
+        on, and it is the one long enough to be worth explaining.
+
+        """
+        scanitem = next(iter(inflight.values()), None)
+        with self._lock:
+            self.current = "" if scanitem is None else f"{scanitem.artist} - {scanitem.title}"
+
+    def _run_here(self):
+        """The same work, one chart at a time, in this thread.
+
+        Used for a single worker, and as the fallback if a pool won't start.
+
+        """
+        for scanitem in self.items:
+            if self._cancel.is_set():
+                return
+            if self._skip(scanitem):
+                continue
+
+            with self._lock:
+                self.current = f"{scanitem.artist} - {scanitem.title}"
+
+            self._finish(scanitem, *hybatch.analyze_for_store(self._job(scanitem)))
+
+    def _job(self, scanitem):
+        return (scanitem.md5, scanitem.notespath, self.chartmode, self.settings,
+                hymisc.UNCAPPED_SP)
+
+    def _skip(self, scanitem):
+        """Already stored for this chartmode, unless the run is a redo."""
+        if self.redo or not appstate.hydatabook.store.has_record(scanitem.md5, self.chartmode):
+            return False
+        with self._lock:
+            self.skipped += 1
+        return True
+
+    def _finish(self, scanitem, row, tempomap, error):
+        """Store one analyzed chart, counting whatever happens."""
+        if error is not None:
+            self._fail(scanitem, error)
+            return
+
+        # Saving is guarded too: one chart that won't store should cost a
+        # line in the failure list, not the rest of the run.
         try:
             appstate.hydatabook.add_song(scanitem, tempomap)
-            appstate.hydatabook.add_record(scanitem.md5, self.chartmode, record)
+            appstate.hydatabook.add_row(row)
         except Exception as e:
             log_error(f"batch saving {scanitem.title}")
-            self.failed += 1
-            self.failures.append(f"{scanitem.artist} - {scanitem.title}: save failed, {e!r}")
-            return True
+            self._fail(scanitem, f"save failed, {e!r}")
+            return
 
-        self.analyzed += 1
-        return True
+        with self._lock:
+            self.analyzed += 1
+
+    def _fail(self, scanitem, reason):
+        with self._lock:
+            self.failed += 1
+            self.failures.append(f"{scanitem.artist} - {scanitem.title}: {reason}")
 
 
 def library_scanitems(search=None):
@@ -497,6 +754,19 @@ def refresh_batchbutton(matchcount=None):
         dpg.configure_item("batchbutton", label="Analyze library")
 
 
+def analyze_settings():
+    """The analysis arguments as the settings pane has them right now."""
+    usettings = appstate.usettings
+    return (
+        usettings.view_difficulty,
+        usettings.view_prodrums,
+        usettings.view_bass2x,
+        usettings.depth_mode,
+        int(usettings.depth_value),
+        int(usettings.mslimit_value) if usettings.mslimit_enabled else None,
+    )
+
+
 def on_batch():
     """Analyze the current search, or the whole library if nothing is typed."""
     if appstate.batch is not None:
@@ -526,50 +796,55 @@ def on_batch():
         scanitems,
         appstate.usettings.chartmode_key(),
         dpg.get_value("batch_redo"),
+        analyze_settings(),
     )
-    refresh_batch_progress()
+    appstate.batch.start()
 
 
-def refresh_batch_progress():
-    job = appstate.batch
+def refresh_batch_progress(job, progress):
     total = len(job.items)
+    index = progress['index']
 
-    dpg.set_value("batch_bar", job.index / total if total else 1.0)
-    dpg.configure_item("batch_bar", overlay=f"{job.index}/{total}")
+    dpg.set_value("batch_bar", index / total if total else 1.0)
+    dpg.configure_item("batch_bar", overlay=f"{index}/{total}")
     dpg.set_value(
         "batch_counts",
-        f"{job.analyzed} analyzed, {job.skipped} already stored, {job.failed} failed."
+        f"{progress['analyzed']} analyzed, {progress['skipped']} already stored,"
+        f" {progress['failed']} failed."
     )
+    dpg.set_value("batch_current", progress['current'][:64])
 
-    if job.index < total:
-        nextitem = job.items[job.index]
-        dpg.set_value("batch_current", f"{nextitem.artist} - {nextitem.title}"[:64])
+    if job.is_cancelled():
+        # The chart in flight still has to finish, so say so rather than
+        # leaving the modal looking like nothing happened.
+        dpg.set_value("batch_title", "Cancelling...")
 
 
-def batch_step():
-    """Advance the running batch by one chart. Called once per frame."""
+def batch_poll():
+    """Repaint the batch modal from the worker's counters. Once per frame."""
     job = appstate.batch
     if job is None:
         return
 
-    if job.step():
-        refresh_batch_progress()
+    progress = job.progress()
+    refresh_batch_progress(job, progress)
+
+    if not progress['finished']:
         return
 
     # Finished or cancelled.
     dpg.set_value("batch_current", "")
-    dpg.set_value("batch_title", "Cancelled." if job.cancelled else "Finished.")
-    dpg.set_value("batch_bar", job.index / len(job.items) if job.items else 1.0)
+    dpg.set_value("batch_title", "Cancelled." if job.is_cancelled() else "Finished.")
     dpg.show_item("batch_done")
     dpg.hide_item("batch_cancelbutton")
     dpg.show_item("batch_dismiss")
 
-    if job.failures:
+    if progress['failures']:
         dpg.configure_item("batchprogress", height=380)
         dpg.show_item("batch_failedlabel")
         dpg.show_item("batch_failedcontainer")
         dpg.delete_item("batch_failedcontainer", children_only=True)
-        for msg in job.failures:
+        for msg in progress['failures']:
             dpg.add_text(msg, parent="batch_failedcontainer")
 
     appstate.batch = None
@@ -577,7 +852,7 @@ def batch_step():
 
 def on_batch_cancel():
     if appstate.batch is not None:
-        appstate.batch.cancelled = True
+        appstate.batch.cancel()
 
 
 def on_batch_dismiss():
@@ -734,10 +1009,26 @@ def on_path_selected(sender, app_data, path):
             dpg.add_text("None.")
             dpg.bind_item_font(dpg.last_item(), "MonoFont")
             
-        # Regardless of what activations were displayed, leftover SP is 
+        # Regardless of what activations were displayed, leftover SP is
         # a possibility.
         dpg.add_text(f"Leftover SP: {path.leftover_sp}.")
         dpg.bind_item_font(dpg.last_item(), "MonoFont")
+
+        # Which SP ceiling this result was found under. Only worth saying in
+        # the uncapped edition, where the ceiling is an approximation of "no
+        # ceiling" rather than the rule.
+        record = appstate.get_selected_record()
+        if hymisc.UNCAPPED_SP and record is not None and record.sp_cap is not None:
+            if record.sp_cap_converged:
+                dpg.add_text(f"SP meter: {record.sp_cap} bars; raising it "
+                             f"further stopped changing the score.")
+                dpg.bind_item_font(dpg.last_item(), "MonoFont")
+            else:
+                dpg.add_text(f"SP meter: {record.sp_cap} bars. The search ran "
+                             f"out of time before the score settled, so a "
+                             f"higher meter may still score more.")
+                dpg.bind_item_font(dpg.last_item(), "MonoFont")
+                dpg.bind_item_theme(dpg.last_item(), "warning_theme")
         
         if path.skipped_accents > 0:
             dpg.add_text(f"This path has {path.skipped_accents} skipped (unhittable) accent{"" if path.skipped_accents == 1 else "s"}!")
@@ -814,7 +1105,7 @@ def on_run_chart(sender, app_data, user_data):
         )
     except Exception as e:
         dpg.configure_item("songdetails_progresspanel", height=180)
-        dpg.set_value("analyze_errorcontent", repr(e))
+        dpg.set_value("analyze_errorcontent", hymisc.error_text(e))
         dpg.show_item("analyze_errorlabel")
         dpg.show_item("analyze_errorcontent")
         dpg.show_item("analyze_dismissbutton")
@@ -1054,7 +1345,7 @@ def _draw_tableview():
             summary = appstate.get_record_summary(scan_item.md5, appstate.usettings.chartmode_key())
             if summary:
                 hyversion, bestpath = summary
-                if hyversion == hymisc.HYDRA_VERSION:
+                if hyversion == hymisc.RECORD_VERSION:
                     dpg.configure_item(f"table[{r}, {appstate.TABLE_COLCOUNT - 1}]", label=bestpath, user_data=scan_item)
                     dpg.bind_item_theme(f"table[{r}, {appstate.TABLE_COLCOUNT - 1}]", "bestpath_theme")
                 else:
@@ -1322,6 +1613,12 @@ def build_main_ui():
                 dpg.add_text("0/0", tag= "librarypagelabel")
                 dpg.add_button(tag="pagerightbutton", arrow=True, direction=dpg.mvDir_Right, callback=on_pageright)
                 # dpg.add_text(f"Game version: {hymisc.ENGINE_LABEL}", tag="enginelabel", pos=(-100,-100))
+                if hymisc.UNCAPPED_SP:
+                    # These scores are not reachable in Clone Hero, so say so
+                    # where the paths are, not just in the title bar.
+                    dpg.add_text("SP meter uncapped - these paths are not playable in Clone Hero.",
+                                 tag="editionlabel")
+                    dpg.bind_item_theme(dpg.last_item(), "warning_theme")
         
         dpg.add_text("No songs scanned. Set a folder and scan songs to get started!", tag="libraryempty", show=False)
         
@@ -1425,6 +1722,10 @@ def build_main_ui():
 
 
 if __name__ == '__main__':
+    # Batch analysis spawns worker processes, and a spawned worker re-runs
+    # this executable. Must come before anything else that has an effect.
+    multiprocessing.freeze_support()
+
     # appstate is visible to the top-level functions
     appstate = HyAppState()
             
@@ -1432,7 +1733,7 @@ if __name__ == '__main__':
     
     # Begin UI
     icopath = str(hymisc.ICOPATH_APP)
-    verstr = f"Hydra v{'.'.join([str(n) for n in hymisc.HYDRA_VERSION])}"
+    verstr = f"{hymisc.EDITION_NAME} v{hymisc.version_str()}"
     dpg.create_viewport(title=verstr, width=1280, height=720, small_icon=icopath, large_icon=icopath)
 
     #demo.show_demo()
@@ -1468,11 +1769,16 @@ if __name__ == '__main__':
         if setupframe <= 2:
             setupframe += 1
 
-        # Long-running library analysis advances one chart per frame so the
-        # window keeps repainting and Cancel stays clickable.
+        # Library analysis runs on its own thread; this only paints what it
+        # has done so far, so the frame rate never depends on chart length.
         if appstate.batch is not None:
-            batch_step()
-            
+            batch_poll()
+
+    if appstate.batch is not None:
+        # Closed mid-run: stop the worker rather than leaving it analyzing
+        # into a database that's about to be torn down.
+        appstate.batch.cancel()
+
     dpg.start_dearpygui()
 
     # End UI

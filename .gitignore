@@ -5,10 +5,13 @@ output/*
 hydra/__pycache__
 test/__pycache__
 
-# HyApp
+# HyApp. The uncapped edition keeps its own set alongside these.
 hyapp.ini
 hyapp.db
 records.json
+hyapp_uncapped.ini
+hyapp_uncapped.db
+records_uncapped.json
 
 # Local utility scripts, anything else
 local/*

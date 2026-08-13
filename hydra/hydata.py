@@ -15,6 +15,8 @@ def json_save(obj):
             
             'hyversion': obj.hyversion,
             'ms': obj.ms_limit,
+            'sp_cap': obj.sp_cap,
+            'sp_cap_conv': obj.sp_cap_converged,
             'paths': obj._paths,
         }
     
@@ -134,6 +136,11 @@ def json_load(_dict):
             return o
         
         o.ms_limit = _dict['ms']
+        # Absent from records written before the adaptive cap existed. Those
+        # were pathed with no ceiling at all, which is the answer the cap
+        # ladder is trying to reach, so they count as converged.
+        o.sp_cap = _dict.get('sp_cap')
+        o.sp_cap_converged = _dict.get('sp_cap_conv', True)
         o._paths = _dict['paths']
         
         for p in o._paths:
@@ -160,9 +167,10 @@ def json_load(_dict):
             o.skipped_ghosts = _dict['sk_gho']
             o.skipped_accents = _dict['sk_acc']
             
-            o.variants = _dict['variants']            
+            o.variants = _dict['variants']
             o.var_point = _dict['var_point']
-            
+            o.recount_tied_paths()
+
             return o
         
         if obj_code == 'msq':
@@ -230,11 +238,18 @@ class HydraRecord:
     
     """
     def __init__(self):   
-        # Made by this version of Hydra.
-        self.hyversion = hymisc.HYDRA_VERSION
+        # Made by this version and edition of Hydra.
+        self.hyversion = hymisc.RECORD_VERSION
         
         self.ms_limit = None
-        
+
+        # Which SP meter ceiling produced this result, and whether raising it
+        # further stopped changing the score. None means no ceiling was
+        # applied. Capped records are always converged: 4 bars is the rule,
+        # not an approximation of one.
+        self.sp_cap = None
+        self.sp_cap_converged = True
+
         # Path results. Contains nested paths due to the variant system.
         self._paths = []
 
@@ -243,7 +258,7 @@ class HydraRecord:
         raise NotImplementedError
     
     def is_version_compatible(self):
-        return self.hyversion == hymisc.HYDRA_VERSION
+        return self.hyversion == hymisc.RECORD_VERSION
 
     def best_path(self):
         return self._paths[0]
@@ -265,6 +280,16 @@ class Path:
     Mult squeezes are also stored here; their point values are technically
     path dependent.
     """
+    # One of these exists per path under consideration, and a long chart
+    # considers millions, so they carry no per-object dict.
+    __slots__ = (
+        'multsqueezes', '_activations', 'notecount', 'leftover_sp',
+        'skipped_ghosts', 'skipped_accents', 'score_base', 'score_combo',
+        'score_sp', 'score_solo', 'score_accents', 'score_ghosts',
+        'variants', '_tied_count', 'var_point', '_variant_tail',
+        '_difficulty_prefix',
+    )
+
     def __init__(self):
         # Path characteristics
         self.multsqueezes = []
@@ -285,11 +310,24 @@ class Path:
         # List of paths that are tied with this path; these are stored as
         # nested paths that converge with this path at a certain point.
         self.variants = []
-        
-        self.var_point = None        
+
+        # How many paths this one stands for, kept in step with variants.
+        # Walking the tree to count them was being done once per tie found,
+        # which on a chart with many ties is most of the reduction pass.
+        self._tied_count = 1
+
+        self.var_point = None
         # Activations that can just be copied from this variant's base path.
         # Not saved/loaded.
         self._variant_tail = []
+
+        # Hardest of every activation but the last, maintained as each one is
+        # closed off. Only the last activation can still change while a search
+        # runs - backends and sqinouts land on it - so the ms filter recomputes
+        # that one alone instead of walking the whole list. On a discography
+        # that walk was O(activations) per path per iteration.
+        # Not saved/loaded: difficulty() stays the source of truth.
+        self._difficulty_prefix = None
    
     def __eq__(self, other):
         for listattr in ['multsqueezes', 'activations']:
@@ -331,6 +369,44 @@ class Path:
     def is_variant(self):
         return self.var_point is not None
         
+    def tied_pathcount(self):
+        """How many paths this one stands for: itself, plus every variant
+        nested under it. They all score the same."""
+        return self._tied_count
+
+    def add_variant(self, variant, var_point):
+        """Take on another path that scored exactly the same as this one."""
+        self.variants.append(variant)
+        variant.var_point = var_point
+        self._tied_count += variant._tied_count
+
+    def recount_tied_paths(self):
+        """Rebuild the tied count from the variant tree.
+
+        For variants that arrived as a finished tree rather than one merge at
+        a time, which is how a record read back from the store gets them.
+
+        """
+        self._tied_count = 1
+        for v in self.variants:
+            v.recount_tied_paths()
+            self._tied_count += v._tied_count
+        return self._tied_count
+
+    def detach_variants(self):
+        """Give this path its own copy of the variant tree hanging off it.
+
+        Variants are shared while the search runs - copying the tree at every
+        branch was the single most-called thing in the analysis - but two
+        finished paths cannot share one, because prepare_variants writes each
+        variant's tail onto it and their tails differ past the point they
+        split. Called once per finished path, just before that write.
+
+        """
+        self.variants = [v.copy() for v in self.variants]
+        for v in self.variants:
+            v.detach_variants()
+
     def prepare_variants(self):
         """Recursive preparation of variants (copying the shared info from the
         base path to its variants)."""
@@ -407,9 +483,16 @@ class Path:
         c.skipped_ghosts = self.skipped_ghosts
         c.skipped_accents = self.skipped_accents
         
-        c.variants = [v.copy() for v in self.variants]
+        # Shared, not copied: a variant is finished the moment it is taken on,
+        # so nothing in the search writes to one. Only the list is this
+        # path's own, so taking on a variant doesn't reach the other copies.
+        # Finished paths get their own tree back via detach_variants().
+        c.variants = list(self.variants)
+        c._tied_count = self._tied_count
         c.var_point = self.var_point
-        
+
+        c._difficulty_prefix = self._difficulty_prefix
+
         return c
         
     def difficulty(self):
@@ -421,15 +504,49 @@ class Path:
     def is_difficult(self):
         return any(act.is_difficult() for act in self.all_activations())
     
+    def close_last_activation(self):
+        """Fold the last activation's difficulty into the running maximum.
+
+        Called just before a new activation is appended, which is the point
+        the previous one can no longer change: a path has to deactivate before
+        it can activate again, and deactivating is what writes to it.
+
+        """
+        if self._activations:
+            d = self._activations[-1].difficulty()
+            if d is not None and (
+                self._difficulty_prefix is None or d > self._difficulty_prefix
+            ):
+                self._difficulty_prefix = d
+
+    def search_difficulty(self):
+        """difficulty(), for a path that a search is still working on.
+
+        Equivalent to difficulty() while _variant_tail is empty, which it is
+        until prepare_variants runs at the end of the search.
+
+        """
+        d = self._difficulty_prefix
+        if self._activations:
+            last = self._activations[-1].difficulty()
+            if last is not None and (d is None or last > d):
+                d = last
+        return d
+
     def passes_ms_filter(self, ms_filter):
         if ms_filter is None:
             return True
-        if (d := self.difficulty()) is None:
+        if (d := self.search_difficulty()) is None:
             return True
         return d <= ms_filter
 
 class Activation:
-    
+
+    __slots__ = (
+        'skips', 'timecode', 'chord', 'sp_meter', 'frontend_points',
+        'backends', 'sqinouts', 'e_offset',
+    )
+
     def __init__(self):
         self.skips = None
         self.timecode = None
@@ -738,6 +855,9 @@ class SqOut(SPSqueeze):
     
 
 class BackendSqueeze:
+
+    __slots__ = ('timecode', 'chord', 'points', 'sqout_points', 'is_sp', 'offset_ms')
+
     def __init__(self, timecode, chord, points, sqout_points, is_sp):
         self.timecode = timecode
         self.chord = chord
@@ -746,7 +866,18 @@ class BackendSqueeze:
         self.is_sp = is_sp
 
         self.offset_ms = None
-        
+
+    def __copy__(self):
+        """Spelled out because the graph copies these per note, per nearby
+        deactivation. Generic copying has to go and ask what the fields are
+        first, which is most of the cost at this volume.
+        """
+        c = BackendSqueeze(
+            self.timecode, self.chord, self.points, self.sqout_points, self.is_sp
+        )
+        c.offset_ms = self.offset_ms
+        return c
+
     def __eq__(self, other):
         for attr in ['timecode', 'chord', 'points', 'sqout_points', 'is_sp', 'offset_ms']:
             if getattr(self, attr) != getattr(other, attr):
@@ -883,6 +1014,8 @@ class NoteCymbalType(Enum):
 class ChordNote:
     """Representation of a note from a chart."""
 
+    __slots__ = ('colortype', 'dynamictype', 'cymbaltype', 'is2x')
+
     def __init__(
         self,
         colortype, 
@@ -953,7 +1086,9 @@ class ChordNote:
 
 class Chord:
     """Representation of a chord which has 1 note (or None) for each color."""
-    
+
+    __slots__ = ('notemap',)
+
     def __init__(self):
         self.notemap = {
             NoteColor.KICK: None,

@@ -25,6 +25,68 @@ Hungry for more info? Check out [the wiki](https://github.com/DragonDelgar/hydra
 8. Click a path on the left side to show its details on the right side.
 9. You can return to browsing songs by X-ing out of the Song Details window.
 
+## Hydra Uncapped
+
+Every path Hydra finds rests on one rule taken from Clone Hero: the Star Power
+meter holds 4 bars and no more, so a phrase collected on a full meter is
+thrown away. That rule is why banking SP has a ceiling, why the longest
+activation is 8 measures, and why a phrase collected late in an activation can
+be worth nothing at all.
+
+Hydra Uncapped is the same optimizer with that one rule removed, to answer what
+the paths would be if SP never overfilled. The meter banks as many bars as the
+song offers, an activation runs 2 measures per bar spent with no ceiling, and a
+phrase collected during SP is always worth its full 2 measures.
+
+**Its scores are not achievable in Clone Hero.** It is a what-if for seeing how
+much the cap costs and where, not a set of paths to play.
+
+Run it from source with:
+
+```
+python hydra_uncapped.py
+```
+
+or build it with `python build.py --uncapped` (producing `HydraUncapped.exe`
+next to the normal `HydraTest.exe`). The command line tools take `--uncapped`:
+
+```
+python hydra_batch.py --uncapped
+python hydra_report.py --uncapped
+```
+
+It keeps its own library, settings and records (`hyapp_uncapped.db`,
+`hyapp_uncapped.ini`), so it runs alongside the normal app without either one
+disturbing the other. Charts have to be scanned and analyzed in it once:
+capped records aren't reusable, and it marks them `(Update...)`.
+
+### How "no ceiling" is actually reached
+
+Searching with no ceiling at all is the honest way to ask the question and the
+wrong way to answer it. A path holding a different number of bars is a
+different path and nothing merges them, so cost climbs about 2.5x every time
+the ceiling doubles. On a discography, "no ceiling" means every bar count up to
+several hundred, and the search doesn't finish.
+
+It doesn't need to. What a chart can do with SP is limited by the music, not by
+the meter: past some ceiling the optimizer runs out of things to spend it on
+and the score stops moving. So Hydra Uncapped raises the ceiling — 16, 32, 64,
+… — until two runs in a row agree, and reports that score along with the
+ceiling it settled on.
+
+Two agreeing runs are strong evidence, not proof. A chart that runs out of
+ladder, or out of time (`hymisc.SP_CAP_TIME_BUDGET`, 120s), says so in the path
+details instead of quietly passing for a finished answer.
+
+Measured on this library, Expert Pro Drums 2x, depth 4:
+
+| chart | capped | uncapped | settled at |
+|---|---|---|---|
+| Hail The Sun — Discography (961 SP phrases) | 3.7s | 36.4s | 64 bars |
+| Rise Against — Discography | 6.1s | 38.1s | 64 bars |
+| blink-182 — Discography (1,732 SP phrases) | 7.3s | 87.5s | 128 bars |
+| Endless Setlist I (4.4 hours of music) | 7.7s | 98.8s | 128 bars |
+
 ## Acknowledgements
 - Boddy, Beud, and Nick (BongOfDestiny) for active beta testing
 - Boddy for reference footage / images shown in the Hydra Wiki

@@ -1,12 +1,19 @@
+import bisect
+import heapq
 import shutil
 import copy
 import math
 import json
 from enum import Enum
-from itertools import combinations
 
 from . import hydata
+from . import hyflat
 from . import hymisc
+from . import hynative
+
+# Bound once: category_scores calls this per note, and the attribute lookup
+# through the module showed up next to the work itself.
+to_multiplier = hymisc.to_multiplier
 
 
 # How far apart (ms) a note and a deactivation can be and still be found as
@@ -18,6 +25,40 @@ from . import hymisc
 # backend here silently leaves that note scored as if it were still in SP.
 # Trim for display instead (see hymisc.BACKEND_DISPLAY_WINDOW_MS).
 SQUEEZE_WINDOW_MS = 500
+
+# How many paths to keep at any one tied score. A long chart can tie the same
+# score hundreds of ways, and every one of them is carried, prepared and
+# serialized with the record for no extra information: the score is the same,
+# and nobody reads the four hundredth way to reach it. Once a score has this
+# many paths, further ties are dropped where they are found rather than
+# collected.
+MAX_TIED_PATHS = 4
+
+# "Argument not given", so that an explicit sp_meter_cap of None (no ceiling)
+# is distinguishable from leaving it to the running edition.
+_UNSET = object()
+
+# Results of ScoreGraphEdge.deactivation_type. Small ints rather than strings:
+# see that method.
+DEACT_NONE = 0
+DEACT_NORMAL = 1
+DEACT_SQINOUT = 2
+
+# Whether to drop paths that provably cannot reach the results.
+#
+# Off, because it was measured and it does not pay. On Hail The Sun at a
+# ceiling of 64 it removed 25,564 of 20,283,261 paths examined - 0.13%, and
+# 0.18% on Rise Against - while costing a lower-bound tally per path per
+# iteration on all of them. Timing could not separate the two configurations
+# on this machine, which is the expected result for a 0.13% change.
+#
+# The reason is worth keeping: the bound compares *scores*, and paths here do
+# not differ much in score. SP placement is worth around 1% of a chart's
+# total, so every live path sits within a whisker of every other one, and a
+# bound wide enough to be correct is far too wide to separate them. The
+# machinery is left in place because it is exact and because a tighter bound
+# would use the same suffix numbers; see the notes in _prune_hopeless_paths.
+ENABLE_BOUND_PRUNE = False
 
 
 class ScoreGraph:
@@ -44,18 +85,34 @@ class ScoreGraph:
     order to explore valid paths through the song.
     
     """
-    def __init__(self, song):
+    def __init__(self, song, sp_meter_cap=_UNSET):
         # Finished state
         self.song = song
+        # Bars the meter holds, or None for no ceiling. Carried on the graph
+        # rather than read from hymisc at each use, so that an adaptive run can
+        # build graphs at several caps without editing process-wide state that
+        # another analysis on another thread is also reading.
+        self.sp_meter_cap = (
+            hymisc.SP_METER_CAP if sp_meter_cap is _UNSET else sp_meter_cap
+        )
         self.start = ScoreGraphNode(song.start_time(), False)
         self.length = 0
-        
+
         # Processing state
         self._head_time = None
         self._base_track_head = self.start
         self._sp_track_head = ScoreGraphNode(song.start_time(), True)
+        # Kept so the finished graph can be walked from the top of both
+        # tracks; _sp_track_head is the far end by the time building is done.
+        self.sp_start = self._sp_track_head
         self._combo = 0
+        self._sp_phrase_count = 0
         self._pending_deacts = set([])
+        # The same deactivations, as a min-heap, so the next one due can be
+        # read without ordering the whole set. Entries are removed lazily:
+        # anything popped that is no longer in the set above has already been
+        # handled or extended past, and is skipped.
+        self._deact_heap = []
         self._recent_deact_edges = []       # Used for SqIn backend detection (notes after deacts are usually Out, but recent deacts can make it a SqIn)
         self._recent_backends = []          # Used for SqOut detection (notes before deacts are usually In, but recent notes can be SqOut)
         self._proto_base_edge = ScoreGraphEdge()
@@ -63,12 +120,19 @@ class ScoreGraph:
         
         for timestamp in song._sequence:
             # SP can fall off between timestamps, so handle those first if any.
-            for pending_deact in sorted(list(self._pending_deacts)):
-                if pending_deact >= timestamp.timecode:
-                    break
+            # Only the earliest pending deactivations can be due, so the heap
+            # is read from the front rather than the set being sorted here:
+            # sorting ran once per timestamp, which on a discography is 172,000
+            # sorts of a set that grows all song.
+            heap = self._deact_heap
+            while heap and heap[0] < timestamp.timecode:
+                pending_deact = heapq.heappop(heap)
+                if pending_deact not in self._pending_deacts:
+                    continue        # stale entry, already dealt with
                 self.set_head_time(pending_deact)
                 self.handle_deact(pending_deact, None)
-                    
+
+
             self.set_head_time(timestamp.timecode)
             
             self.store_notecount(timestamp.chord.count())
@@ -94,37 +158,134 @@ class ScoreGraph:
             self.store_new_backend(timestamp, score_groups['sp'], score_groups['sp'] - score_groups['sqout_reduction'])
             
             if timestamp.flag_sp:
+                self._sp_phrase_count += 1
+
                 # If any deacts are only the squeeze window away, keep a non-extended copy of them (SqOut)
                 sqout_deacts = set([tc for tc in self._pending_deacts if tc.ms - timestamp.timecode.ms < SQUEEZE_WINDOW_MS])
-                
+
                 # Deact timecodes that can be extended by this sp: current pending deacts as well as very recently handled deacts (SqIn)
                 extendable_tcs = self._pending_deacts.union(set([e.dest.timecode for e in self._recent_deact_edges]))
-                
-                # Deact timecodes after extension: end time + 2 measures or capped at now + 8 measures
-                extension_map = {tc: min(tc.plusmeasure(2, song), timestamp.timecode.plusmeasure(8, song)) for tc in extendable_tcs}
-                
-                # Update deacts
+
+                # Deact timecodes after extension
+                extension_map = self.extend_deacts(extendable_tcs, timestamp.timecode, song)
+
+                # Update deacts. Every pending time moved, so the whole heap is
+                # stale; rebuilding it is O(n) and happens once per SP phrase
+                # rather than once per timestamp.
                 self._pending_deacts = set(extension_map.values()).union(sqout_deacts)
-                
+                self._deact_heap = list(self._pending_deacts)
+                heapq.heapify(self._deact_heap)
+
+
                 # Save info on the graph
                 self._proto_base_edge.sp_times.append((timestamp.timecode, extension_map))
                 self._proto_sp_edge.sp_times.append((timestamp.timecode, extension_map))
                 
-            # handle acts            
+            # handle acts
             if timestamp.has_activation():
                 self.advance_tracks(timestamp.timecode, timestamp.chord)
-                self.add_act_edge(timestamp.chord, score_groups['sp'], score_groups['skipped_dynamic_reduction'], timestamp.activation_length, song)
-                
-                self._pending_deacts.add(timestamp.timecode.plusmeasure(4, song))
-                self._pending_deacts.add(timestamp.timecode.plusmeasure(6, song))
-                self._pending_deacts.add(timestamp.timecode.plusmeasure(8, song))
-                
+                act_edge = self.add_act_edge(timestamp.chord, score_groups['sp'], score_groups['skipped_dynamic_reduction'], timestamp.activation_length, song)
+
+                # A path activating here ends up at exactly one of that edge's
+                # end times, so those are the deacts this activation puts in
+                # play. Capped, that's the familiar +4/+6/+8 measures.
+                for end_time in act_edge.activation_initial_end_times.values():
+                    if end_time not in self._pending_deacts:
+                        self._pending_deacts.add(end_time)
+                        heapq.heappush(self._deact_heap, end_time)
+
             # handle deacts
             if timestamp.timecode in self._pending_deacts:
                 self.handle_deact(timestamp.timecode, timestamp.chord)
-            
+
         self.advance_tracks(song.last.timecode, song.last.chord)
-    
+
+        self.compute_bounds()
+
+    def compute_bounds(self):
+        """Annotate every node with what the rest of the song is worth.
+
+        Two numbers per position, both over the remaining song:
+
+        base_suffix - exactly what a path on the base track scores if it never
+            activates again. Activating is always optional and a path that
+            never branches takes no score adjustments, so this is not merely a
+            bound, it is achievable. That makes it a *lower* bound on what
+            that path finishes on.
+
+        max_suffix - more than any continuation can possibly score. It assumes
+            the whole remainder is played in SP (SP track edges carry the same
+            categories as base track edges plus spscore, so they dominate
+            term by term), and then adds every activation frontend and every
+            positive backend adjustment still to come, none of which any real
+            path can collect all of. An over-estimate is what makes it safe.
+
+        The pather uses the pair to drop paths that cannot catch up: if a
+        path's best possible finish is below a score that some other path is
+        already guaranteed, it cannot appear in the results and following it
+        further is wasted work. Both tracks are walked in lockstep, so a
+        position's two nodes get the same max_suffix -- a base track path may
+        activate immediately and so is bounded by the SP track too.
+
+        """
+        base_nodes = []
+        node = self.start
+        while node is not None:
+            base_nodes.append(node)
+            node = node.adv_edge.dest if node.adv_edge else None
+
+        sp_nodes = []
+        node = self.sp_start
+        while node is not None:
+            sp_nodes.append(node)
+            node = node.adv_edge.dest if node.adv_edge else None
+
+        base_running = 0
+        max_running = 0
+
+        # Backwards: the last node has nothing left to play and so is worth 0.
+        for i in range(len(base_nodes) - 1, -1, -1):
+            b_node = base_nodes[i]
+            s_node = sp_nodes[i] if i < len(sp_nodes) else None
+
+            b_node.base_suffix = base_running
+            b_node.max_suffix = max_running
+            if s_node is not None:
+                s_node.base_suffix = base_running
+                s_node.max_suffix = max_running
+
+            # Walking to the previous position adds that position's edges.
+            b_edge = base_nodes[i - 1].adv_edge if i else None
+            s_edge = sp_nodes[i - 1].adv_edge if i and i - 1 < len(sp_nodes) else None
+
+            if b_edge is not None:
+                base_running += (
+                    b_edge.basescore + b_edge.comboscore + b_edge.spscore
+                    + b_edge.soloscore + b_edge.accentscore + b_edge.ghostscore
+                )
+            if s_edge is not None:
+                max_running += (
+                    s_edge.basescore + s_edge.comboscore + s_edge.spscore
+                    + s_edge.soloscore + s_edge.accentscore + s_edge.ghostscore
+                )
+
+            # Everything a branch at the previous position could add on top.
+            if i:
+                act_edge = base_nodes[i - 1].branch_edge
+                if act_edge is not None and act_edge.frontend is not None:
+                    max_running += act_edge.frontend.points
+
+                deact_edge = (
+                    sp_nodes[i - 1].branch_edge if i - 1 < len(sp_nodes) else None
+                )
+                if deact_edge is not None:
+                    for be in deact_edge.backends:
+                        gain = be.points if be.points > 0 else 0
+                        if be.sqout_points > gain:
+                            gain = be.sqout_points
+                        max_running += gain
+
+
     def store_notecount(self, count):
         self._proto_base_edge.notecount += count
         self._proto_sp_edge.notecount += count
@@ -181,6 +342,46 @@ class ScoreGraph:
                 recent_edge.late_sqin_count += 1
                 recent_edge.sqin_time = recent_edge.sqin_time.plusmeasure(2, self.song)
         
+    def max_sp_bars(self):
+        """Most SP bars a path could be holding at the point reached so far.
+
+        Two ceilings apply and the smaller wins. The meter size is one. The
+        other is every SP phrase written up to here: a path cannot be holding
+        a bar it has not had the chance to collect, whatever the meter would
+        allow. Uncapped there is no meter, so only the second one is left.
+
+        Taking the smaller matters because this decides how many end times an
+        activation gets (see add_act_edge), and each one becomes a pending
+        deactivation and so a node in the graph. Using the meter size alone
+        manufactured states no path could reach -- the whole of a 32-bar
+        meter three phrases into a song -- and the cost of carrying them
+        climbed with the ceiling, which is exactly where the uncapped ladder
+        hurts most.
+
+        """
+        if self.sp_meter_cap is None:
+            return self._sp_phrase_count
+        return min(self.sp_meter_cap, self._sp_phrase_count)
+
+    def extend_deacts(self, deact_tcs, sp_timecode, song):
+        """Where each pending deactivation moves to when an SP phrase is
+        collected during an activation: 2 measures later.
+
+        A capped meter cannot be pushed past its own size, so the result is
+        held to a full meter's worth of measures from the phrase. That clamp
+        is the overfill Clone Hero discards, and dropping it is the whole of
+        what the uncapped edition changes here: every phrase is then worth its
+        full 2 measures no matter how much SP is already banked.
+
+        """
+        extended = {tc: tc.plusmeasure(2, song) for tc in deact_tcs}
+
+        if self.sp_meter_cap is None:
+            return extended
+
+        ceiling = sp_timecode.plusmeasure(2 * self.sp_meter_cap, song)
+        return {tc: min(ext, ceiling) for tc, ext in extended.items()}
+
     def head_time_offset(self, timecode):
         return self._head_time.ms - timecode.ms
         
@@ -238,11 +439,18 @@ class ScoreGraph:
         tc_E = hymisc.Timecode(act_edge.dest.timecode.ticks - fill_length_ticks - 4*song.tick_resolution, song.tick_resolution, song.tpm_changes, song.bpm_changes)
         act_edge.activation_fill_deadline_ms = tc_E.ms
         
-        act_edge.activation_initial_end_times = {sp: act_edge.dest.timecode.plusmeasure(2 * sp, song) for sp in [2, 3, 4]}
-        
+        # Two measures of SP per bar spent, for every amount of SP a path could
+        # arrive here holding: 2 through a full meter, or 2 through however
+        # many phrases the song has offered so far when uncapped.
+        act_edge.activation_initial_end_times = {
+            sp: act_edge.dest.timecode.plusmeasure(2 * sp, song)
+            for sp in range(2, self.max_sp_bars() + 1)
+        }
+
         act_edge.skipped_dynamic_points = skipped_dynamic_reduction
-        
+
         self._base_track_head.branch_edge = act_edge
+        return act_edge
     
     def add_deact_edge(self):
         deact_edge = ScoreGraphEdge()
@@ -278,9 +486,14 @@ class ScoreGraph:
 class ScoreGraphNode:
     """Represents a point in the song and whether SP is active or not.
     
-    The only possible edges are 1 advancing edge leading farther into the song 
+    The only possible edges are 1 advancing edge leading farther into the song
     and 1 branch node that does not move forward but toggles SP.
     """
+    __slots__ = (
+        'timecode', 'adv_edge', 'branch_edge', 'is_sp', 'chord',
+        'base_suffix', 'max_suffix',
+    )
+
     def __init__(self, timecode, is_sp):
         self.timecode = timecode
 
@@ -288,6 +501,11 @@ class ScoreGraphNode:
         self.branch_edge = None
         self.is_sp = is_sp
         self.chord = None
+
+        # Score bounds for the rest of the song from here. See
+        # ScoreGraph.compute_bounds.
+        self.base_suffix = 0
+        self.max_suffix = 0
     
     def __repr__(self):
         lines = [self.name()]
@@ -315,8 +533,17 @@ class ScoreGraphEdge:
     
     The graph is created such that every possible place where it's possible
     to activate or run out of SP has a branch edge there.
-    
+
     """
+    __slots__ = (
+        'dest', 'notecount', 'basescore', 'comboscore', 'spscore', 'soloscore',
+        'accentscore', 'ghostscore', 'sp_times', 'frontend', 'backends',
+        'multsqueezes', 'activation_fill_deadline_ms',
+        'activation_initial_end_times', 'skipped_dynamic_points',
+        'sqinout_time', 'sqinout_timing', 'late_sqin_count', 'sqout_time',
+        'sqin_time',
+    )
+
     def __init__(self):
         self.dest = None
         
@@ -352,32 +579,42 @@ class ScoreGraphEdge:
     def deactivation_type(self, sp_end_time):
         """Which kind of deactivation is possible if this deact edge is reached
         by a GraphPath object with the given sp end time.
-        
+
         This result is a function of the sp end time, the edge's time,
         the edge's early SP backends (already applied to the incoming sp end
         time), and the edge's late SP backends.
-        
-        'none': It's not possible to deactivate here.
-        'normal': SP runs out here and the path is forced to deactivate.
-        'sqinout': 
+
+        DEACT_NONE: It's not possible to deactivate here.
+        DEACT_NORMAL: SP runs out here and the path is forced to deactivate.
+        DEACT_SQINOUT:
+
+        Returns one of the DEACT_* constants rather than a string: this is
+        asked ~13M times per uncapped discography, and the caller's match over
+        string literals cost more than the comparison that produced them.
+        Timecodes are compared on .ticks directly for the same reason -- both
+        sides are always Timecodes here, so Timecode.__eq__'s isinstance check
+        is pure overhead at this call site.
+
         """
         if self.sqinout_time:
             # This deact has SP on it, so if valid, the deact path will be a
             # SqOut and the continuing path will be a SqIn.
-            if sp_end_time == self.sqout_time:
+            if sp_end_time.ticks == self.sqout_time.ticks:
                 # end time + early SP backends == edge time + early SP backends
-                return 'sqinout'
+                return DEACT_SQINOUT
             else:
-                return 'none'
+                return DEACT_NONE
         else:
-            # Normal backend, no sqin/sqouts
-            assert(sp_end_time >= self.dest.timecode)
-            if sp_end_time == self.dest.timecode:
+            # Normal backend, no sqin/sqouts. SP cannot already have run out
+            # before this edge; the assert that said so ran in every shipped
+            # build (asserts are only stripped under -O) for 12M Timecode
+            # comparisons a chart, and the condition is structural.
+            if sp_end_time.ticks == self.dest.timecode.ticks:
                 # SP ends here
-                return 'normal'
+                return DEACT_NORMAL
             else:
                 # SP ends later
-                return 'none'
+                return DEACT_NONE
 
 
 class GraphPather:
@@ -389,34 +626,60 @@ class GraphPather:
     def __init__(self):
         self.record = hydata.HydraRecord()
         
-    def read(self, graph, depth_mode, depth_value, ms_filter, cb_pathsprogress=None):
+    def read(
+        self, graph, depth_mode, depth_value, ms_filter, cb_pathsprogress=None,
+        incumbent=None
+    ):
+        """Find the paths through graph.
+
+        incumbent is scores already known to be reachable for this song,
+        descending, from an earlier run at a lower SP meter ceiling. Every path
+        legal under a smaller meter is still legal under a larger one, so those
+        scores are guaranteed to be matched here, and any path that cannot
+        reach them is not worth following. See _reduce_iteration_paths.
+
+        """
         self.record.ms_limit = ms_filter
+
+        if hynative.SEARCH_ENABLED:
+            self._read_native(
+                graph, depth_mode, depth_value, ms_filter, cb_pathsprogress)
+            return
+
         paths = [GraphPath()]
         paths[0].currentnode = graph.start
         length = 0
-        
+
+        self._incumbent = incumbent or ()
+        sp_cap = graph.sp_meter_cap
+
         # to do: paths should complete at the same time, might improve performance
-        while any([not p.is_complete() for p in paths]):
-            self._iteration_paths = []
+        while any(p.currentnode is not None for p in paths):
+            iteration_paths = self._iteration_paths = []
+            add_path = iteration_paths.append
             for p in paths:
-                assert(not p.is_complete())
-                p.advance()
-                    
-                if p.is_complete():
-                    self._iteration_paths.append(p)
+                # Spelled out rather than calling is_complete(): this runs
+                # once per path per iteration, ~1.9M times per chart, and the
+                # method call was costing more than the check.
+                assert p.currentnode is not None
+                p.advance(sp_cap)
+
+                node = p.currentnode
+                if node is None:
+                    add_path(p)
                     continue
-                
-                if p.is_active_sp():
+
+                if node.is_sp:
                     can_extend, branchpath = p.branch_deactivate()
                     if can_extend:
-                        self._iteration_paths.append(p)
+                        add_path(p)
                 else:
                     branchpath = p.branch_activate()
-                    self._iteration_paths.append(p)
-                    
+                    add_path(p)
+
                 if branchpath:
-                    self._iteration_paths.append(branchpath)
-                
+                    add_path(branchpath)
+
             # Update the path list with branching results
             self._reduce_iteration_paths(depth_mode, depth_value, ms_filter)
             paths = self._iteration_paths
@@ -432,114 +695,287 @@ class GraphPather:
         # Finalize paths and copy from processing objects to hydata
         for path in paths:
             path.data.leftover_sp = path.sp
+            # Variants were shared between paths while the search ran; each
+            # finished path needs its own before prepare_variants writes to
+            # them. See hydata.Path.detach_variants.
+            path.data.detach_variants()
             path.data.prepare_variants()
-            self.record._paths.append(path.data)    
+            self.record._paths.append(path.data)
     
+    def _read_native(
+        self, graph, depth_mode, depth_value, ms_filter, cb_pathsprogress
+    ):
+        """read(), with the search run by the C++ engine.
+
+        The graph is flattened to arrays, crosses the boundary once, and comes
+        back as a decision log that hynative turns into the same hydata.Path
+        objects this class would have built. incumbent is not passed because
+        the only thing that consumes it is the bound pruning, which is off; see
+        ENABLE_BOUND_PRUNE.
+
+        """
+        flat = hyflat.flatten(graph)
+        paths = hynative.search(
+            flat, depth_mode, depth_value, ms_filter,
+            hymisc.FLAG_SKIPPED_DYNAMICS, cb_pathsprogress,
+        )
+        self.record._paths.extend(paths)
+
     def _reduce_iteration_paths(self, depth_mode, depth_value, ms_filter):
         """Eliminates paths that are guaranteed to not make it into the final
         result because the score is too low (depth settings) or the timing
         difficulty is too high (ms filter).
-        
+
         Also creates variants for paths that have identical scores.
-        
+
         For a song in progress, two paths are only compared if they're in
         identical SP situations.
         """
-        filtered_paths = set()
-        paths_to_remove = set()
-        
+        paths = self._iteration_paths
+
         # Before path comparisons, check each path against the ms filter.
         # Filtered paths cannot be used to eliminate paths, and are eliminated
         # immediately if worse than a single path.
+        filtered_paths = set()
         if ms_filter is not None:
-            for p in self._iteration_paths:
+            for p in paths:
                 if not p.data.passes_ms_filter(ms_filter):
                     filtered_paths.add(p)
-        
+
         cmp_groups = {}
         optimal_score = None
-        for p in self._iteration_paths:
+        # Scores this song is already known to reach, from paths that can no
+        # longer lose them: a finished path's score, and an unfinished base
+        # track path's score plus the rest of the song played without
+        # activating again. Both are achievable, so anything that cannot reach
+        # them is out of the running. See _prune_hopeless_paths.
+        pruning = ENABLE_BOUND_PRUNE
+        guaranteed = list(self._incumbent) if pruning else None
+        node_bounds = None
+        for p in paths:
+            # Every decision below is made on score. p.score is maintained by
+            # the path itself as it moves, so this pass reads it rather than
+            # re-summing the six categories once per path per iteration.
+            score = p.score
+            node = p.currentnode
+            is_complete = node is None
+
             # Don't consider paths that recently SqIn/SqOuted as they have
             # interacted with an SP phrase earlier than other paths.
-            if p.is_complete() and (optimal_score is None or p.data.totalscore() > optimal_score):
-                optimal_score = p.data.totalscore()
-            
+            if is_complete and (optimal_score is None or score > optimal_score):
+                optimal_score = score
+
+            if pruning:
+                if is_complete:
+                    guaranteed.append(score)
+                else:
+                    if node_bounds is None:
+                        node_bounds = (node.base_suffix, node.max_suffix)
+                    if not node.is_sp:
+                        guaranteed.append(score + node.base_suffix)
+
             if p.buffered_sqinout_sp == 0:
-                if p.is_complete():
+                is_sp = not is_complete and node.is_sp
+                if is_complete:
                     sp_value = 0
                 else:
-                    sp_value = p.sp_end_time if p.is_active_sp() else p.sp
-                
-                cmp_group = (p.is_active_sp(), sp_value)
-                if cmp_group not in cmp_groups:
-                    cmp_groups[cmp_group] = []
-                cmp_groups[cmp_group].append(p)
-        
-        
-        for cmp_paths in cmp_groups.values():
-            worsethan_scores = {p: set() for p in cmp_paths}
-            marked_variants = set()
-            for p, q in combinations(cmp_paths, 2):
-                # Both paths are already removed, skip
-                if p in paths_to_remove and q in paths_to_remove:
-                    continue
-                
-                # One of the paths became a variant just now, skip
-                if p in marked_variants or q in marked_variants:
-                    continue
-                
-                score_diff = q.data.totalscore() - p.data.totalscore()
-                if score_diff < 0:
-                    better, worse = (p, q)
-                elif score_diff > 0:
-                    better, worse = (q, p)
+                    sp_value = p.sp_end_time if is_sp else p.sp
+
+                cmp_group = (is_sp, sp_value)
+                group = cmp_groups.get(cmp_group)
+                if group is None:
+                    cmp_groups[cmp_group] = [p]
                 else:
-                    # Avoid mixing filtered and unfiltered paths here
-                    if (p in filtered_paths) == (q in filtered_paths):
-                        # Variants - p will continue analysis and q will become a variant
-                        p.data.variants.append(q.data)
-                        q.data.var_point = len(p.data)
-                        marked_variants.add(q)
-                        paths_to_remove.add(q)              
-                    continue
-                
-                # Better path is filtered, can't help eliminate anything unless it's optimal.
-                if better in filtered_paths and not (better.data.totalscore() == optimal_score):
-                    continue
-                
-                # Filtered paths are removed as soon as they're worse than anything
-                if worse in filtered_paths:
-                    paths_to_remove.add(worse)
-                    continue
-                
-                # If better is already out of depth range, this is
-                # a shortcut to identifying that worse is also out.
-                if better in paths_to_remove:
-                    paths_to_remove.add(worse)
-                    continue
-                
-                # Done with shortcuts, now check against depth settings.
-                if depth_mode == 'points' and worse.data.totalscore() + depth_value < better.data.totalscore():
-                    paths_to_remove.add(worse)
-                elif depth_mode == 'scores':
-                    worsethan_scores[worse].add(better.data.totalscore())
-                    if len(worsethan_scores[worse]) > depth_value:
-                        paths_to_remove.add(worse)
-        
-        self._iteration_paths = [p for p in self._iteration_paths if p not in paths_to_remove]
-        
+                    group.append(p)
+
+        paths_to_remove = set()
+        for cmp_paths in cmp_groups.values():
+            if len(cmp_paths) > 1:
+                self._reduce_group(
+                    cmp_paths, filtered_paths, optimal_score,
+                    depth_mode, depth_value, paths_to_remove
+                )
+
+        if pruning:
+            self._prune_hopeless_paths(
+                paths, guaranteed, node_bounds, filtered_paths,
+                depth_mode, depth_value, paths_to_remove
+            )
+
+        if paths_to_remove:
+            self._iteration_paths = [p for p in paths if p not in paths_to_remove]
+
+    def _prune_hopeless_paths(
+        self, paths, guaranteed, node_bounds, filtered_paths,
+        depth_mode, depth_value, paths_to_remove
+    ):
+        """Drop paths that cannot reach the results whatever they do next.
+
+        The reduction above only ever compares paths that hold the same SP,
+        because that is the only way to compare them exactly. That leaves
+        paths in different SP situations unable to eliminate each other no
+        matter how far apart their scores are, and raising the meter ceiling
+        manufactures those situations by the hundred -- which is why cost
+        climbs so steeply with the ceiling.
+
+        This closes that gap without giving up exactness, by comparing what a
+        path could *at best* still finish on against what other paths are
+        *already guaranteed*. Both come from ScoreGraph.compute_bounds, and
+        each errs in the safe direction, so a path is only dropped when it
+        provably cannot appear:
+
+        - a path's ceiling is its score plus max_suffix, an over-estimate
+        - the bar is the depth setting applied to guaranteed scores, each of
+          which some path can actually deliver
+
+        With depth in 'scores' mode the results keep the best depth_value + 1
+        distinct scores, so the bar is the (depth_value + 1)th largest
+        distinct guaranteed score: clearing it is necessary to be listed.
+
+        Measured, this catches almost nothing, which is why ENABLE_BOUND_PRUNE
+        is off. What would make it bite is a tighter ceiling. max_suffix
+        assumes the entire rest of the song is played in SP, and no path can
+        do that: a path holding b bars with r phrases left can be in SP for at
+        most 2 * (b + r) measures. Bounding the SP *time* that way, and
+        charging it at the densest spscore rate left in the song, would give a
+        ceiling that actually falls below the bar late in a chart. That needs
+        a per-measure spscore index over the suffix, which is why it is
+        written down here rather than done.
+
+        """
+        if node_bounds is None or not guaranteed:
+            return      # every path finished this iteration
+
+        max_suffix = node_bounds[1]
+
+        if depth_mode == 'scores':
+            band = depth_value + 1
+            distinct = sorted(set(guaranteed), reverse=True)
+            if len(distinct) < band:
+                return  # not enough guaranteed results to rule anything out
+            bar = distinct[band - 1]
+        elif depth_mode == 'points':
+            bar = max(guaranteed) - depth_value
+        else:
+            return
+
+        for p in paths:
+            if p.currentnode is None or p in paths_to_remove:
+                continue
+            if p.score + max_suffix < bar:
+                paths_to_remove.add(p)
+
+    def _reduce_group(
+        self, cmp_paths, filtered_paths, optimal_score,
+        depth_mode, depth_value, paths_to_remove
+    ):
+        """Reduce one group of paths that are in the same SP situation.
+
+        Every judgement here is a comparison of scores, and a score orders the
+        group completely, so the group is read as a whole rather than pair by
+        pair. That matters: comparing every pair meant a group of 2257 paths -
+        which an uncapped chart reaches - cost 2.5 million comparisons in a
+        single call, and the group grows with the song.
+
+        """
+        # Groups are small and extremely numerous: an uncapped discography
+        # calls this ~4M times on groups averaging five paths, and the dict,
+        # set, sort and per-path bisect below then cost more than the
+        # comparisons they organise.
+        #
+        # In 'scores' mode a path is dropped only when more than depth_value
+        # distinct scores beat it, so a group holding at most depth_value + 1
+        # of them cannot drop anything. With no ties there is nothing to merge
+        # either, and with nothing filtered nothing to remove on that account,
+        # which leaves the general case below with no work to do.
+        n = len(cmp_paths)
+        if depth_mode == 'scores' and n <= depth_value + 1:
+            scores = {p.score for p in cmp_paths}
+            if len(scores) == n and not any(p in filtered_paths for p in cmp_paths):
+                return
+
+        # Ties first. Paths that score the same under the same filter status
+        # are one result reached different ways, so the first of them carries
+        # the rest as variants and continues on behalf of all of them.
+        survivors = []
+        tie_leaders = {}
+        for p in cmp_paths:
+            leader = tie_leaders.setdefault((p.score, p in filtered_paths), p)
+            if leader is p:
+                survivors.append(p)
+                continue
+
+            # Up to MAX_TIED_PATHS ways of scoring this much. Past that p is
+            # simply dropped: it is neither kept nor followed any further.
+            if leader.data.tied_pathcount() + p.data.tied_pathcount() <= MAX_TIED_PATHS:
+                leader.data.add_variant(p.data, len(leader.data))
+            paths_to_remove.add(p)
+
+        if len(survivors) < 2:
+            return
+
+        # The scores that are allowed to eliminate. A filtered path can't,
+        # unless it's optimal.
+        beating_scores = sorted({
+            p.score for p in survivors
+            if p not in filtered_paths or p.score == optimal_score
+        })
+        if not beating_scores:
+            return
+        best = beating_scores[-1]
+
+        # Hoisted out of the loop below: the group can hold thousands of
+        # paths, and these were being re-resolved for every one of them.
+        n_beating = len(beating_scores)
+        bisect_right = bisect.bisect_right
+        mode_is_points = depth_mode == 'points'
+        mode_is_scores = depth_mode == 'scores'
+
+        for p in survivors:
+            score = p.score
+            # How many distinct scores beat this path
+            outscored_by = n_beating - bisect_right(beating_scores, score)
+
+            if p in filtered_paths:
+                # Filtered paths are removed as soon as they're worse than
+                # anything
+                if outscored_by:
+                    paths_to_remove.add(p)
+            elif mode_is_points:
+                if score + depth_value < best:
+                    paths_to_remove.add(p)
+            elif mode_is_scores:
+                if outscored_by > depth_value:
+                    paths_to_remove.add(p)
+
 class GraphPath:
     """Quick early note:
     
     This class should do as little work as possible as it navigates the
     score graph. Any time that a GraphPath is *building* something, move
     it to ScoreGraph if at all possible.
-    
+
     """
+    # Paths are made by the million on a long chart, so they carry no
+    # per-object dict.
+    __slots__ = (
+        'data', 'currentnode', 'sp', 'currentskips', 'buffered_sqinout_sp',
+        'sp_end_time', 'sp_ready_time', 'skipped_e_offset', 'score',
+    )
+
     def __init__(self, parent_path=None):
+        # Running total of the six score categories on self.data, which is what
+        # the reduction pass compares paths on. Kept in step by every place
+        # here that scores a path, rather than re-summed per path per
+        # iteration: that sum ran ~20M times per uncapped discography.
+        # data.totalscore() remains the source of truth and is what the
+        # finished paths are ordered by.
+        self.score = 0
+
         if parent_path:
             self.data = parent_path.data.copy()
-            
+
+            self.score = parent_path.score
             self.currentnode = parent_path.currentnode
             self.sp = parent_path.sp
             self.currentskips = parent_path.currentskips
@@ -560,52 +996,71 @@ class GraphPath:
     
     # Develop along the edge that leads farther into the song.
     # Always moves a path closer to being complete, unless it's already complete.
-    def advance(self):
+    def advance(self, sp_cap):
         #print("Path advancing:")
-        
-        if self.is_complete():
+
+        # Runs ~1.9M times per chart, so the attribute lookups are hoisted:
+        # is_complete() is spelled out to save the method call, and self.data
+        # is read once instead of once per score component.
+        node = self.currentnode
+        if node is None:
             #print("\tOops, I was already done.")
             return
-        
-        adv_edge = self.currentnode.adv_edge
+
+        adv_edge = node.adv_edge
         if adv_edge:
-            self.data.score_base += adv_edge.basescore
-            self.data.score_combo += adv_edge.comboscore
-            self.data.score_sp += adv_edge.spscore
-            self.data.score_solo += adv_edge.soloscore
-            self.data.score_accents += adv_edge.accentscore
-            self.data.score_ghosts += adv_edge.ghostscore
-            
-            self.data.notecount += adv_edge.notecount
+            data = self.data
+            data.score_base += adv_edge.basescore
+            data.score_combo += adv_edge.comboscore
+            data.score_sp += adv_edge.spscore
+            data.score_solo += adv_edge.soloscore
+            data.score_accents += adv_edge.accentscore
+            data.score_ghosts += adv_edge.ghostscore
+            self.score += (
+                adv_edge.basescore + adv_edge.comboscore + adv_edge.spscore
+                + adv_edge.soloscore + adv_edge.accentscore + adv_edge.ghostscore
+            )
+
+            data.notecount += adv_edge.notecount
             
             #print(f"\tGoing to {adv_edge.dest.timecode.measurestr()}.")
             # Applying SP on this edge
-            if self.currentnode.is_sp:
+            sp_times = adv_edge.sp_times
+            buffered = self.buffered_sqinout_sp
+            if node.is_sp:
                 # Path is in SP: Immediately "spend" SP bars and adjust the sp end time
                 #print(f"\tSP: {self.sp} + {len(adv_edge.sp_times)} = {min(max(0, self.sp + len(adv_edge.sp_times)), 4)}.")
-                
+
                 # Handling each sp individually since SP capping is based on each one's particular time
                 # To do: Find a way to store the plusmeasures on the graph
                 # The sp_times can be a tuple with the sp time and the sp time + 8 measures
                 # The sp extension is actually the same as the pending_deact extensions in ScoreGraph so let's use those
-                for sptc, extension_map in adv_edge.sp_times:
-                    if self.buffered_sqinout_sp > 0:
-                        self.buffered_sqinout_sp -= 1
-                    else:
-                        self.sp_end_time = extension_map[self.sp_end_time]
-                
-            else:
-                # Path isn't in SP: Add SP bars
-                old_sp = self.sp
-                self.sp = min(self.sp + len(adv_edge.sp_times) - self.buffered_sqinout_sp, 4)
+                if sp_times:
+                    sp_end_time = self.sp_end_time
+                    for sptc, extension_map in sp_times:
+                        if buffered > 0:
+                            buffered -= 1
+                        else:
+                            sp_end_time = extension_map[sp_end_time]
+                    self.sp_end_time = sp_end_time
+                    self.buffered_sqinout_sp = buffered
 
-                if old_sp < 2 and self.sp >= 2:
-                    self.sp_ready_time = adv_edge.sp_times[1 - old_sp + self.buffered_sqinout_sp][0]
-                    
+            else:
+                # Path isn't in SP: Add SP bars, discarding whatever overfills
+                # the meter. Uncapped, nothing overfills and nothing is lost.
+                old_sp = self.sp
+                sp = old_sp + len(sp_times) - buffered
+                if sp_cap is not None and sp > sp_cap:
+                    sp = sp_cap
+                self.sp = sp
+
+                if old_sp < 2 and sp >= 2:
+                    self.sp_ready_time = sp_times[1 - old_sp + buffered][0]
+
                 self.buffered_sqinout_sp = 0
- 
-            self.data.multsqueezes += adv_edge.multsqueezes
-                        
+
+            data.multsqueezes += adv_edge.multsqueezes
+
             self.currentnode = adv_edge.dest
                     
             
@@ -648,8 +1103,12 @@ class GraphPath:
         new_act.frontend_points = br_edge.frontend.points
         new_act.e_offset = self.skipped_e_offset if self.skipped_e_offset is not None else e_offset
         
+        # The activation this one follows can no longer change, so fold it into
+        # the running difficulty maximum before it stops being the last.
+        new_path.data.close_last_activation()
         new_path.data._activations.append(new_act)
         new_path.data.score_sp += br_edge.frontend.points
+        new_path.score += br_edge.frontend.points
         new_path.skipped_e_offset = None
         new_path.sp_ready_time = None
         new_path.sp_end_time = br_edge.activation_initial_end_times[self.sp]
@@ -660,10 +1119,12 @@ class GraphPath:
             if br_edge.frontend.chord.activation_note().is_accent():
                 self.data.score_accents -= br_edge.skipped_dynamic_points
                 self.data.skipped_accents += 1
-                
+                self.score -= br_edge.skipped_dynamic_points
+
             if br_edge.frontend.chord.activation_note().is_ghost():
                 self.data.score_ghosts -= br_edge.skipped_dynamic_points
                 self.data.skipped_ghosts += 1
+                self.score -= br_edge.skipped_dynamic_points
             
         # Even if the E fill is skipped, the eventual activation should know about it
         if self.skipped_e_offset is None:
@@ -683,36 +1144,42 @@ class GraphPath:
         if is_sq_out:
             new_path.data._activations[-1].sqinouts.append(hydata.SqOut(self.currentnode.branch_edge.sqinout_timing))
         
-        # Backend scoring adjustments.
+        # Backend scoring adjustments. Accumulated once and applied to the
+        # breakdown and the running total together, so the two cannot drift.
+        sp_delta = 0
         for be in self.currentnode.branch_edge.backends:
             is_already_counted = be.offset_ms <= 0
             is_leeway = be.offset_ms > 0 and be.offset_ms < 3
-            
+
             if is_sq_out:
                 is_before_sqout = be.timecode < self.currentnode.branch_edge.sqinout_time
                 is_exact_sqout = be.timecode == self.currentnode.branch_edge.sqinout_time
                 is_after_sqout = be.timecode > self.currentnode.branch_edge.sqinout_time
-                
+
                 if is_already_counted:
                     if is_exact_sqout:
                         # Replace already-counted SP points with reduced sqout points.
-                        new_path.data.score_sp += -be.points + be.sqout_points
+                        sp_delta += -be.points + be.sqout_points
                     elif is_after_sqout:
                         # Remove aready-counted SP points, since in this path
                         # this backend was forced out of SP even though it's early.
-                        new_path.data.score_sp += -be.points
+                        sp_delta += -be.points
                 elif is_leeway:
                     if is_before_sqout:
                         # Leeway squeeze (counted even though it's late).
-                        new_path.data.score_sp += be.points
+                        sp_delta += be.points
                     elif is_exact_sqout:
                         # Leeway squeeze, but with the reduced sqout points.
-                        new_path.data.score_sp += be.sqout_points
+                        sp_delta += be.sqout_points
             else:
                 if is_leeway:
                     # Leeway squeeze (counted even though it's late)
-                    new_path.data.score_sp += be.points
-        
+                    sp_delta += be.points
+
+        if sp_delta:
+            new_path.data.score_sp += sp_delta
+            new_path.score += sp_delta
+
         return new_path
         
     def branch_deactivate(self):
@@ -727,30 +1194,28 @@ class GraphPath:
             return True, None
         
         deact_type = br_edge.deactivation_type(self.sp_end_time)
-        match deact_type:
-            case 'none':
-                return True, None
-            case 'normal':
-                normal_deact = self.create_deactivated_path(False)
-                return False, normal_deact
-            case 'sqinout':
-                sqout_deact = self.create_deactivated_path(True)
-                self.data._activations[-1].sqinouts.append(hydata.SqIn(br_edge.sqinout_timing))
-                self.sp_end_time = br_edge.sqin_time
-                # Avoid double-counting this SP when the path advances.
-                self.buffered_sqinout_sp = br_edge.late_sqin_count
-                sqout_deact.buffered_sqinout_sp = br_edge.late_sqin_count
-                return True, sqout_deact
-            case _:
-                raise Exception(f"Unexpected deactivation type: {deact_type}")
+        if deact_type == DEACT_NONE:
+            return True, None
+        elif deact_type == DEACT_NORMAL:
+            normal_deact = self.create_deactivated_path(False)
+            return False, normal_deact
+        elif deact_type == DEACT_SQINOUT:
+            sqout_deact = self.create_deactivated_path(True)
+            self.data._activations[-1].sqinouts.append(hydata.SqIn(br_edge.sqinout_timing))
+            self.sp_end_time = br_edge.sqin_time
+            # Avoid double-counting this SP when the path advances.
+            self.buffered_sqinout_sp = br_edge.late_sqin_count
+            sqout_deact.buffered_sqinout_sp = br_edge.late_sqin_count
+            return True, sqout_deact
+        else:
+            raise Exception(f"Unexpected deactivation type: {deact_type}")
     
     def is_complete(self):
-        return self.currentnode == None
-    
+        return self.currentnode is None
+
     def is_active_sp(self):
-        if self.is_complete():
-            return False
-        return self.currentnode.is_sp
+        node = self.currentnode
+        return node is not None and node.is_sp
 
 
 def category_scores(chord, combo):
@@ -770,77 +1235,96 @@ def category_scores(chord, combo):
     for now we're ignoring this possibility.
     
     """
-    # Full optimal score is the sum of these values.
-    # Every possible cross-multiplication of the score multipliers.*
-    # *Technically every dynamic category could be split into accent/ghost,
-    # but let's not get too crazy
-    points_by_source = {
-        'base_note': 0,             'base_cymbal': 0,
-        'combo_note': 0,            'combo_cymbal': 0,
-        'sp_note': 0,               'sp_cymbal': 0,
-        'combosp_note': 0,          'combosp_cymbal': 0,
-        'dynamic_note_accent': 0,   'dynamic_cymbal': 0,
-        'dynamic_note_ghost': 0,
-        'combodynamic_note': 0,     'combodynamic_cymbal': 0,
-        'spdynamic_note': 0,        'spdynamic_cymbal': 0,
-        'combospdynamic_note': 0,   'combospdynamic_cymbal': 0,
-    }
-    
+    # The seventeen per-source buckets this used to accumulate into a dict
+    # collapse to the five totals actually returned. Writing them directly
+    # avoids building a 17-entry dict and doing ~34 lookups into it on every
+    # call, and this runs once per chord per path.
+    #
+    # Derivation, per note, with c = cymbal points (15 or 0), d = 50 when the
+    # note is dynamic else 0, dc = c when the note is dynamic else 0, and
+    # mult/extra the combo multiplier and multiplier-1:
+    #
+    #   base  = 50 + c + dc                       (base_note, base_cymbal,
+    #                                              dynamic_cymbal)
+    #   K     = 50 + c + d + dc
+    #   combo = extra * K                         (combo_* + combodynamic_*)
+    #   sp    = mult  * K                         (sp_* + combosp_*
+    #                                              + spdynamic_* + combospdynamic_*)
+    #
+    # combo and sp sharing K is not a coincidence: the sp buckets are the
+    # combo buckets plus one unmultiplied copy, i.e. extra + 1 == mult.
+    base_total = 0
+    combo_total = 0
+    sp_total = 0
+    accent_total = 0
+    ghost_total = 0
+
     # How many points to subtract if this chord is a SqOut
     sqout_reduction = 0
-    
+
     # How many points to subtract if this chord is an activation chord
     # that gets skipped (the activation note cannot get its dynamic points)
     skipped_dynamic_reduction = 0
     
     ordering = chord.notes(basesorted=True)
-    initial_combo_mult = hymisc.to_multiplier(combo)
-    
-    for i,note in enumerate(ordering):
+
+    # The C++ core computes the same breakdown from the sorted notes. The
+    # sort stays here because Python's sort is stable and the tie order is
+    # observable through sqout_reduction, which reads note 0.
+    if hynative.ENABLED:
+        return hynative.category_scores(
+            ordering,
+            combo,
+            hymisc.FLAG_SKIPPED_DYNAMICS,
+            chord.activation_note() if hymisc.FLAG_SKIPPED_DYNAMICS else None,
+        )
+
+    skipped_dynamics = hymisc.FLAG_SKIPPED_DYNAMICS
+    activation_note = chord.activation_note() if skipped_dynamics else None
+
+    for i, note in enumerate(ordering):
         combo += 1
-        combo_multiplier = hymisc.to_multiplier(combo)
-        
+        combo_multiplier = to_multiplier(combo)
+        extra = combo_multiplier - 1
+
         basevalue = 50
         cymbvalue = 15
 
-        points_by_source['base_note'] += basevalue
-        points_by_source['base_cymbal'] += cymbvalue if note.is_cymbal() else 0
-        points_by_source['combo_note'] += basevalue * (combo_multiplier - 1)
-        points_by_source['combo_cymbal'] += cymbvalue * (combo_multiplier - 1) if note.is_cymbal() else 0
-        points_by_source['sp_note'] += basevalue
-        points_by_source['sp_cymbal'] += cymbvalue if note.is_cymbal() else 0
-        points_by_source['combosp_note'] += basevalue * (combo_multiplier - 1)
-        points_by_source['combosp_cymbal'] += cymbvalue * (combo_multiplier - 1) if note.is_cymbal() else 0
-        points_by_source['dynamic_note_accent'] += basevalue if note.is_accent() else 0
-        points_by_source['dynamic_note_ghost'] += basevalue if note.is_ghost() else 0
-        points_by_source['dynamic_cymbal'] += cymbvalue if note.is_cymbal() and note.is_dynamic() else 0
-        points_by_source['combodynamic_note'] += basevalue * (combo_multiplier - 1) if note.is_dynamic() else 0
-        points_by_source['combodynamic_cymbal'] += cymbvalue * (combo_multiplier - 1) if note.is_cymbal() and note.is_dynamic() else 0
-        points_by_source['spdynamic_note'] += basevalue if note.is_dynamic() else 0
-        points_by_source['spdynamic_cymbal'] += cymbvalue if note.is_cymbal() and note.is_dynamic() else 0
-        points_by_source['combospdynamic_note'] += basevalue * (combo_multiplier - 1) if note.is_dynamic() else 0
-        points_by_source['combospdynamic_cymbal'] += cymbvalue * (combo_multiplier - 1) if note.is_cymbal() and note.is_dynamic() else 0
-        
+        is_accent = note.is_accent()
+        is_ghost = note.is_ghost()
+        is_dynamic = is_accent or is_ghost
+        cymb = cymbvalue if note.is_cymbal() else 0
+        dyn_cymb = cymb if is_dynamic else 0
+        dyn_note = basevalue if is_dynamic else 0
+
+        k = basevalue + cymb + dyn_note + dyn_cymb
+
+        base_total += basevalue + cymb + dyn_cymb
+        combo_total += extra * k
+        sp_total += combo_multiplier * k
+        if is_accent:
+            accent_total += basevalue
+        elif is_ghost:
+            ghost_total += basevalue
+
         # Quick and dirty SqOut calculation
         if i == 0:
-            sqout_reduction = (basevalue + (cymbvalue if note.is_cymbal() else 0)) * combo_multiplier * (2 if note.is_dynamic() else 1)
-        
-        if hymisc.FLAG_SKIPPED_DYNAMICS:
-            if note == chord.activation_note() and note.is_dynamic():
-                skipped_dynamic_reduction = (                
-                    basevalue
-                    + (cymbvalue if note.is_cymbal() else 0)
-                    + basevalue * (combo_multiplier - 1)
-                    + (cymbvalue * (combo_multiplier - 1) if note.is_cymbal() else 0)
+            sqout_reduction = (
+                (basevalue + cymb) * combo_multiplier * (2 if is_dynamic else 1)
+            )
+
+        if skipped_dynamics:
+            if note == activation_note and is_dynamic:
+                skipped_dynamic_reduction = (
+                    basevalue + cymb + basevalue * extra + cymb * extra
                 )
-        
+
     return {
-        'base': points_by_source['base_note'] + points_by_source['base_cymbal'] + points_by_source['dynamic_cymbal'],    
-        'combo': points_by_source['combo_note'] + points_by_source['combo_cymbal'] + points_by_source['combodynamic_note'] + points_by_source['combodynamic_cymbal'],
-        'sp': points_by_source['sp_note'] + points_by_source['sp_cymbal'] + points_by_source['combosp_note'] + points_by_source['combosp_cymbal'] + points_by_source['spdynamic_note'] + points_by_source['spdynamic_cymbal'] + points_by_source['combospdynamic_note'] + points_by_source['combospdynamic_cymbal'],
-        'accent': points_by_source['dynamic_note_accent'],
-        'ghost': points_by_source['dynamic_note_ghost'],
+        'base': base_total,
+        'combo': combo_total,
+        'sp': sp_total,
+        'accent': accent_total,
+        'ghost': ghost_total,
         'sqout_reduction': sqout_reduction,
         'skipped_dynamic_reduction': skipped_dynamic_reduction
     }
-    

@@ -281,22 +281,180 @@ def _analyze(
     to get the song input for this function.
     
     """
-    # Use song object to make a score graph
-    graph = hypath.ScoreGraph(song)
-    
-    # Use score graph to run the paths
-    pather = hypath.GraphPather()
-    pather.read(graph, d_mode, d_value, ms_filter, cb_pathsprogress)
-    
+    # Guitar-only charts, and charts whose drums track has nothing written at
+    # this difficulty, parse into a song with no timestamps at all. Say so
+    # here: ScoreGraph would otherwise reach for song.last and raise a bare
+    # IndexError that says nothing about which chart or why.
+    if song.is_empty():
+        kit = "pro drums" if m_pro else "drums"
+        raise hymisc.ChartFileError(f"No {m_difficulty} {kit} notes in this chart.")
+
+    if hymisc.SP_METER_CAP is None:
+        record = _analyze_uncapped(song, d_mode, d_value, ms_filter, cb_pathsprogress)
+    else:
+        record = _analyze_at_cap(
+            song, hymisc.SP_METER_CAP, d_mode, d_value, ms_filter, cb_pathsprogress)
+
     if export_tempomap:
         tempo_map = {
             'res': song.tick_resolution,
             'tpm': {t: v for t,v in song.tpm_changes.items()},
             'bpm': {t: v for t,v in song.bpm_changes.items()}
         }
-        return (pather.record, tempo_map)
+        return (record, tempo_map)
 
+    return record
+
+
+def _analyze_at_cap(
+    song, sp_cap, d_mode, d_value, ms_filter, cb_pathsprogress, incumbent=None,
+    build_cap=None
+):
+    """One pathing run with a given SP meter ceiling.
+
+    incumbent is scores already shown to be reachable for this song at a lower
+    ceiling; see GraphPather.read.
+
+    build_cap is the ceiling the graph is actually built at, when that can be
+    lowered without changing the answer; the record still reports sp_cap,
+    because that is the ceiling the result is true for. See _analyze_uncapped.
+
+    """
+    graph = hypath.ScoreGraph(
+        song, sp_meter_cap=sp_cap if build_cap is None else build_cap)
+
+    pather = hypath.GraphPather()
+    pather.read(
+        graph, d_mode, d_value, ms_filter, cb_pathsprogress, incumbent=incumbent
+    )
+
+    pather.record.sp_cap = sp_cap
     return pather.record
+
+
+def _analyze_uncapped(song, d_mode, d_value, ms_filter, cb_pathsprogress):
+    """Path with no SP meter ceiling, by raising one until it stops mattering.
+
+    Running with no ceiling at all is the honest way to ask the question and
+    the wrong way to answer it. Cost grows steeply with the ceiling -- roughly
+    2.5x per doubling -- because a path holding a different number of bars is
+    a different path, and nothing merges them. On a discography, with hundreds
+    of SP phrases, "no ceiling" means every bar count up to several hundred,
+    and the search does not finish.
+
+    It does not need to. The bars a chart can actually put to use are limited
+    by the music, not by the meter: past some ceiling the optimizer stops
+    finding anything to do with the extra SP and the score stops moving. So
+    the ceiling is raised until two in a row agree, and that score is the
+    uncapped answer.
+
+    Two agreeing runs are strong evidence, not proof -- a chart could in
+    principle sit still and then improve again. That is why the ceiling
+    reached and whether it settled are both recorded: a result that ran out of
+    ladder says so instead of quietly passing for converged.
+
+    """
+    record = None
+    previous_score = None
+    deadline = None
+    incumbent = None
+
+    # A path can only bank what the song hands out, so this is the largest
+    # meter any path could ever fill, and a ceiling above it cannot bind: the
+    # meter clamp is unreachable, and the overfill clamp in extend_deacts sits
+    # at 2*cap measures past a phrase, further out than the most SP a path
+    # could be holding there. Every ceiling at or above this count therefore
+    # describes the same search.
+    #
+    # That is worth two things. The graph is built at the smaller ceiling, and
+    # the ladder can stop the moment it reaches this count instead of running
+    # another rung to confirm -- most charts have well under 16 phrases, which
+    # collapses the whole ladder to one run at a fraction of its width.
+    sp_phrases = sum(1 for ts in song._sequence if ts.flag_sp)
+
+    for sp_cap in hymisc.SP_CAP_LADDER:
+        # The record keeps reporting the rung, not the ceiling the graph was
+        # built at: the result is true at the rung, which is what a reader of
+        # "SP meter: n bars" is being told.
+        build_cap = min(sp_cap, max(sp_phrases, 1))
+
+        try:
+            candidate = _analyze_at_cap(
+                song, sp_cap, d_mode, d_value, ms_filter,
+                _deadline_callback(cb_pathsprogress, deadline),
+                incumbent=incumbent, build_cap=build_cap,
+            )
+        except _CapBudgetExceeded:
+            # Out of time partway up. Keep the best rung that finished; the
+            # abandoned one has a half-built record and is thrown away.
+            break
+
+        record = candidate
+        score = record.best_path().totalscore() if record._paths else None
+
+        # Settled by the argument above rather than by two rungs agreeing:
+        # there is no higher ceiling left that could score differently.
+        if sp_cap >= sp_phrases:
+            record.sp_cap_converged = True
+            return record
+
+        if previous_score is not None and score == previous_score:
+            record.sp_cap_converged = True
+            return record
+
+        previous_score = score
+
+        # Hand the next rung the score this one reached. A path that fits
+        # under this ceiling still fits under a larger one, so that score is
+        # guaranteed to be matched up there and the next rung need not follow
+        # anything that cannot reach it.
+        #
+        # Only the best score is carried, not the whole result list. The best
+        # is certain to be available again; the runners-up are not, because a
+        # looser ceiling can lift several of them onto the same score.
+        #
+        # This is only consumed by the bound pruning in hypath, which is
+        # currently off because it does not earn its cost - see
+        # hypath.ENABLE_BOUND_PRUNE. The plumbing stays because the rung
+        # ordering that makes the guarantee true is the ladder's business,
+        # not the pather's.
+        incumbent = (score,) if score is not None else None
+
+        # Only now does the clock start, so the first rung always finishes and
+        # there is always something to report.
+        if deadline is None and hymisc.SP_CAP_TIME_BUDGET:
+            deadline = time.monotonic() + hymisc.SP_CAP_TIME_BUDGET
+
+    # Either the ladder ran out or the budget did. Whichever rung got furthest
+    # is the best answer available, and it is flagged as unsettled.
+    if record is not None:
+        record.sp_cap_converged = False
+    return record
+
+
+class _CapBudgetExceeded(Exception):
+    """Raised out of the progress callback to abandon a too-slow rung."""
+
+
+def _deadline_callback(cb_pathsprogress, deadline):
+    """The caller's progress callback, with a stop-watch attached.
+
+    Checking between rungs is not enough: a rung that will overrun the budget
+    has to be abandoned partway, or the budget only bounds when the next one
+    starts. The pather reports progress once per iteration, which makes it the
+    one place a run can be interrupted without teaching it about deadlines.
+
+    """
+    if deadline is None:
+        return cb_pathsprogress
+
+    def guarded(timecode, progressf):
+        if time.monotonic() > deadline:
+            raise _CapBudgetExceeded
+        if cb_pathsprogress:
+            cb_pathsprogress(timecode, progressf)
+
+    return guarded
 
 def count_chart_chords(filepath):
     # Parse chart file and make a song object

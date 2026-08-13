@@ -13,6 +13,7 @@ filter by text, difficulty tier, or best-path-only.
 import html
 import json
 import os
+import re
 import sys
 
 import hydra.hydata as hydata
@@ -29,6 +30,18 @@ TIERS = [
     (140, "Insane+", "t4"),
     (float('inf'), "Beyond", "t5"),
 ]
+
+
+# Charters write their credit with Clone Hero's colour markup, which the game
+# renders and everything else shows as literal angle brackets. Read the name
+# out of it.
+_MARKUP = re.compile(r'</?color[^>]*>', re.IGNORECASE)
+
+
+def plain(text):
+    if not text:
+        return text
+    return _MARKUP.sub('', text).strip()
 
 
 def tier_for(ms):
@@ -54,9 +67,9 @@ def collect_rows(store, max_paths):
             s = hystore.summarize_path(path)
             label, token = tier_for(s['hardest_ms'])
             rows.append({
-                'song': meta['ref_name'] or "(unknown)",
-                'artist': meta['ref_artist'] or "",
-                'charter': meta['ref_charter'] or "",
+                'song': plain(meta['ref_name']) or "(unknown)",
+                'artist': plain(meta['ref_artist']) or "",
+                'charter': plain(meta['ref_charter']) or "",
                 'mode': chartmode,
                 'rank': rank,
                 'path': path.pathstring(),
@@ -134,7 +147,7 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-.wrap { max-width: 1500px; margin: 0 auto; padding: 28px 20px 64px; display: flex; flex-direction: column; gap: 20px; }
+.wrap { max-width: 1760px; margin: 0 auto; padding: 28px 20px 64px; display: flex; flex-direction: column; gap: 20px; }
 
 header { display: flex; flex-direction: column; gap: 6px; }
 h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -.01em; }
@@ -150,11 +163,20 @@ h1 .accent { color: var(--sp); }
 .stat-v { font-size: 19px; font-weight: 600; margin-top: 3px; }
 
 .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-input[type="search"], select {
+input[type="search"], select, button {
   font: inherit; color: var(--ink); background: var(--surface);
   border: 1px solid var(--rule); border-radius: 7px; padding: 8px 11px;
 }
-input[type="search"] { min-width: 260px; flex: 1 1 260px; }
+input[type="search"] { min-width: 220px; flex: 1 1 220px; }
+button { cursor: pointer; }
+button:hover, select:hover { border-color: var(--sp); }
+
+/* Sorting is the point of this page, so it gets a control of its own rather
+   than living only on column headers -- with thirteen columns, the ones worth
+   sorting by are usually scrolled off the right-hand side. */
+.sorter { display: inline-flex; align-items: center; gap: 6px; }
+.sorter label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+#sortdir { min-width: 108px; text-align: left; }
 input:focus-visible, select:focus-visible, th:focus-visible, button:focus-visible {
   outline: 2px solid var(--sp); outline-offset: 2px;
 }
@@ -164,25 +186,47 @@ input:focus-visible, select:focus-visible, th:focus-visible, button:focus-visibl
 .tablewrap {
   overflow-x: auto; background: var(--surface);
   border: 1px solid var(--rule); border-radius: 10px; box-shadow: var(--shadow);
+  /* Always show the horizontal bar: the numeric columns live off to the
+     right, and a scroller you cannot see is a scroller nobody uses. */
+  scrollbar-color: var(--muted) transparent;
 }
-table { border-collapse: collapse; width: 100%; }
+.tablewrap::-webkit-scrollbar { height: 12px; }
+.tablewrap::-webkit-scrollbar-thumb { background: var(--rule); border-radius: 6px; }
+.tablewrap::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+table { border-collapse: separate; border-spacing: 0; width: 100%; }
 thead th {
   position: sticky; top: 0; z-index: 2;
   background: var(--raised); color: var(--muted);
   font-size: 10px; text-transform: uppercase; letter-spacing: .08em; font-weight: 600;
-  text-align: left; padding: 9px 12px; white-space: nowrap;
+  text-align: left; padding: 9px 10px; white-space: nowrap;
   border-bottom: 1px solid var(--rule); cursor: pointer;
 }
 thead th.num, td.num { text-align: right; }
-thead th:hover { color: var(--ink); }
-thead th .arrow { opacity: 0; margin-left: 4px; }
+thead th:hover { color: var(--ink); background: var(--surface); }
+/* Every header carries its affordance, not just the active one. */
+thead th .arrow { opacity: .35; margin-left: 4px; }
+thead th[aria-sort] { color: var(--ink); }
 thead th[aria-sort] .arrow { opacity: 1; color: var(--sp); }
-tbody td { padding: 8px 12px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+tbody td { padding: 7px 10px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
 tbody tr:last-child td { border-bottom: 0; }
-tbody tr:hover { background: var(--raised); }
+tbody tr:hover td { background: var(--raised); }
 tbody tr.best td:first-child { box-shadow: inset 3px 0 0 var(--sp); }
 
-.song { font-weight: 550; max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
+/* Keep the song visible while reading the numbers off to the right. */
+thead th:first-child { left: 0; z-index: 4; }
+tbody td:first-child { position: sticky; left: 0; z-index: 1; background: var(--surface); }
+tbody tr:hover td:first-child { background: var(--raised); }
+
+/* Every text column is capped. Left to size themselves, a full-discography
+   path string (hundreds of activations) or a charter credit carrying Clone
+   Hero colour markup stretches its column to thousands of pixels and pushes
+   score, skip and timing off the far right of the page. Hover for the full
+   value; the title attribute carries it. */
+td.trunc { overflow: hidden; text-overflow: ellipsis; }
+.song { font-weight: 550; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+td.artist { max-width: 150px; }
+td.charter { max-width: 150px; }
+td.path { max-width: 230px; }
 .dim { color: var(--muted); }
 .path { color: var(--ink); }
 .rank { color: var(--muted); font-size: 12px; }
@@ -209,6 +253,11 @@ footer { color: var(--muted); font-size: 12px; }
   <div class="stats" id="stats"></div>
 
   <div class="controls">
+    <span class="sorter">
+      <label for="sortby">Sort by</label>
+      <select id="sortby"></select>
+      <button id="sortdir" type="button" title="Switch between highest-first and lowest-first"></button>
+    </span>
     <input type="search" id="q" placeholder="Search song, artist, charter, or path notation">
     <select id="tier">
       <option value="">All timing tiers</option>
@@ -229,7 +278,7 @@ footer { color: var(--muted); font-size: 12px; }
       <thead><tr id="head"></tr></thead>
       <tbody id="body"></tbody>
     </table>
-    <div class="empty" id="empty" hidden>Nothing matches those filters.</div>
+    <div class="empty" id="empty">Reading paths&hellip;</div>
   </div>
 
   <footer>__FOOTER__</footer>
@@ -257,19 +306,47 @@ const COLS = [
 
 let sortKey = 'score', sortDir = -1;
 
+const sortby = document.getElementById('sortby');
+const sortdir = document.getElementById('sortdir');
+
+COLS.forEach(c => {
+  const opt = document.createElement('option');
+  opt.value = c.k;
+  opt.textContent = c.t;
+  sortby.appendChild(opt);
+});
+
+function setSort(key, dir) {
+  sortKey = key;
+  sortDir = dir;
+  sortby.value = key;
+  const numeric = COLS.find(c => c.k === key).num;
+  sortdir.textContent = dir === -1
+    ? (numeric ? '\\u2193 Highest' : '\\u2193 Z \\u2192 A')
+    : (numeric ? '\\u2191 Lowest' : '\\u2191 A \\u2192 Z');
+  render();
+}
+
+sortby.addEventListener('change', () => {
+  // A fresh column starts the way that column is usually wanted: biggest
+  // number first, but names from the top.
+  setSort(sortby.value, COLS.find(c => c.k === sortby.value).num ? -1 : 1);
+});
+sortdir.addEventListener('click', () => setSort(sortKey, -sortDir));
+
 const head = document.getElementById('head');
 COLS.forEach(c => {
   const th = document.createElement('th');
   th.textContent = c.t;
   th.tabIndex = 0;
+  th.title = 'Sort by ' + c.t;
   if (c.num) th.className = 'num';
   const arrow = document.createElement('span');
   arrow.className = 'arrow';
   th.appendChild(arrow);
   const activate = () => {
-    if (sortKey === c.k) sortDir = -sortDir;
-    else { sortKey = c.k; sortDir = c.num ? -1 : 1; }
-    render();
+    if (sortKey === c.k) setSort(c.k, -sortDir);
+    else setSort(c.k, c.num ? -1 : 1);
   };
   th.addEventListener('click', activate);
   th.addEventListener('keydown', e => {
@@ -310,7 +387,10 @@ function render() {
     const c = COLS[i];
     if (c.k === sortKey) th.setAttribute('aria-sort', dir === 1 ? 'ascending' : 'descending');
     else th.removeAttribute('aria-sort');
-    th.querySelector('.arrow').textContent = c.k === sortKey ? (dir === 1 ? '\\u2191' : '\\u2193') : '';
+    // Inactive columns keep a dim double arrow, so it is obvious every one
+    // of them can be sorted.
+    th.querySelector('.arrow').textContent =
+      c.k === sortKey ? (dir === 1 ? '\\u2191' : '\\u2193') : '\\u21c5';
   });
 
   const body = document.getElementById('body');
@@ -322,11 +402,11 @@ function render() {
     if (r.rank === 1) tr.className = 'best';
 
     const cells = [
-      ['song', r.song],
-      ['dim', r.artist],
-      ['dim', r.charter],
-      ['path mono', r.path],
-      ['num', fmt(r.score) + (r.rank === 1 ? '' : '')],
+      ['song trunc', r.song],
+      ['dim trunc artist', r.artist],
+      ['dim trunc charter', r.charter],
+      ['path mono trunc', r.path],
+      ['num', fmt(r.score)],
       ['num', r.acts],
       ['num', r.skip],
       ['num', fmtMs(r.ms)],
@@ -347,6 +427,8 @@ function render() {
       } else {
         td.className = cls;
         td.textContent = val;
+        // Truncated cells still have to be readable somehow.
+        if (cls.includes('trunc') && val) td.title = val;
       }
       tr.appendChild(td);
     });
@@ -355,7 +437,9 @@ function render() {
   }
   body.appendChild(frag);
 
-  document.getElementById('empty').hidden = rows.length > 0;
+  const empty = document.getElementById('empty');
+  empty.textContent = 'Nothing matches those filters.';
+  empty.hidden = rows.length > 0;
   document.getElementById('count').textContent =
     rows.length.toLocaleString() + ' of ' + ROWS.length.toLocaleString() + ' paths';
 
@@ -392,7 +476,11 @@ function renderStats(rows) {
 document.getElementById('q').addEventListener('input', render);
 document.getElementById('tier').addEventListener('change', render);
 document.getElementById('bestonly').addEventListener('change', render);
-render();
+
+// Building tens of thousands of rows takes a moment, and doing it inline
+// leaves the window blank until it finishes - which reads as a broken page.
+// Let the shell paint first, placeholder and all, then fill the table.
+requestAnimationFrame(() => setTimeout(() => setSort(sortKey, sortDir), 0));
 </script>
 """
 
@@ -439,6 +527,11 @@ def main(argv):
         f"Timing tiers match Hydra's squeeze ratings; "
         f"'Beyond' is past the stock 140 ms window."
     )
+
+    # Make the folder rather than throwing away the work: collecting the rows
+    # means inflating every stored record, which is the slow part.
+    parent = os.path.dirname(os.path.abspath(out))
+    os.makedirs(parent, exist_ok=True)
 
     with open(out, 'w', encoding='utf-8') as f:
         f.write(build_html(rows, subtitle, footer))

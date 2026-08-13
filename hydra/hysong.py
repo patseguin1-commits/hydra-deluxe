@@ -1,11 +1,31 @@
 import io
-import mido
+from . import hymidi
 import re
 import hashlib
 import struct
 
 from . import hydata
 from . import hymisc
+
+
+# Text-event patterns, compiled once. These used to be rebuilt as strings on
+# every call to MidiParser.optype -- about a million times per library scan --
+# and matched with re.fullmatch(pattern_string, ...), which re-looks-up the
+# compiled form each time.
+R_DISCO_ON_X = re.compile(r'\[?mix.3.drums\d?d\]?')
+R_DISCO_OFF_X = re.compile(r'\[?mix.3.drums\d?(dnoflip)?\]?')
+R_DYNAMICS = re.compile(r'\[?ENABLE_CHART_DYNAMICS\]?')
+
+# Every MIDI note number MidiParser.optype has a case for. Anything else
+# reaches the default, so it can be rejected before the case walk. Kept
+# beside optype: adding a case there means adding the note here.
+_HANDLED_NOTES = frozenset({
+    95, 96, 97, 98, 99, 100,    # kick (95 is 2x), and the four pads
+    103,                        # solo
+    109, 110, 111, 112,         # flam, and the tom/cymbal markers
+    116,                        # star power phrase
+    120,                        # activation fill
+})
 
 
 class SongTimestamp:
@@ -73,10 +93,15 @@ class Song:
     def __init__(self, resolution):
         self._sequence = []
         
-        """This song's conversions from ticks to any other time unit."""
+        """This song's conversions from ticks to any other time unit.
+
+        These are TempoMaps rather than plain dicts so that the lookup index
+        Timecode builds from them is cached and dropped with the map it
+        describes; parsing writes to them while timecodes are being made.
+        """
         self.tick_resolution = resolution
-        self.tpm_changes = {0: resolution * 4}
-        self.bpm_changes = {}
+        self.tpm_changes = hymisc.TempoMap({0: resolution * 4})
+        self.bpm_changes = hymisc.TempoMap()
         
         """Stub for song-wide analysis."""
         self.features = []
@@ -89,7 +114,12 @@ class Song:
         
     def add_timestamp(self, ts):
         self._sequence.append(ts)
-        
+
+    def is_empty(self):
+        """Nothing to path: no drums track in the file, or nothing charted
+        at the difficulty that was asked for."""
+        return not self._sequence
+
     @property
     def last(self):
         return self._sequence[-1]
@@ -256,89 +286,114 @@ class MidiParser:
         Returns: (op_phase, op_func, *args)
         
         """
-        # The actual conditions for note on/off in practice
-        is_noteon = (
-            msg.type == 'note_on' and msg.velocity > 0
-        )
-        is_noteoff = (
-            msg.type == 'note_off'
-            or msg.type == 'note_on' and msg.velocity == 0
-        )
-        
-        # Text events that are used for disco flip
-        r_disco_on_x = r'\[?mix.3.drums\d?d\]?'
-        r_disco_off_x = r'\[?mix.3.drums\d?(dnoflip)?\]?'
-        
-        r_dynamics = r'\[?ENABLE_CHART_DYNAMICS\]?'
-            
-        # Interpret midi message for which procedure to return
+        # This runs once per MIDI message -- about a million times over a
+        # library scan -- so the shape below is deliberate.
+        #
+        # A Message can never match a MetaMessage pattern and vice versa, so
+        # the two families are split up front rather than letting every note
+        # event fall through the meta cases first.
+        #
+        # Within the note family the groups are ordered by how often they
+        # occur: pads and kick first, chart flags last. That reordering is
+        # safe precisely because each group tests a distinct note number, so
+        # a message can only ever match its own group -- the previous order
+        # made the commonest events (note 96-100) walk ~28 failed patterns.
+        if type(msg) is hymidi.Message:
+            note = msg.note
+
+            # Two guards that between them skip the case walk for most note
+            # events, both exact rather than heuristic:
+            #
+            #  * a note with no case at all used to walk every pattern before
+            #    reaching the default;
+            #  * notes 95-100 are the pads and kick, and every one of their
+            #    cases is guarded by is_noteon, so a note-off on them can only
+            #    ever reach the default -- and note-offs are about half of all
+            #    note events. Every note with a note-off case is >= 103.
+            if note not in _HANDLED_NOTES:
+                return (None, None)
+
+            velocity = msg.velocity
+            is_noteon = msg.type == 'note_on' and velocity > 0
+            is_noteoff = (
+                msg.type == 'note_off'
+                or msg.type == 'note_on' and velocity == 0
+            )
+
+            if is_noteoff and note < 103:
+                return (None, None)
+
+            match msg:
+                case hymidi.Message(note=96) if is_noteon:
+                    return ('notes', self.op_note, hydata.NoteColor.KICK, hydata.NoteDynamicType.NORMAL, False)
+                case hymidi.Message(note=97, velocity=127) if is_noteon:
+                    return ('notes', self.op_note, hydata.NoteColor.RED, hydata.NoteDynamicType.ACCENT, False)
+                case hymidi.Message(note=97, velocity=1) if is_noteon:
+                    return ('notes', self.op_note, hydata.NoteColor.RED, hydata.NoteDynamicType.GHOST, False)
+                case hymidi.Message(note=97) if is_noteon:
+                    return ('notes', self.op_note, hydata.NoteColor.RED, hydata.NoteDynamicType.NORMAL, False)
+                case hymidi.Message(note=98, velocity=127) if is_noteon:
+                    return ('notes', self.op_note, hydata.NoteColor.YELLOW, hydata.NoteDynamicType.ACCENT, False)
+                case hymidi.Message(note=98, velocity=1) if is_noteon:
+                    return ('notes', self.op_note, hydata.NoteColor.YELLOW, hydata.NoteDynamicType.GHOST, False)
+                case hymidi.Message(note=98) if is_noteon:
+                    return ('notes', self.op_note, hydata.NoteColor.YELLOW, hydata.NoteDynamicType.NORMAL, False)
+                case hymidi.Message(note=99, velocity=127) if is_noteon:
+                    return ('notes', self.op_note, hydata.NoteColor.BLUE, hydata.NoteDynamicType.ACCENT, False)
+                case hymidi.Message(note=99, velocity=1) if is_noteon:
+                    return ('notes', self.op_note, hydata.NoteColor.BLUE, hydata.NoteDynamicType.GHOST, False)
+                case hymidi.Message(note=99) if is_noteon:
+                    return ('notes', self.op_note, hydata.NoteColor.BLUE, hydata.NoteDynamicType.NORMAL, False)
+                case hymidi.Message(note=100, velocity=127) if is_noteon:
+                    return ('notes', self.op_note, hydata.NoteColor.GREEN, hydata.NoteDynamicType.ACCENT, False)
+                case hymidi.Message(note=100, velocity=1) if is_noteon:
+                    return ('notes', self.op_note, hydata.NoteColor.GREEN, hydata.NoteDynamicType.GHOST, False)
+                case hymidi.Message(note=100) if is_noteon:
+                    return ('notes', self.op_note, hydata.NoteColor.GREEN, hydata.NoteDynamicType.NORMAL, False)
+                case hymidi.Message(note=95) if is_noteon and self.mode_bass2x:
+                    return ('notes', self.op_note, hydata.NoteColor.KICK, hydata.NoteDynamicType.NORMAL, True)
+                case hymidi.Message(note=120) if is_noteon:
+                    return ('post-delayed', self.op_fillstart, tick)
+                case hymidi.Message(note=120) if is_noteoff:
+                    return ('pre', self.op_store_fillend, tick)
+                case hymidi.Message(note=116) if is_noteon:
+                    return ('pre' if self._sp_start_tick is None else 'pre-delayed', self.op_sp_start, tick)
+                case hymidi.Message(note=116) if is_noteoff:
+                    return ('pre-delayed' if self._sp_start_tick is None else 'pre', self.op_sp_end)
+                case hymidi.Message(note=112) if is_noteon:
+                    return ('pre', self.op_tom, hydata.NoteColor.GREEN, hydata.NoteCymbalType.NORMAL)
+                case hymidi.Message(note=112) if is_noteoff:
+                    return ('pre', self.op_tom, hydata.NoteColor.GREEN, hydata.NoteCymbalType.CYMBAL)
+                case hymidi.Message(note=111) if is_noteon:
+                    return ('pre', self.op_tom, hydata.NoteColor.BLUE, hydata.NoteCymbalType.NORMAL)
+                case hymidi.Message(note=111) if is_noteoff:
+                    return ('pre', self.op_tom, hydata.NoteColor.BLUE, hydata.NoteCymbalType.CYMBAL)
+                case hymidi.Message(note=110) if is_noteon:
+                    return ('pre', self.op_tom, hydata.NoteColor.YELLOW, hydata.NoteCymbalType.NORMAL)
+                case hymidi.Message(note=110) if is_noteoff:
+                    return ('pre', self.op_tom, hydata.NoteColor.YELLOW, hydata.NoteCymbalType.CYMBAL)
+                case hymidi.Message(note=109) if is_noteon:
+                    return ('pre', self.op_flam, True)
+                case hymidi.Message(note=109) if is_noteoff:
+                    return ('pre', self.op_flam, False)
+                case hymidi.Message(note=103) if is_noteon:
+                    return ('pre', self.op_solo, True)
+                case hymidi.Message(note=103) if is_noteoff:
+                    return ('pre', self.op_solo, False)
+                case _:
+                    return (None, None)
+
         match msg:
-            case mido.MetaMessage(text=t) if re.fullmatch(r_dynamics, t):
+            case hymidi.MetaMessage(text=t) if R_DYNAMICS.fullmatch(t):
                 return ('pre', self.op_enable_dynamics)
-            case mido.MetaMessage(text=t) if re.fullmatch(r_disco_on_x, t):
+            case hymidi.MetaMessage(text=t) if R_DISCO_ON_X.fullmatch(t):
                 return ('pre', self.op_disco, True)
-            case mido.MetaMessage(text=t) if re.fullmatch(r_disco_off_x, t):
+            case hymidi.MetaMessage(text=t) if R_DISCO_OFF_X.fullmatch(t):
                 return ('pre', self.op_disco, False)
-            case mido.MetaMessage(type='set_tempo'):
+            case hymidi.MetaMessage(type='set_tempo'):
                 return ('time', self.op_tempo, tick, msg.tempo)
-            case mido.MetaMessage(type='time_signature'):
+            case hymidi.MetaMessage(type='time_signature'):
                 return ('time', self.op_timesig, tick, msg.numerator, msg.denominator)
-            case mido.Message(note=120) if is_noteon:
-                return ('post-delayed', self.op_fillstart, tick)
-            case mido.Message(note=120) if is_noteoff:
-                return ('pre', self.op_store_fillend, tick)
-            case mido.Message(note=116) if is_noteon:
-                return ('pre' if self._sp_start_tick is None else 'pre-delayed', self.op_sp_start, tick)
-            case mido.Message(note=116) if is_noteoff:
-                return ('pre-delayed' if self._sp_start_tick is None else 'pre', self.op_sp_end)
-            case mido.Message(note=112) if is_noteon:
-                return ('pre', self.op_tom, hydata.NoteColor.GREEN, hydata.NoteCymbalType.NORMAL)
-            case mido.Message(note=112) if is_noteoff:
-                return ('pre', self.op_tom, hydata.NoteColor.GREEN, hydata.NoteCymbalType.CYMBAL)
-            case mido.Message(note=111) if is_noteon:
-                return ('pre', self.op_tom, hydata.NoteColor.BLUE, hydata.NoteCymbalType.NORMAL)
-            case mido.Message(note=111) if is_noteoff:
-                return ('pre', self.op_tom, hydata.NoteColor.BLUE, hydata.NoteCymbalType.CYMBAL)
-            case mido.Message(note=110) if is_noteon:
-                return ('pre', self.op_tom, hydata.NoteColor.YELLOW, hydata.NoteCymbalType.NORMAL)
-            case mido.Message(note=110) if is_noteoff:
-                return ('pre', self.op_tom, hydata.NoteColor.YELLOW, hydata.NoteCymbalType.CYMBAL)
-            case mido.Message(note=109) if is_noteon:
-                return ('pre', self.op_flam, True)
-            case mido.Message(note=109) if is_noteoff:
-                return ('pre', self.op_flam, False)
-            case mido.Message(note=103) if is_noteon:
-                return ('pre', self.op_solo, True)
-            case mido.Message(note=103) if is_noteoff:
-                return ('pre', self.op_solo, False)
-            case mido.Message(note=100, velocity=127) if is_noteon:
-                return ('notes', self.op_note, hydata.NoteColor.GREEN, hydata.NoteDynamicType.ACCENT, False)
-            case mido.Message(note=100, velocity=1) if is_noteon:
-                return ('notes', self.op_note, hydata.NoteColor.GREEN, hydata.NoteDynamicType.GHOST, False)
-            case mido.Message(note=100) if is_noteon:
-                return ('notes', self.op_note, hydata.NoteColor.GREEN, hydata.NoteDynamicType.NORMAL, False)
-            case mido.Message(note=99, velocity=127) if is_noteon:
-                return ('notes', self.op_note, hydata.NoteColor.BLUE, hydata.NoteDynamicType.ACCENT, False)
-            case mido.Message(note=99, velocity=1) if is_noteon:
-                return ('notes', self.op_note, hydata.NoteColor.BLUE, hydata.NoteDynamicType.GHOST, False)
-            case mido.Message(note=99) if is_noteon:
-                return ('notes', self.op_note, hydata.NoteColor.BLUE, hydata.NoteDynamicType.NORMAL, False)
-            case mido.Message(note=98, velocity=127) if is_noteon:
-                return ('notes', self.op_note, hydata.NoteColor.YELLOW, hydata.NoteDynamicType.ACCENT, False)
-            case mido.Message(note=98, velocity=1) if is_noteon:
-                return ('notes', self.op_note, hydata.NoteColor.YELLOW, hydata.NoteDynamicType.GHOST, False)
-            case mido.Message(note=98) if is_noteon:
-                return ('notes', self.op_note, hydata.NoteColor.YELLOW, hydata.NoteDynamicType.NORMAL, False)
-            case mido.Message(note=97, velocity=127) if is_noteon:
-                return ('notes', self.op_note, hydata.NoteColor.RED, hydata.NoteDynamicType.ACCENT, False)
-            case mido.Message(note=97, velocity=1) if is_noteon:
-                return ('notes', self.op_note, hydata.NoteColor.RED, hydata.NoteDynamicType.GHOST, False)
-            case mido.Message(note=97) if is_noteon:
-                return ('notes', self.op_note, hydata.NoteColor.RED, hydata.NoteDynamicType.NORMAL, False)
-            case mido.Message(note=96) if is_noteon:
-                return ('notes', self.op_note, hydata.NoteColor.KICK, hydata.NoteDynamicType.NORMAL, False)
-            case mido.Message(note=95) if is_noteon and self.mode_bass2x:
-                return ('notes', self.op_note, hydata.NoteColor.KICK, hydata.NoteDynamicType.NORMAL, True)
             case _:
                 return (None, None)
 
@@ -424,18 +479,29 @@ class MidiParser:
         
         """
         self._chord = hydata.Chord()
-        
-        ops = [self.optype(msg, tick) for msg in self._msg_buffer]
-        
+
+        # Sorted into phase buckets in one pass. Each phase used to rescan the
+        # whole op list -- six scans in all, every one of them re-running the
+        # starred unpacking and allocating a fresh args list per op. Bucketing
+        # preserves insertion order, so ops still run in the order they were
+        # parsed within each phase.
+        buckets = {}
+        for op_phase, op, *op_args in (
+            self.optype(msg, tick) for msg in self._msg_buffer
+        ):
+            # optype returns (None, None) for anything it does not handle.
+            if op_phase is not None:
+                bucket = buckets.get(op_phase)
+                if bucket is None:
+                    buckets[op_phase] = [(op, op_args)]
+                else:
+                    bucket.append((op, op_args))
+
         # Prepare notes (not added yet)
-        for phase in ['pre', 'pre-delayed', 'notes']:
-            for op_phase, op, *op_args in ops:
-                if op_phase == phase:
-                    try:
-                        op(*op_args)
-                    except hymisc.ChartFileError:
-                        pass
-        
+        self._run_ops(buckets.get('pre'))
+        self._run_ops(buckets.get('pre-delayed'))
+        self._run_ops(buckets.get('notes'))
+
         # Phrase end: Activation (waits until a timestamp with a chord)
         if self._chord.count() and self._fill_end_tick is not None and tick >= self._fill_end_tick:
             # This chord is at or past the end of an activation marker
@@ -455,18 +521,17 @@ class MidiParser:
                 # Let the activation fall back to the previous chord
                 # by assigning the activation before adding this chord
                 order = 'pre_timestamp'
-            ops.append((order, self.op_apply_fill, self._fill_start_tick))
+            bucket = buckets.get(order)
+            if bucket is None:
+                buckets[order] = [(self.op_apply_fill, (self._fill_start_tick,))]
+            else:
+                bucket.append((self.op_apply_fill, (self._fill_start_tick,)))
             self._fill_start_tick = None
             self._fill_end_tick = None
-        
+
         # Parsed actions that apply before the timestamp
-        for op_phase, op, *op_args in ops:
-            if op_phase == 'pre_timestamp':
-                try:
-                    op(*op_args)
-                except hymisc.ChartFileError:
-                    pass
-        
+        self._run_ops(buckets.get('pre_timestamp'))
+
         # Add the timestamp to the song
         if self._chord.count():
             if self._flag_flam:
@@ -482,16 +547,23 @@ class MidiParser:
             self._chord = None
         
         # Parsed actions that apply after the timestamp
-        for phase in ['post', 'post-delayed']:
-            for op_phase, op, *op_args in ops:
-                    if op_phase == phase:
-                        try:
-                            op(*op_args)
-                        except hymisc.ChartFileError:
-                            pass
-        
+        self._run_ops(buckets.get('post'))
+        self._run_ops(buckets.get('post-delayed'))
+
         self._msg_buffer = []
-    
+
+    @staticmethod
+    def _run_ops(ops):
+        """Run one phase's ops, skipping chart errors as the phase loops did."""
+        if not ops:
+            return
+        for op, op_args in ops:
+            try:
+                op(*op_args)
+            except hymisc.ChartFileError:
+                pass
+
+
     def parsefile(self, filename, m_difficulty, m_pro, m_bass2x):
         with open(filename, 'rb') as file:
             return self.parse(file, m_difficulty, m_pro, m_bass2x)
@@ -505,7 +577,10 @@ class MidiParser:
         Must be .mid.
         """
         # Load from MIDI
-        mid = mido.MidiFile(file=midibytes, clip=True)
+        # hymidi replaces mido here: same message stream, ~5x faster.
+        # Verified byte-identical against mido across the test corpus
+        # (test_midi_parity), which is what licenses the swap.
+        mid = hymidi.MidiFile(file=midibytes)
         
         # Parser settings
         self.mode_difficulty = m_difficulty

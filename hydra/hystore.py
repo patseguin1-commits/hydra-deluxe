@@ -139,6 +139,36 @@ def _unpack(blob):
     return json.loads(zlib.decompress(blob).decode('utf-8'), object_hook=hydata.json_load)
 
 
+def record_columns():
+    """The record row's columns, in the order prepare_row emits them."""
+    return ['hyhash', 'chartmode', 'hyversion', 'bestpath', 'blob'] + \
+           [name for name, _ in _SUMMARY_COLUMNS]
+
+
+def prepare_row(hyhash, chartmode, record):
+    """One record's row values, ready to insert.
+
+    Kept out of RecordStore because this is the expensive half of a save --
+    summarizing and packing -- and it needs no database connection. A worker
+    process can do it and send back the result, which is plain data.
+
+    """
+    bestpath = ""
+    if record.is_version_compatible() and record._paths:
+        bestpath = record.best_path().pathstring()
+
+    summary = summarize_record(record)
+
+    return (
+        hyhash,
+        chartmode,
+        json.dumps(list(record.hyversion)),
+        bestpath,
+        _pack(record),
+        *(summary[name] for name, _ in _SUMMARY_COLUMNS),
+    )
+
+
 class RecordStore:
     """Reads and writes analysis records, one row each."""
 
@@ -187,34 +217,27 @@ class RecordStore:
 
     def add_record(self, hyhash, chartmode, record):
         """Store one record. Constant cost, whatever the library size."""
+        self.add_row(prepare_row(hyhash, chartmode, record))
+
+    def add_row(self, row):
+        """Store a row that prepare_row already built, wherever it was built."""
         with self._lock:
-            self._write_record(hyhash, chartmode, record)
+            self._write_row(row)
             self.cxn.commit()
-            self._cache.pop((hyhash, chartmode), None)
+            self._cache.pop((row[0], row[1]), None)
 
     def _write_record(self, hyhash, chartmode, record):
-        """The single place a record row is built, so callers can't drift
-        out of step with the column list."""
-        bestpath = ""
-        if record.is_version_compatible() and record._paths:
-            bestpath = record.best_path().pathstring()
+        self._write_row(prepare_row(hyhash, chartmode, record))
 
-        summary = summarize_record(record)
-        cols = [name for name, _ in _SUMMARY_COLUMNS]
-        placeholders = ",".join("?" * (5 + len(cols)))
+    def _write_row(self, row):
+        """The single place a record row is written, so callers can't drift
+        out of step with the column list."""
+        cols = record_columns()
 
         self.cxn.execute(
-            f"INSERT OR REPLACE INTO records "
-            f"(hyhash,chartmode,hyversion,bestpath,blob,{','.join(cols)}) "
-            f"VALUES ({placeholders})",
-            (
-                hyhash,
-                chartmode,
-                json.dumps(list(record.hyversion)),
-                bestpath,
-                _pack(record),
-                *(summary[c] for c in cols),
-            ),
+            f"INSERT OR REPLACE INTO records ({','.join(cols)}) "
+            f"VALUES ({','.join('?' * len(cols))})",
+            row,
         )
 
     """Reading"""
@@ -287,7 +310,7 @@ class RecordStore:
     def drop_stale_records(self):
         """Remove records that no longer match this Hydra version."""
         with self._lock:
-            current = json.dumps(list(hymisc.HYDRA_VERSION))
+            current = json.dumps(list(hymisc.RECORD_VERSION))
             cur = self.cxn.execute("DELETE FROM records WHERE hyversion != ?", (current,))
             self.cxn.commit()
             self._cache.clear()

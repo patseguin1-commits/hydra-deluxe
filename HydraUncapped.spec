@@ -1,5 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+# Same app as HydraTest.spec, built as the uncapped edition. The entry script
+# is hydra_app.py either way; the runtime hook is what sets the edition, since
+# it runs before the app imports hydra.hymisc.
+
 import os
 
 # The native scoring core, if it has been built. It is optional: without it
@@ -17,7 +21,7 @@ a = Analysis(
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=['hydra_uncapped_hook.py'],
     excludes=[],
     noarchive=False,
     optimize=0,
@@ -29,7 +33,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='HydraTest',
+    name='HydraUncapped',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -49,5 +53,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='HydraTest',
+    name='HydraUncapped',
 )
