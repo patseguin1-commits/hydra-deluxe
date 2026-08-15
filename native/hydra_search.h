@@ -44,10 +44,16 @@ extern "C" {
 
 typedef struct hy_node {
     int64_t tick;
+    // Suffix bounds from ScoreGraph.compute_bounds, over the rest of the song
+    // from this node. Feed the tight bound pruning; see reduce_iteration_paths.
+    int64_t base_suffix;
+    int64_t max_suffix;
+    int64_t total_spscore_suffix;
+    double  max_spscore_density;
     int32_t adv_edge;       // index into hy_search_in.edges, or -1
     int32_t branch_edge;    // index into hy_search_in.edges, or -1
     int32_t is_sp;
-    int32_t _pad;
+    int32_t remaining_sp_phrases;
 } hy_node;
 
 // One (sp_timecode, extension_map) pair off ScoreGraphEdge.sp_times. The map
@@ -132,6 +138,8 @@ typedef struct hy_search_in {
     double  ms_filter;
     int32_t flag_skipped_dynamics;
     int32_t graph_length;   // ScoreGraph.length, the progress denominator
+    int32_t enable_bound_prune;  // mirror of hypath.ENABLE_BOUND_PRUNE
+    int32_t _pad2;
     hy_progress_fn progress;    // may be null
 } hy_search_in;
 
@@ -187,6 +195,12 @@ typedef struct hy_search_out {
 // with hy_search_free exactly once. On any other return code nothing was
 // allocated and *out is zeroed.
 HY_EXPORT int32_t hy_search(const hy_search_in* in, hy_search_out* out);
+
+// The activation dynamic program. Same inputs, same output format, and the
+// result is released with the same hy_search_free -- it is a different way of
+// searching the identical flat graph, not a different data model. Matches the
+// best score of hy_search; see hypath.DPPather for the algorithm.
+HY_EXPORT int32_t hy_dp_search(const hy_search_in* in, hy_search_out* out);
 
 HY_EXPORT void hy_search_free(hy_search_out* out);
 

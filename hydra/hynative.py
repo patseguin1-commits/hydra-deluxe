@@ -30,7 +30,7 @@ import sys
 from . import hydata
 
 # Must match HY_ABI_VERSION in native/hydra_score.h.
-ABI_VERSION = 2
+ABI_VERSION = 4
 
 # Must match the HY_NOTE_* flags in native/hydra_score.h.
 NOTE_CYMBAL = 0x01
@@ -69,10 +69,14 @@ class HyScores(ctypes.Structure):
 class HyNode(ctypes.Structure):
     _fields_ = [
         ("tick", ctypes.c_int64),
+        ("base_suffix", ctypes.c_int64),
+        ("max_suffix", ctypes.c_int64),
+        ("total_spscore_suffix", ctypes.c_int64),
+        ("max_spscore_density", ctypes.c_double),
         ("adv_edge", ctypes.c_int32),
         ("branch_edge", ctypes.c_int32),
         ("is_sp", ctypes.c_int32),
-        ("_pad", ctypes.c_int32),
+        ("remaining_sp_phrases", ctypes.c_int32),
     ]
 
 
@@ -150,6 +154,8 @@ class HySearchIn(ctypes.Structure):
         ("ms_filter", ctypes.c_double),
         ("flag_skipped_dynamics", ctypes.c_int32),
         ("graph_length", ctypes.c_int32),
+        ("enable_bound_prune", ctypes.c_int32),
+        ("_pad2", ctypes.c_int32),
         ("progress", PROGRESS_FN),
     ]
 
@@ -265,6 +271,10 @@ def _load():
 
             lib.hy_search.restype = ctypes.c_int32
             lib.hy_search.argtypes = [
+                ctypes.POINTER(HySearchIn), ctypes.POINTER(HySearchOut),
+            ]
+            lib.hy_dp_search.restype = ctypes.c_int32
+            lib.hy_dp_search.argtypes = [
                 ctypes.POINTER(HySearchIn), ctypes.POINTER(HySearchOut),
             ]
             lib.hy_search_free.restype = None
@@ -392,7 +402,7 @@ def category_scores(ordering, combo, flag_skipped_dynamics, activation_note):
 
 
 def _marshal(flat, depth_mode, depth_value, ms_filter, flag_skipped_dynamics,
-             progress):
+             progress, enable_bound_prune=False):
     """Pack a hyflat.FlatGraph into the arrays hy_search reads.
 
     Returns (HySearchIn, keepalive). The keepalive list must outlive the call:
@@ -407,6 +417,11 @@ def _marshal(flat, depth_mode, depth_value, ms_filter, flag_skipped_dynamics,
         nd.adv_edge = fn.adv_edge
         nd.branch_edge = fn.branch_edge
         nd.is_sp = 1 if fn.is_sp else 0
+        nd.base_suffix = fn.base_suffix
+        nd.max_suffix = fn.max_suffix
+        nd.total_spscore_suffix = fn.total_spscore_suffix
+        nd.remaining_sp_phrases = fn.remaining_sp_phrases
+        nd.max_spscore_density = fn.max_spscore_density
 
     # The variable-length parts of every edge go into shared arrays, with each
     # edge carrying a half-open slice of them.
@@ -505,6 +520,8 @@ def _marshal(flat, depth_mode, depth_value, ms_filter, flag_skipped_dynamics,
     sin.ms_filter = 0.0 if ms_filter is None else float(ms_filter)
     sin.flag_skipped_dynamics = 1 if flag_skipped_dynamics else 0
     sin.graph_length = flat.length
+    sin.enable_bound_prune = 1 if enable_bound_prune else 0
+    sin._pad2 = 0
     sin.progress = progress if progress is not None else PROGRESS_FN()
 
     keepalive = [nodes, edges, sptimes, backends, ext_key_a, ext_val_a, aiet_a]
@@ -621,13 +638,44 @@ def _rebuild(flat, out, multsqueezes):
 
 
 def search(flat, depth_mode, depth_value, ms_filter,
-           flag_skipped_dynamics=False, cb_pathsprogress=None):
-    """Run the whole path search natively over a flattened ScoreGraph.
+           flag_skipped_dynamics=False, cb_pathsprogress=None,
+           enable_bound_prune=False):
+    """Run the whole BFS path search natively over a flattened ScoreGraph.
 
     Returns the finished hydata.Path objects, best score first, in the state
     GraphPather.read would leave them in.
 
+    enable_bound_prune mirrors hypath.ENABLE_BOUND_PRUNE: when set the engine
+    runs the same tight bound pruning the Python search does. Passed rather than
+    read here so hynative does not import hypath (which imports hynative).
+
     """
+    return _run_native(
+        _LIB.hy_search, "hy_search", flat, depth_mode, depth_value, ms_filter,
+        flag_skipped_dynamics, cb_pathsprogress, enable_bound_prune)
+
+
+def dp_search(flat, depth_mode, depth_value, ms_filter,
+              flag_skipped_dynamics=False, cb_pathsprogress=None,
+              enable_bound_prune=False):
+    """Run the activation DP natively over a flattened ScoreGraph.
+
+    A drop-in alternative to search() that finds the same best score by the
+    dynamic program in hypath.DPPather rather than the BFS. Same inputs, same
+    hydata.Path results, same output marshalling -- only the C entry point
+    differs. enable_bound_prune is accepted for signature parity and ignored
+    (the DP has no bound-pruning pass).
+
+    """
+    return _run_native(
+        _LIB.hy_dp_search, "hy_dp_search", flat, depth_mode, depth_value,
+        ms_filter, flag_skipped_dynamics, cb_pathsprogress, enable_bound_prune)
+
+
+def _run_native(fn, fn_name, flat, depth_mode, depth_value, ms_filter,
+                flag_skipped_dynamics, cb_pathsprogress, enable_bound_prune):
+    """Shared body for search() and dp_search(): marshal, cross the boundary
+    once via fn, and rebuild the hydata.Path objects."""
     # A progress callback is allowed to raise in order to abandon the search:
     # that is how hyutil's adaptive SP meter ladder drops a rung that has
     # overrun its time budget. An exception cannot travel back through a C
@@ -650,15 +698,15 @@ def search(flat, depth_mode, depth_value, ms_filter,
 
     sin, keepalive = _marshal(
         flat, depth_mode, depth_value, ms_filter, flag_skipped_dynamics,
-        progress)
+        progress, enable_bound_prune)
 
     out = HySearchOut()
-    rc = _LIB.hy_search(ctypes.byref(sin), ctypes.byref(out))
+    rc = fn(ctypes.byref(sin), ctypes.byref(out))
     if raised:
         # Nothing was allocated on a cancel, so there is nothing to free.
         raise raised[0]
     if rc != HY_OK:
-        raise RuntimeError(f"hy_search failed with code {rc}")
+        raise RuntimeError(f"{fn_name} failed with code {rc}")
 
     try:
         return _rebuild(flat, out, _graph_multsqueezes(flat))

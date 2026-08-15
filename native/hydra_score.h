@@ -11,7 +11,12 @@
 #include <cstdint>
 
 // 2 adds the path search (hydra_search.h) alongside the scoring core.
-#define HY_ABI_VERSION 2
+// 3 adds suffix bounds on hy_node and the enable_bound_prune flag for the
+// tight bound pruning in hydra_search.cpp.
+// 4 adds the activation DP entry point hy_dp_search (hydra_search.h); it
+// reuses the same hy_search_in / hy_search_out structs, so this is a signature
+// addition only.
+#define HY_ABI_VERSION 4
 
 // Per-note flags, packed one byte per note.
 #define HY_NOTE_CYMBAL     0x01

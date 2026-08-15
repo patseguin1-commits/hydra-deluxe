@@ -15,3 +15,9 @@ records_uncapped.json
 
 # Local utility scripts, anything else
 local/*
+
+# Generated golden oracle for the C++ port (large; rebuilt via tools/gen_golden.py).
+golden/
+
+# C++ build tree (CMake).
+build-cpp/

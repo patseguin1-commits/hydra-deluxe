@@ -33,9 +33,20 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <new>
+#include <unordered_map>
 #include <vector>
+
+#ifdef _WIN32
+// The activation DP recurses about once per candidate (thousands deep on a
+// discography-sized chart), which overruns the default 1 MB thread stack. The
+// DP runs on a dedicated large-stack thread; see hy_dp_search. NOMINMAX keeps
+// windows.h from clobbering std::min/std::max.
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 namespace {
 
@@ -182,11 +193,116 @@ private:
     uint32_t stamp_ = 0;
 };
 
+// --- Activation DP (hy_dp_search) ----------------------------------------
+// A backward activation dynamic program over the same flat graph the BFS
+// consumes. Where the BFS enumerates every live path, the DP observes that
+// between two activations a path follows the base track deterministically, so
+// the only decision is *where* to activate (an activation always spends the
+// whole meter). It drives the very same advance / branch_activate /
+// branch_deactivate primitives the BFS uses, so every segment score is
+// identical by construction. Mirrors hypath.DPPather. Best-score parity with
+// the BFS, not variant parity.
+//
+// The recurrence is candidate-local: from "arriving at a base node" the only
+// moves are activate-here and skip-to-the-next-candidate. Skipping recurses a
+// single step to the next candidate rather than walking to the end and fanning
+// out over every downstream candidate, and the memo is keyed at every candidate
+// and landing -- so histories from different resets that converge on the same
+// (node, meter) state share one sub-result. That turns the old
+// O(candidates^2) reset fan-out into a per-candidate DP.
+
+// A backtrack plan. STOP and DONE are sentinels held at fixed arena indices;
+// ACT records one activation choice and points at the plan to follow after it.
+const int32_t PLAN_KIND_STOP = 0;
+const int32_t PLAN_KIND_DONE = 1;
+const int32_t PLAN_KIND_ACT  = 2;
+const int32_t PLAN_STOP = 0;   // plans_[0], allocated first in dp_run
+const int32_t PLAN_DONE = 1;   // plans_[1]
+
+struct DpEntry {
+    int64_t score;
+    int32_t plan;        // index into Engine::plans_
+};
+
+struct DpOutcome {
+    int32_t completed;   // 1 if the song ended while still in SP
+    int32_t idx;         // ordinal among this activation's deactivation options
+    int64_t delta;       // score from the activation onward (excludes base-before)
+    int32_t landing;     // base node the deactivation returned to (-1 if completed)
+    int32_t residual;    // SP bars on landing: 0 normal, 1 squeeze-out
+    int32_t buffered;    // buffered_sqinout_sp on landing
+};
+
+struct DpPlan {
+    int32_t kind;        // PLAN_KIND_*
+    int32_t cand_index;  // base-track index of the activation candidate
+    int32_t outcome_idx; // which DpOutcome of that candidate was taken
+    int32_t child;       // plan index to follow after this activation
+};
+
+// The bit pattern used in a memo key to mean "sp_ready_time is None". No finite
+// double reaches it, and it is only ever compared for equality.
+const int64_t DP_NO_READY = (int64_t)0x7FF8000000000000ll;
+
+inline int64_t dp_ready_bits(double sp_ready_ms) {
+    if (std::isnan(sp_ready_ms)) return DP_NO_READY;
+    int64_t b;
+    std::memcpy(&b, &sp_ready_ms, sizeof(b));
+    return b;
+}
+
+// Memo key for the candidate-local DP: base node, meter, sp_ready (its bits, so
+// two histories with different ready times are distinct -- it gates activation
+// legality and is not implied by (node, sp)), and buffered for the rare
+// squeeze-out landing that lands on a candidate.
+struct DpNodeKey {
+    int32_t node;
+    int32_t sp;
+    int32_t buffered;
+    int64_t ready_bits;
+    bool operator==(const DpNodeKey& o) const {
+        return node == o.node && sp == o.sp && buffered == o.buffered &&
+               ready_bits == o.ready_bits;
+    }
+};
+
+struct DpNodeKeyHash {
+    size_t operator()(const DpNodeKey& k) const {
+        auto mix = [](uint64_t x) {
+            x += 0x9E3779B97F4A7C15ull;
+            x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
+            x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
+            return x ^ (x >> 31);
+        };
+        uint64_t h = mix((uint64_t)(uint32_t)k.node);
+        h ^= mix(((uint64_t)(uint32_t)k.sp << 32) ^ (uint32_t)k.buffered) +
+             0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
+        h ^= mix((uint64_t)k.ready_bits) + 0x9E3779B97F4A7C15ull +
+             (h << 6) + (h >> 2);
+        return (size_t)h;
+    }
+};
+
+// The outcome of driving the base track from a node to the next candidate.
+struct DpWalk {
+    int64_t base_score;
+    int32_t next_index;   // base index of the next candidate, or -1 for the end
+    int32_t sp;
+    int32_t buffered;
+    double  sp_ready_ms;
+};
+
+// (candidate_index, sp) packed into a memo key for the activation-outcome cache.
+inline uint64_t dp_act_key(int32_t cand_index, int32_t sp) {
+    return (uint64_t)(uint32_t)cand_index | ((uint64_t)(uint32_t)sp << 32);
+}
+
 class Engine {
 public:
     explicit Engine(const hy_search_in& in) : in_(in) {}
 
     int32_t run(hy_search_out* out);
+    int32_t dp_run(hy_search_out* out);
 
 private:
     const hy_node& node(int32_t i) const { return in_.nodes[i]; }
@@ -241,10 +357,27 @@ private:
 
     void reduce_iteration_paths();
     void reduce_group(const int32_t* members, int32_t n);
+    void prune_hopeless_paths();
 
     void emit_path(const Path& p);
     void emit_variant(int32_t v, int32_t depth);
     void emit_acts(int32_t act_tail, int32_t* begin, int32_t* end);
+
+    // Activation DP. dp_run builds the base index and drives the recursion;
+    // dp_best_from_node is the memoized candidate-local DP; the rest mirror
+    // hypath.DPPather.
+    void dp_build_index();
+    Path dp_seed(int32_t node, int32_t sp, int32_t buffered, double ready_ms);
+    std::vector<DpEntry> dp_best_from_node(int32_t node_index, int32_t sp,
+                                           double sp_ready_ms, int32_t buffered);
+    DpWalk dp_walk_to_next_candidate(int32_t node_index, int32_t sp,
+                                     double sp_ready_ms, int32_t buffered);
+    const std::vector<DpOutcome>& dp_activation_outcomes(int32_t cand_index,
+                                                         int32_t sp);
+    void dp_simulate_sp(Path p, std::vector<DpOutcome>& outcomes);
+    std::vector<DpEntry> dp_merge_topk(std::vector<DpEntry>& options);
+    int32_t dp_make_act(int32_t cand_index, int32_t outcome_idx, int32_t child);
+    Path dp_replay(int32_t plan);
 
     const hy_search_in& in_;
 
@@ -266,6 +399,8 @@ private:
     std::vector<int32_t> group_end_;
     std::vector<int32_t> survivors_;
     std::vector<int64_t> beating_;
+    std::vector<int64_t> dominating_;
+    std::vector<int64_t> guaranteed_;
     StampMap group_map_;
     StampMap tie_map_;
     StampMap distinct_map_;
@@ -280,6 +415,18 @@ private:
     std::vector<int32_t> sq_scratch_;
 
     int32_t iterations_ = 0;
+
+    // Activation DP state.
+    std::vector<int32_t> base_nodes_;     // base index -> node id
+    std::vector<int32_t> node_to_base_;   // node id -> base index, -1 if not base
+    std::unordered_map<DpNodeKey, std::vector<DpEntry>, DpNodeKeyHash> dp_memo_;
+    std::unordered_map<uint64_t, std::vector<DpOutcome>> dp_act_memo_;
+    std::vector<DpPlan> plans_;
+    bool dp_points_mode_ = false;
+    int32_t dp_depth_value_ = 0;
+    int32_t dp_k_ = 1;
+    double dp_dummy_ready_ms_ = 0.0;
+    bool dp_failed_ = false;
 };
 
 // --- hypath.GraphPath.advance -------------------------------------------
@@ -656,8 +803,29 @@ void Engine::reduce_group(const int32_t* members, int32_t n) {
 
     if (survivors_.size() < 2) return;
 
-    // The scores that are allowed to eliminate. A filtered path cannot, unless
-    // it is optimal.
+    // Distinct scores over the whole group, achievable or not. A filtered path
+    // stays only while it is within the depth band here -- while it could still
+    // be the single best path, which is shown even when unachievable. Without
+    // this band a filtered path is dropped only when an achievable path beats
+    // it, and on an uncapped chart the achievable frontier scores far below the
+    // hard paths, so they all survive and the frontier explodes. The band
+    // collapses each group back to the depth setting, as an unfiltered search
+    // does, and cannot drop the eventual best path (score dominance keeps the
+    // top band at every step). Mirror of hypath._reduce_group.
+    dominating_.clear();
+    for (size_t i = 0; i < survivors_.size(); ++i) {
+        dominating_.push_back(cur_[survivors_[i]].score);
+    }
+    std::sort(dominating_.begin(), dominating_.end());
+    dominating_.erase(std::unique(dominating_.begin(), dominating_.end()),
+                      dominating_.end());
+    const int64_t best_all = dominating_.back();
+    const int32_t n_dominating = (int32_t)dominating_.size();
+
+    // The scores that are allowed to eliminate an achievable path. A filtered
+    // path cannot, unless it is optimal. May be empty mid-search (every live
+    // path in this group is filtered): there is then no achievable path to
+    // prune, and the band above still reins the filtered ones in.
     beating_.clear();
     for (size_t i = 0; i < survivors_.size(); ++i) {
         const int32_t idx = survivors_[i];
@@ -666,32 +834,117 @@ void Engine::reduce_group(const int32_t* members, int32_t n) {
             beating_.push_back(s);
         }
     }
-    if (beating_.empty()) return;
     std::sort(beating_.begin(), beating_.end());
     beating_.erase(std::unique(beating_.begin(), beating_.end()),
                    beating_.end());
-
-    const int64_t best = beating_.back();
+    const int64_t best = beating_.empty() ? 0 : beating_.back();
     const int32_t n_beating = (int32_t)beating_.size();
 
     for (size_t i = 0; i < survivors_.size(); ++i) {
         const int32_t idx = survivors_[i];
         const int64_t score = cur_[idx].score;
-        // How many distinct scores beat this path.
+        // How many distinct achievable scores beat this path.
         const int32_t outscored_by =
             n_beating - (int32_t)(std::upper_bound(beating_.begin(),
                                                    beating_.end(), score)
                                   - beating_.begin());
 
         if (filtered_[idx]) {
-            // Filtered paths are removed as soon as they are worse than
-            // anything.
-            if (outscored_by) removed_[idx] = 1;
+            // Removed once an achievable path beats it (as before), and also
+            // once it falls outside the overall depth band -- past that it can
+            // neither be shown nor become the best path.
+            if (outscored_by) {
+                removed_[idx] = 1;
+            } else if (in_.depth_mode == HY_DEPTH_POINTS) {
+                if (score + in_.depth_value < best_all) removed_[idx] = 1;
+            } else if (in_.depth_mode == HY_DEPTH_SCORES) {
+                const int32_t outscored_by_all =
+                    n_dominating - (int32_t)(std::upper_bound(
+                                        dominating_.begin(), dominating_.end(),
+                                        score)
+                                    - dominating_.begin());
+                if (outscored_by_all > in_.depth_value) removed_[idx] = 1;
+            }
         } else if (in_.depth_mode == HY_DEPTH_POINTS) {
             if (score + in_.depth_value < best) removed_[idx] = 1;
         } else if (in_.depth_mode == HY_DEPTH_SCORES) {
             if (outscored_by > in_.depth_value) removed_[idx] = 1;
         }
+    }
+}
+
+// --- hypath.GraphPather._prune_hopeless_paths ----------------------------
+void Engine::prune_hopeless_paths() {
+    const int32_t n = (int32_t)cur_.size();
+
+    // The guaranteed scores: a finished path's score, and an unfinished
+    // base-track path's score plus the rest of the song played without
+    // activating again. Both are achievable. Built from every path this
+    // iteration, before compaction, matching the Python which assembles this
+    // list before its reduction removes anything -- so a path a tie merge just
+    // dropped still contributes the score it reached. The ladder incumbent is
+    // not seeded here (the native search is not handed it); it would only raise
+    // the bar and prune more, never change which paths are kept.
+    guaranteed_.clear();
+    for (int32_t i = 0; i < n; ++i) {
+        const Path& p = cur_[i];
+        if (p.node < 0) {
+            guaranteed_.push_back(p.score);
+        } else if (!node(p.node).is_sp) {
+            guaranteed_.push_back(p.score + node(p.node).base_suffix);
+        }
+    }
+    if (guaranteed_.empty()) return;
+
+    int64_t bar;
+    if (in_.depth_mode == HY_DEPTH_SCORES) {
+        // The (depth_value + 1)-th largest distinct guaranteed score: clearing
+        // it is necessary to be listed.
+        std::sort(guaranteed_.begin(), guaranteed_.end(),
+                  [](int64_t a, int64_t b) { return a > b; });
+        guaranteed_.erase(std::unique(guaranteed_.begin(), guaranteed_.end()),
+                          guaranteed_.end());
+        const int64_t band = (int64_t)in_.depth_value + 1;
+        if ((int64_t)guaranteed_.size() < band) return;
+        bar = guaranteed_[(size_t)(band - 1)];
+    } else if (in_.depth_mode == HY_DEPTH_POINTS) {
+        int64_t mx = guaranteed_[0];
+        for (size_t i = 1; i < guaranteed_.size(); ++i) {
+            if (guaranteed_[i] > mx) mx = guaranteed_[i];
+        }
+        bar = mx - in_.depth_value;
+    } else {
+        return;
+    }
+
+    // Every integer here is well under 2^53, so double arithmetic is exact and
+    // matches the Python's int/float mix bit for bit -- the density is the only
+    // genuinely fractional term, and it is the same double on both sides (it is
+    // computed once in Python and carried in through the flat graph).
+    const double bar_d = (double)bar;
+    for (int32_t i = 0; i < n; ++i) {
+        if (removed_[i]) continue;
+        const Path& p = cur_[i];
+        if (p.node < 0) continue;
+        const hy_node& nd = node(p.node);
+
+        double ceiling;
+        if (nd.is_sp) {
+            // An SP-active path has spent its meter (sp reads 0), so 2*(0+r)
+            // would understate the SP time left in its current activation.
+            // Keep the loose but always-safe max_suffix ceiling.
+            ceiling = (double)p.score + (double)nd.max_suffix;
+        } else {
+            const int64_t total_sp = nd.total_spscore_suffix;
+            const double sp_measures =
+                2.0 * (double)(p.sp + nd.remaining_sp_phrases);
+            double tight_sp = sp_measures * nd.max_spscore_density;
+            if (tight_sp > (double)total_sp) tight_sp = (double)total_sp;
+            ceiling = (double)p.score + (double)nd.max_suffix
+                    - (double)total_sp + tight_sp;
+        }
+
+        if (ceiling < bar_d) removed_[i] = 1;
     }
 }
 
@@ -772,6 +1025,13 @@ void Engine::reduce_iteration_paths() {
         if (end - begin > 1) {
             reduce_group(&group_members_[begin], end - begin);
         }
+    }
+
+    // Cross-group pruning: drop paths that provably cannot reach the results,
+    // whatever they do next. The reduction above only compares paths holding
+    // the same SP, so this is the only thing that cuts across SP situations.
+    if (in_.enable_bound_prune) {
+        prune_hopeless_paths();
     }
 
     // Order-preserving compaction, matching the Python's list comprehension.
@@ -970,6 +1230,400 @@ int32_t Engine::run(hy_search_out* out) {
     return HY_OK;
 }
 
+// --- Activation DP methods ----------------------------------------------
+
+// The base track is a single linear chain reached by following adv_edge from
+// the start; every deactivation lands on one of its nodes, so node->index is a
+// complete addressing scheme for reset points and candidates.
+void Engine::dp_build_index() {
+    node_to_base_.assign(in_.n_nodes, -1);
+    base_nodes_.clear();
+    for (int32_t nd = in_.start_node; nd >= 0;) {
+        node_to_base_[nd] = (int32_t)base_nodes_.size();
+        base_nodes_.push_back(nd);
+        const hy_node& n = node(nd);
+        nd = n.adv_edge >= 0 ? edge(n.adv_edge).dest : -1;
+    }
+}
+
+// A throwaway path seeded to a reset (or candidate) state, matching the fresh
+// GraphPath hypath.DPPather builds.
+Path Engine::dp_seed(int32_t nd, int32_t sp, int32_t buffered, double ready_ms) {
+    Path p;
+    std::memset(&p, 0, sizeof(p));
+    p.node = nd;
+    p.sp = sp;
+    p.buffered = buffered;
+    p.act_tail = -1;
+    p.var_head = -1;
+    p.tied_count = 1;
+    p.sp_end_time = HY_NO_TIME;
+    p.sp_ready_ms = ready_ms;
+    p.skipped_e_offset = NO_DOUBLE;
+    p.diff_prefix = NO_DOUBLE;
+    return p;
+}
+
+// Drive the base track forward from a node to the next candidate (a base node
+// carrying an activation branch edge), or the end. Returns the base score
+// collected and the meter state on arrival. Reuses advance so the base score
+// and meter/ready-time evolution are exactly the BFS's.
+DpWalk Engine::dp_walk_to_next_candidate(int32_t node_index, int32_t sp,
+                                         double sp_ready_ms, int32_t buffered) {
+    Path seg = dp_seed(base_nodes_[node_index], sp, buffered, sp_ready_ms);
+    for (;;) {
+        advance(seg);
+        if (seg.node == NODE_BROKEN) {
+            dp_failed_ = true;
+            return DpWalk{0, -1, sp, buffered, sp_ready_ms};
+        }
+        if (seg.node < 0 || node(seg.node).is_sp) {
+            // End of song (or the guard the base track never trips).
+            return DpWalk{seg.score, -1, seg.sp, seg.buffered, seg.sp_ready_ms};
+        }
+        if (node(seg.node).branch_edge >= 0) {
+            return DpWalk{seg.score, node_to_base_[seg.node], seg.sp,
+                          seg.buffered, seg.sp_ready_ms};
+        }
+    }
+}
+
+// Top-k (score, plan) achievable from *arriving at* a base node. The candidate-
+// local recurrence (see the header comment above): activate here, or skip to
+// the next candidate. Mirrors hypath.DPPather._best_from_node. The score
+// returned excludes the base track consumed to reach this node; the caller adds
+// it. The result is computed fully before it is stored, so the recursion never
+// holds a reference into dp_memo_ across a mutation.
+std::vector<DpEntry> Engine::dp_best_from_node(int32_t node_index, int32_t sp,
+                                               double sp_ready_ms,
+                                               int32_t buffered) {
+    const DpNodeKey key{node_index, sp, buffered, dp_ready_bits(sp_ready_ms)};
+    auto it = dp_memo_.find(key);
+    if (it != dp_memo_.end()) return it->second;
+
+    std::vector<DpEntry> options;
+    const hy_node& n = node(base_nodes_[node_index]);
+
+    // Option A: activate here, if this node is a legal candidate.
+    if (n.branch_edge >= 0 && sp >= 2 && has_value(sp_ready_ms)) {
+        const hy_edge& be = edge(n.branch_edge);
+        if (be.activation_fill_deadline_ms - sp_ready_ms >= -70) {
+            const std::vector<DpOutcome>& outs =
+                dp_activation_outcomes(node_index, sp);
+            if (dp_failed_) return {};
+            for (const DpOutcome& oc : outs) {
+                if (oc.completed) {
+                    const int32_t plan =
+                        dp_make_act(node_index, oc.idx, PLAN_DONE);
+                    options.push_back(DpEntry{oc.delta, plan});
+                } else {
+                    std::vector<DpEntry> futs = dp_best_from_node(
+                        node_to_base_[oc.landing], oc.residual, NO_DOUBLE,
+                        oc.buffered);
+                    if (dp_failed_) return {};
+                    for (const DpEntry& fe : futs) {
+                        const int32_t plan =
+                            dp_make_act(node_index, oc.idx, fe.plan);
+                        options.push_back(
+                            DpEntry{oc.delta + fe.score, plan});
+                    }
+                }
+            }
+        }
+    }
+
+    // Option B: skip -- walk to the next candidate, then continue from there.
+    DpWalk w = dp_walk_to_next_candidate(node_index, sp, sp_ready_ms, buffered);
+    if (dp_failed_) return {};
+    if (w.next_index < 0) {
+        options.push_back(DpEntry{w.base_score, PLAN_STOP});
+    } else {
+        std::vector<DpEntry> futs = dp_best_from_node(w.next_index, w.sp,
+                                                      w.sp_ready_ms, w.buffered);
+        if (dp_failed_) return {};
+        for (const DpEntry& fe : futs) {
+            options.push_back(DpEntry{w.base_score + fe.score, fe.plan});
+        }
+    }
+
+    std::vector<DpEntry> result = dp_merge_topk(options);
+    dp_memo_.emplace(key, result);
+    return result;
+}
+
+// Every way activating at a candidate holding `sp` bars can resolve. Pure score
+// deltas from the activation onward; depends only on (candidate, sp), so it is
+// memoized. Mirrors hypath.DPPather._activation_outcomes. References into
+// dp_act_memo_ stay valid across later insertions (unordered_map only
+// invalidates references on erase), so callers may hold the returned reference
+// across recursive calls.
+const std::vector<DpOutcome>& Engine::dp_activation_outcomes(int32_t cand_index,
+                                                             int32_t sp) {
+    const uint64_t key = dp_act_key(cand_index, sp);
+    auto it = dp_act_memo_.find(key);
+    if (it != dp_act_memo_.end()) return it->second;
+
+    // The dummy ready time only has to keep branch_activate's own -70 check from
+    // firing; the genuine deadline gate is applied by dp_best_from before this
+    // is ever called. It never affects score, only the (unused) Act e_offset.
+    Path seed = dp_seed(base_nodes_[cand_index], sp, 0, dp_dummy_ready_ms_);
+    Path activated;
+    std::vector<DpOutcome> outcomes;
+    const bool ok = branch_activate(seed, &activated);
+    if (seed.node == NODE_BROKEN) { dp_failed_ = true; }
+    else if (ok) { dp_simulate_sp(activated, outcomes); }
+
+    auto res = dp_act_memo_.emplace(key, std::move(outcomes));
+    return res.first->second;
+}
+
+// Follow an activated path through the SP track, collecting outcomes. Reuses
+// advance / branch_deactivate, so the SP scoring, the sqin/sqout branching and
+// the backend adjustments are exactly the BFS's. Mirrors
+// hypath.DPPather._simulate_sp.
+void Engine::dp_simulate_sp(Path p, std::vector<DpOutcome>& outcomes) {
+    int32_t idx = 0;
+    while (p.node >= 0) {
+        advance(p);
+        if (p.node == NODE_BROKEN) { dp_failed_ = true; return; }
+        if (p.node < 0) {
+            // The song ended while still in SP: a completed path.
+            DpOutcome o;
+            o.completed = 1;
+            o.idx = idx;
+            o.delta = p.score;
+            o.landing = -1;
+            o.residual = 0;
+            o.buffered = 0;
+            outcomes.push_back(o);
+            break;
+        }
+        if (node(p.node).is_sp) {
+            Path child;
+            bool has_child = false;
+            const bool can_extend = branch_deactivate(p, &child, &has_child);
+            if (has_child) {
+                DpOutcome o;
+                o.completed = 0;
+                o.idx = idx;
+                o.delta = child.score;
+                o.landing = child.node;
+                o.residual = child.sp;
+                o.buffered = child.buffered;
+                outcomes.push_back(o);
+                ++idx;
+            }
+            if (!can_extend) break;
+        } else {
+            break;
+        }
+    }
+}
+
+// Collapse (score, plan) options to the best plan per distinct score (first
+// seen wins, matching the Python dict), then keep the depth slice: the top k
+// distinct scores in 'scores' mode, or everything within depth_value of the
+// best in 'points' mode. Mirrors hypath.DPPather._merge_topk.
+std::vector<DpEntry> Engine::dp_merge_topk(std::vector<DpEntry>& options) {
+    if (options.empty()) return {};
+
+    std::unordered_map<int64_t, int32_t> best_plan;
+    best_plan.reserve(options.size() * 2);
+    for (const DpEntry& e : options) {
+        best_plan.emplace(e.score, e.plan);   // no-op if the score is present
+    }
+
+    std::vector<int64_t> scores;
+    scores.reserve(best_plan.size());
+    for (const auto& kv : best_plan) scores.push_back(kv.first);
+    std::sort(scores.begin(), scores.end(), std::greater<int64_t>());
+
+    if (dp_points_mode_) {
+        const int64_t best = scores[0];
+        std::vector<int64_t> kept;
+        for (int64_t s : scores) {
+            if (s + dp_depth_value_ >= best) kept.push_back(s);
+        }
+        scores.swap(kept);
+    } else if ((int32_t)scores.size() > dp_k_) {
+        scores.resize(dp_k_);
+    }
+
+    std::vector<DpEntry> result;
+    result.reserve(scores.size());
+    for (int64_t s : scores) result.push_back(DpEntry{s, best_plan[s]});
+    return result;
+}
+
+int32_t Engine::dp_make_act(int32_t cand_index, int32_t outcome_idx,
+                            int32_t child) {
+    DpPlan pl;
+    pl.kind = PLAN_KIND_ACT;
+    pl.cand_index = cand_index;
+    pl.outcome_idx = outcome_idx;
+    pl.child = child;
+    plans_.push_back(pl);
+    return (int32_t)plans_.size() - 1;
+}
+
+// Rebuild a real Path by replaying a backtrack plan through the same primitives,
+// so the result carries genuine activations, backends and squeezes -- not just
+// the right total. Mirrors hypath.DPPather._replay. The finished Path is fed to
+// emit_path unchanged.
+Path Engine::dp_replay(int32_t plan) {
+    Path p = dp_seed(in_.start_node, 0, 0, NO_DOUBLE);
+
+    for (;;) {
+        const DpPlan pl = plans_[plan];
+        if (pl.kind == PLAN_KIND_DONE) break;
+        if (pl.kind == PLAN_KIND_STOP) {
+            while (p.node >= 0) {
+                advance(p);
+                if (p.node == NODE_BROKEN) { dp_failed_ = true; return p; }
+                if (p.node >= 0 && !node(p.node).is_sp &&
+                    node(p.node).branch_edge >= 0) {
+                    Path child;
+                    branch_activate(p, &child);
+                    if (p.node == NODE_BROKEN) { dp_failed_ = true; return p; }
+                }
+            }
+            break;
+        }
+
+        const int32_t cand_index = pl.cand_index;
+        const int32_t outcome_idx = pl.outcome_idx;
+        const int32_t child_plan = pl.child;
+
+        // Advance to the chosen candidate, activating at intervening candidates
+        // so skip counts and e-offsets stay faithful.
+        while (!(p.node >= 0 && node_to_base_[p.node] == cand_index)) {
+            advance(p);
+            if (p.node == NODE_BROKEN) { dp_failed_ = true; return p; }
+            if (p.node < 0) break;
+            if (!node(p.node).is_sp && node(p.node).branch_edge >= 0 &&
+                node_to_base_[p.node] != cand_index) {
+                Path child;
+                branch_activate(p, &child);
+                if (p.node == NODE_BROKEN) { dp_failed_ = true; return p; }
+            }
+        }
+        if (p.node < 0) { dp_failed_ = true; return p; }
+
+        Path activated;
+        const bool ok = branch_activate(p, &activated);
+        if (p.node == NODE_BROKEN || !ok) { dp_failed_ = true; return p; }
+
+        // Follow the SP track to the recorded outcome.
+        Path q = activated;
+        int32_t idx = 0;
+        int32_t landing_kind = -1;   // 0 completed, 1 deact
+        Path landing_path{};
+        while (q.node >= 0) {
+            advance(q);
+            if (q.node == NODE_BROKEN) { dp_failed_ = true; return q; }
+            if (q.node < 0) { landing_kind = 0; landing_path = q; break; }
+            if (node(q.node).is_sp) {
+                Path child;
+                bool has_child = false;
+                const bool can_extend = branch_deactivate(q, &child, &has_child);
+                if (has_child) {
+                    if (idx == outcome_idx) {
+                        landing_kind = 1;
+                        landing_path = child;
+                        break;
+                    }
+                    ++idx;
+                }
+                if (!can_extend) {
+                    landing_kind = 1;
+                    landing_path = child;
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        if (landing_kind != 1) {
+            p = (landing_kind == 0) ? landing_path : q;
+            plan = PLAN_DONE;
+            continue;
+        }
+        p = landing_path;
+        plan = child_plan;
+    }
+
+    return p;
+}
+
+int32_t Engine::dp_run(hy_search_out* out) {
+    dp_build_index();
+
+    dp_points_mode_ = in_.depth_mode == HY_DEPTH_POINTS;
+    dp_depth_value_ = in_.depth_value;
+    dp_k_ = in_.depth_value + 1;
+
+    // Any ready time early enough that no fill deadline can be more than 70ms
+    // before it; the real deadline gate lives in dp_best_from. It never affects
+    // score, so a floor well below every real ms is exact here.
+    dp_dummy_ready_ms_ = -1e18;
+    dp_failed_ = false;
+
+    // Sentinel plans first, so PLAN_STOP / PLAN_DONE name plans_[0] / plans_[1].
+    plans_.clear();
+    plans_.push_back(DpPlan{PLAN_KIND_STOP, -1, -1, -1});
+    plans_.push_back(DpPlan{PLAN_KIND_DONE, -1, -1, -1});
+
+    std::vector<DpEntry> entries = dp_best_from_node(0, 0, NO_DOUBLE, 0);
+    if (dp_failed_) return HY_ERR_BAD_STATE;
+
+    std::vector<Path> finals;
+    finals.reserve(entries.size());
+    for (const DpEntry& e : entries) {
+        Path fp = dp_replay(e.plan);
+        if (dp_failed_) return HY_ERR_BAD_STATE;
+        finals.push_back(fp);
+    }
+
+    // Order by score, descending, stable to match the Python's sort.
+    std::stable_sort(finals.begin(), finals.end(),
+                     [](const Path& a, const Path& b) {
+                         return a.score > b.score;
+                     });
+    for (const Path& fp : finals) emit_path(fp);
+
+    Holder* h = new (std::nothrow) Holder();
+    if (!h) return HY_ERR_NO_MEMORY;
+    h->paths.swap(out_paths_);
+    h->acts.swap(out_acts_);
+    h->sqs.swap(out_sqs_);
+
+    out->paths = h->paths.empty() ? nullptr : h->paths.data();
+    out->acts = h->acts.empty() ? nullptr : h->acts.data();
+    out->sqs = h->sqs.empty() ? nullptr : h->sqs.data();
+    out->n_paths = (int32_t)h->paths.size();
+    out->n_acts = (int32_t)h->acts.size();
+    out->n_sqs = (int32_t)h->sqs.size();
+    out->iterations = 0;
+    out->handle = h;
+    return HY_OK;
+}
+
+#ifdef _WIN32
+// Thread entry so dp_run can execute on a large reserved stack.
+struct DpThreadCtx {
+    Engine* engine;
+    hy_search_out* out;
+    int32_t rc;
+};
+
+DWORD WINAPI dp_thread_entry(LPVOID param) {
+    DpThreadCtx* c = static_cast<DpThreadCtx*>(param);
+    c->rc = c->engine->dp_run(c->out);
+    return 0;
+}
+#endif
+
 }  // namespace
 
 extern "C" {
@@ -986,6 +1640,32 @@ int32_t hy_search(const hy_search_in* in, hy_search_out* out) {
 
     Engine engine(*in);
     return engine.run(out);
+}
+
+int32_t hy_dp_search(const hy_search_in* in, hy_search_out* out) {
+    if (!out) return HY_ERR_NULL_OUT;
+    std::memset(out, 0, sizeof(*out));
+    if (!in) return HY_ERR_NULL_IN;
+    if (!in->nodes || in->n_nodes <= 0) return HY_ERR_BAD_GRAPH;
+    if (in->start_node < 0 || in->start_node >= in->n_nodes) {
+        return HY_ERR_BAD_GRAPH;
+    }
+    if (in->n_edges > 0 && !in->edges) return HY_ERR_BAD_GRAPH;
+
+    Engine engine(*in);
+#ifdef _WIN32
+    // Run on a 512 MB-reserved stack; the DP recursion is candidate-deep.
+    DpThreadCtx ctx{&engine, out, HY_ERR_BAD_STATE};
+    HANDLE th = CreateThread(nullptr, (SIZE_T)512 * 1024 * 1024,
+                             dp_thread_entry, &ctx,
+                             STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
+    if (th == nullptr) return engine.dp_run(out);   // fall back to inline
+    WaitForSingleObject(th, INFINITE);
+    CloseHandle(th);
+    return ctx.rc;
+#else
+    return engine.dp_run(out);
+#endif
 }
 
 void hy_search_free(hy_search_out* out) {

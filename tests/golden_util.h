@@ -1,0 +1,59 @@
+// Helpers for reading the frozen golden oracle (golden/, produced by
+// tools/gen_golden.py) from the C++ parity tests.
+//
+// Floats in the golden are stored as their Python repr() string so the value
+// survives JSON exactly; as_double() parses one back with strtod, and the
+// tests compare the double they computed against it with exact equality.
+
+#ifndef HYDRA_TESTS_GOLDEN_UTIL_H
+#define HYDRA_TESTS_GOLDEN_UTIL_H
+
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#include "json.hpp"
+
+#ifndef HYDRA_GOLDEN_DIR
+#error "HYDRA_GOLDEN_DIR must be defined (see CMakeLists.txt)"
+#endif
+
+namespace golden {
+
+using json = nlohmann::json;
+
+inline std::string root() { return HYDRA_GOLDEN_DIR; }
+
+inline json load_file(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) throw std::runtime_error("cannot open golden file: " + path);
+    std::stringstream ss;
+    ss << f.rdbuf();
+    return json::parse(ss.str());
+}
+
+// The chart index: [{ "relpath", "slug", "has_midi" }, ...].
+inline json index() {
+    return load_file(root() + "/index.json")["charts"];
+}
+
+inline json chart(const std::string& slug) {
+    return load_file(root() + "/charts/" + slug + ".json");
+}
+
+inline json chord_encode() {
+    return load_file(root() + "/chord_encode.json");
+}
+
+// A golden float, stored as a repr() string, parsed back to the exact double.
+inline double as_double(const json& j) {
+    const std::string s = j.get<std::string>();
+    return std::strtod(s.c_str(), nullptr);
+}
+
+}  // namespace golden
+
+#endif  // HYDRA_TESTS_GOLDEN_UTIL_H

@@ -4,6 +4,7 @@ import shutil
 import copy
 import math
 import json
+import sys
 from enum import Enum
 
 from . import hydata
@@ -46,18 +47,27 @@ DEACT_SQINOUT = 2
 
 # Whether to drop paths that provably cannot reach the results.
 #
-# Off, because it was measured and it does not pay. On Hail The Sun at a
-# ceiling of 64 it removed 25,564 of 20,283,261 paths examined - 0.13%, and
-# 0.18% on Rise Against - while costing a lower-bound tally per path per
-# iteration on all of them. Timing could not separate the two configurations
-# on this machine, which is the expected result for a 0.13% change.
+# Off, because it was measured and it still does not pay -- but the machinery
+# is complete, exact, and available (flip this to True to use it).
 #
-# The reason is worth keeping: the bound compares *scores*, and paths here do
-# not differ much in score. SP placement is worth around 1% of a chart's
-# total, so every live path sits within a whisker of every other one, and a
-# bound wide enough to be correct is far too wide to separate them. The
-# machinery is left in place because it is exact and because a tighter bound
-# would use the same suffix numbers; see the notes in _prune_hopeless_paths.
+# Two bounds have been tried. The loose one (score + max_suffix) removed 0.13%
+# of paths, because max_suffix assumes the whole rest of the song is played in
+# SP, which every live path is within a whisker of. The tight bound in
+# _prune_hopeless_paths replaces that spscore assumption with what a path can
+# physically bank in the 2*(b+r) measures of SP it has left, charged at the
+# densest spscore rate remaining (compute_bounds' three suffix numbers). It is
+# still exact -- every other term of max_suffix is preserved -- so results are
+# identical to a full search, verified against a prune-off reference on the
+# whole corpus, capped and uncapped, on both engines.
+#
+# On the blink-182 discography (uncapped, settling at cap 128) it removed just
+# 2,229 of 61.9M paths examined -- 0.0036%, fewer than the loose bound -- and
+# cost ~7% (native ~8.5s -> ~9.1s). A discography keeps r (SP phrases left)
+# large until the very end, so 2*(b+r) rarely falls below total_spscore_suffix
+# and the min() degenerates back to max_suffix. The bound bites only late in a
+# short chart, which is where it is cheapest to just finish the search. Kept in
+# place because it is exact and because the suffix index it builds is the
+# groundwork the activation DP (Phases 3-4) reuses.
 ENABLE_BOUND_PRUNE = False
 
 
@@ -227,6 +237,21 @@ class ScoreGraph:
         position's two nodes get the same max_suffix -- a base track path may
         activate immediately and so is bounded by the SP track too.
 
+        Three more numbers per position feed the tighter ceiling in
+        _prune_hopeless_paths, which replaces max_suffix's "whole rest in SP"
+        assumption for its spscore term with what a path can physically bank:
+
+        remaining_sp_phrases - SP phrases still to come from here. Each is one
+            entry in an advance edge's sp_times (one per flag_sp timestamp).
+
+        total_spscore_suffix - exact sum of SP-track advance-edge spscore over
+            the remainder. This is what max_suffix over-approximates for its
+            spscore component, and the cap on how much any path can collect.
+
+        max_spscore_density - the densest spscore-per-measure of any single
+            SP-track advance edge in the remainder. A path in SP for m measures
+            cannot bank more than m * this.
+
         """
         base_nodes = []
         node = self.start
@@ -243,6 +268,11 @@ class ScoreGraph:
         base_running = 0
         max_running = 0
 
+        # The three tighter-ceiling accumulators, over the same suffix.
+        sp_running = 0              # total_spscore_suffix
+        phrase_running = 0         # remaining_sp_phrases
+        density_running = 0.0      # max_spscore_density
+
         # Backwards: the last node has nothing left to play and so is worth 0.
         for i in range(len(base_nodes) - 1, -1, -1):
             b_node = base_nodes[i]
@@ -250,9 +280,15 @@ class ScoreGraph:
 
             b_node.base_suffix = base_running
             b_node.max_suffix = max_running
+            b_node.total_spscore_suffix = sp_running
+            b_node.remaining_sp_phrases = phrase_running
+            b_node.max_spscore_density = density_running
             if s_node is not None:
                 s_node.base_suffix = base_running
                 s_node.max_suffix = max_running
+                s_node.total_spscore_suffix = sp_running
+                s_node.remaining_sp_phrases = phrase_running
+                s_node.max_spscore_density = density_running
 
             # Walking to the previous position adds that position's edges.
             b_edge = base_nodes[i - 1].adv_edge if i else None
@@ -268,6 +304,23 @@ class ScoreGraph:
                     s_edge.basescore + s_edge.comboscore + s_edge.spscore
                     + s_edge.soloscore + s_edge.accentscore + s_edge.ghostscore
                 )
+
+                # The spscore-bearing track is the SP track; base advance edges
+                # carry none (see store_spscore). This edge runs from the
+                # previous position to this one, so its span is measured
+                # between their two SP-track nodes.
+                sp_running += s_edge.spscore
+                phrase_running += len(s_edge.sp_times)
+
+                src = sp_nodes[i - 1]
+                span = (
+                    s_edge.dest.timecode.measures_decimal
+                    - src.timecode.measures_decimal
+                )
+                if span > 0:
+                    density = s_edge.spscore / span
+                    if density > density_running:
+                        density_running = density
 
             # Everything a branch at the previous position could add on top.
             if i:
@@ -492,6 +545,7 @@ class ScoreGraphNode:
     __slots__ = (
         'timecode', 'adv_edge', 'branch_edge', 'is_sp', 'chord',
         'base_suffix', 'max_suffix',
+        'remaining_sp_phrases', 'total_spscore_suffix', 'max_spscore_density',
     )
 
     def __init__(self, timecode, is_sp):
@@ -506,6 +560,12 @@ class ScoreGraphNode:
         # ScoreGraph.compute_bounds.
         self.base_suffix = 0
         self.max_suffix = 0
+
+        # Inputs to the tight SP-time ceiling in _prune_hopeless_paths, all
+        # over the remainder of the song from here. See compute_bounds.
+        self.remaining_sp_phrases = 0
+        self.total_spscore_suffix = 0
+        self.max_spscore_density = 0.0
     
     def __repr__(self):
         lines = [self.name()]
@@ -709,15 +769,20 @@ class GraphPather:
 
         The graph is flattened to arrays, crosses the boundary once, and comes
         back as a decision log that hynative turns into the same hydata.Path
-        objects this class would have built. incumbent is not passed because
-        the only thing that consumes it is the bound pruning, which is off; see
-        ENABLE_BOUND_PRUNE.
+        objects this class would have built.
+
+        The bound pruning runs natively too when ENABLE_BOUND_PRUNE is set. The
+        ladder incumbent is still not passed across: it only ever raises the
+        prune bar (more aggressive, never a different result), so leaving it out
+        keeps the ABI change small at the cost of the native run pruning
+        slightly less on the upper rungs than the Python run would.
 
         """
         flat = hyflat.flatten(graph)
         paths = hynative.search(
             flat, depth_mode, depth_value, ms_filter,
             hymisc.FLAG_SKIPPED_DYNAMICS, cb_pathsprogress,
+            enable_bound_prune=ENABLE_BOUND_PRUNE,
         )
         self.record._paths.extend(paths)
 
@@ -832,21 +897,26 @@ class GraphPather:
         distinct scores, so the bar is the (depth_value + 1)th largest
         distinct guaranteed score: clearing it is necessary to be listed.
 
-        Measured, this catches almost nothing, which is why ENABLE_BOUND_PRUNE
-        is off. What would make it bite is a tighter ceiling. max_suffix
-        assumes the entire rest of the song is played in SP, and no path can
-        do that: a path holding b bars with r phrases left can be in SP for at
-        most 2 * (b + r) measures. Bounding the SP *time* that way, and
-        charging it at the densest spscore rate left in the song, would give a
-        ceiling that actually falls below the bar late in a chart. That needs
-        a per-measure spscore index over the suffix, which is why it is
-        written down here rather than done.
+        The loose max_suffix ceiling caught almost nothing, because it assumes
+        the entire rest of the song is played in SP and no path can do that: a
+        path holding b bars with r phrases left can be in SP for at most
+        2 * (b + r) measures. The tighter ceiling below keeps every safe term
+        of max_suffix but replaces its spscore component -- the "whole rest in
+        SP" part -- with what a path can physically bank in that many measures,
+        charged at the densest spscore rate left (compute_bounds' three suffix
+        numbers). The frontend and backend terms stay at their over-estimated
+        max_suffix values, so the ceiling is still >= any achievable finish and
+        no path that could appear is ever dropped.
+
+        The tight form holds exactly only for a base track path, whose b is the
+        bars it is really holding. An SP-active path has already spent its
+        meter (b would read 0) and 2*(0+r) understates the SP time left in its
+        current activation, so those keep the loose max_suffix ceiling, which
+        is always safe.
 
         """
         if node_bounds is None or not guaranteed:
             return      # every path finished this iteration
-
-        max_suffix = node_bounds[1]
 
         if depth_mode == 'scores':
             band = depth_value + 1
@@ -860,9 +930,22 @@ class GraphPather:
             return
 
         for p in paths:
-            if p.currentnode is None or p in paths_to_remove:
+            node = p.currentnode
+            if node is None or p in paths_to_remove:
                 continue
-            if p.score + max_suffix < bar:
+
+            max_suffix = node.max_suffix
+            if node.is_sp:
+                ceiling = p.score + max_suffix
+            else:
+                total_sp = node.total_spscore_suffix
+                sp_measures = 2 * (p.sp + node.remaining_sp_phrases)
+                tight_sp = sp_measures * node.max_spscore_density
+                if tight_sp > total_sp:
+                    tight_sp = total_sp
+                ceiling = p.score + max_suffix - total_sp + tight_sp
+
+            if ceiling < bar:
                 paths_to_remove.add(p)
 
     def _reduce_group(
@@ -914,15 +997,31 @@ class GraphPather:
         if len(survivors) < 2:
             return
 
-        # The scores that are allowed to eliminate. A filtered path can't,
-        # unless it's optimal.
+        # Distinct scores over the whole group, achievable or not. A filtered
+        # path is kept only while it is still within the depth band *here* --
+        # that is, while it could still turn out to be the single best path,
+        # which is shown even when its timing is unachievable. Without this
+        # band a filtered path is dropped only when an *achievable* path beats
+        # it, and on an uncapped chart the achievable frontier scores far below
+        # the hard paths, so every hard path survives and the frontier
+        # explodes. The band collapses each group back to the depth setting,
+        # exactly as it does for an unfiltered search, and cannot drop the
+        # eventual best path (score dominance keeps the top band at every
+        # step). See the module note on the ms filter.
+        dominating = sorted({p.score for p in survivors})
+        n_dominating = len(dominating)
+        best_all = dominating[-1]
+
+        # The scores that are allowed to eliminate an *achievable* path. A
+        # filtered path can't, unless it's optimal. May be empty mid-search
+        # (every live path in this group is filtered), which is fine: there is
+        # then no achievable path to prune, and the band above still reins the
+        # filtered ones in.
         beating_scores = sorted({
             p.score for p in survivors
             if p not in filtered_paths or p.score == optimal_score
         })
-        if not beating_scores:
-            return
-        best = beating_scores[-1]
+        best = beating_scores[-1] if beating_scores else None
 
         # Hoisted out of the loop below: the group can hold thousands of
         # paths, and these were being re-resolved for every one of them.
@@ -933,18 +1032,28 @@ class GraphPather:
 
         for p in survivors:
             score = p.score
-            # How many distinct scores beat this path
-            outscored_by = n_beating - bisect_right(beating_scores, score)
 
             if p in filtered_paths:
-                # Filtered paths are removed as soon as they're worse than
-                # anything
+                # Removed once an achievable path beats it (as before), and
+                # also once it falls outside the overall depth band -- past
+                # that it can neither be shown nor become the best path.
+                outscored_by = n_beating - bisect_right(beating_scores, score)
                 if outscored_by:
                     paths_to_remove.add(p)
+                elif mode_is_points:
+                    if score + depth_value < best_all:
+                        paths_to_remove.add(p)
+                elif mode_is_scores:
+                    outscored_by_all = (
+                        n_dominating - bisect_right(dominating, score))
+                    if outscored_by_all > depth_value:
+                        paths_to_remove.add(p)
             elif mode_is_points:
                 if score + depth_value < best:
                     paths_to_remove.add(p)
             elif mode_is_scores:
+                # How many distinct achievable scores beat this path.
+                outscored_by = n_beating - bisect_right(beating_scores, score)
                 if outscored_by > depth_value:
                     paths_to_remove.add(p)
 
@@ -1216,6 +1325,383 @@ class GraphPath:
     def is_active_sp(self):
         node = self.currentnode
         return node is not None and node.is_sp
+
+
+# Backtrack plan sentinels for DPPather. A plan is either one of these or a
+# tuple ('act', candidate_index, outcome_index, child_plan).
+_PLAN_STOP = ('stop',)   # follow the base track to the end, never activating
+_PLAN_DONE = ('done',)   # the path already completed (ran out the song in SP)
+
+
+class DPPather:
+    """Activation dynamic program over an already-built ScoreGraph.
+
+    A drop-in alternative to GraphPather that finds the same optimal score by a
+    different method. GraphPather enumerates every live path breadth-first;
+    DPPather observes that between two activations a path follows the base track
+    with no choices at all -- every note and SP phrase is collected
+    deterministically -- so the only decisions are *where* to activate (which in
+    turn fixes *how much* SP, since an activation always spends the whole meter,
+    see GraphPath.branch_activate). It evaluates each decision once instead of
+    carrying millions of paths.
+
+    Phase 3 (this prototype) targets **best-score parity**: DPPather.record's
+    best totalscore() must equal GraphPather's on every chart and every cap. It
+    is the correctness reference for the eventual C++ port (Phase 4). Full
+    field-by-field / ordering / variant parity is out of scope here.
+
+    Method. Rather than re-derive Hydra's SP, squeeze and backend scoring, the
+    DP *drives the real GraphPath state machine* over each deterministic
+    segment, branching only at genuine activation choices. Every segment score
+    is therefore identical to the BFS by construction. Reset state is the only
+    thing memoized:
+
+        key = (base_node_index, residual_sp, buffered_sqinout_sp)
+
+    From a reset (song start, or a base-track node just returned to by a
+    deactivation) the SP meter and the sp_ready_time along the forward base walk
+    are fully determined, so the fill-deadline legality check is exact without
+    carrying sp_ready_time as fuzzy state. Best(key) returns the top
+    (depth_value + 1) distinct future scores, each with a backtrack plan; the
+    winning plans are replayed once through the real GraphPath code to build
+    genuine hydata.Path objects.
+
+    Known limitations (Phase 3): the reset-state memo is only sound when
+    hymisc.FLAG_SKIPPED_DYNAMICS is False (its default) -- the skipped-dynamic
+    penalty makes future score depend on skip history, which the memo does not
+    carry. incumbent, ms_filter and cb_pathsprogress are accepted for interface
+    compatibility but ignored.
+    """
+
+    def __init__(self):
+        self.record = hydata.HydraRecord()
+
+    def read(
+        self, graph, depth_mode, depth_value, ms_filter, cb_pathsprogress=None,
+        incumbent=None
+    ):
+        self.record.ms_limit = ms_filter
+
+        if hynative.SEARCH_ENABLED:
+            self._read_native(
+                graph, depth_mode, depth_value, ms_filter, cb_pathsprogress)
+            return
+
+        self._graph = graph
+        self._sp_cap = graph.sp_meter_cap
+        self._depth_mode = depth_mode
+        self._depth_value = depth_value
+        self._k = depth_value + 1
+
+        # Index the base track. It is a single linear chain, and every
+        # deactivation lands on one of its nodes, so identity -> index is a
+        # complete addressing scheme for reset points and candidates.
+        self._base_nodes = []
+        self._index = {}
+        node = graph.start
+        while node is not None:
+            self._index[node] = len(self._base_nodes)
+            self._base_nodes.append(node)
+            node = node.adv_edge.dest if node.adv_edge else None
+
+        # sp_ready_time is only read for the fill-deadline check, and only its
+        # .ms matters. The start of the song is the earliest ms in it, so using
+        # it as a stand-in ready time when pre-computing an activation's SP
+        # outcomes can never make a genuinely-legal activation look illegal.
+        self._dummy_ready = graph.start.timecode
+
+        self._node_memo = {}
+        self._act_memo = {}
+
+        # Deep charts chain many activations; the DP recurses once per activation
+        # in the longest surviving chain. Give it headroom.
+        old_limit = sys.getrecursionlimit()
+        sys.setrecursionlimit(max(old_limit, 1000000))
+        try:
+            entries = self._best_from_node(0, 0, None, 0)
+        finally:
+            sys.setrecursionlimit(old_limit)
+
+        datas = [self._replay(plan) for _score, plan in entries]
+        datas.sort(key=lambda d: d.totalscore(), reverse=True)
+        for data in datas:
+            data.detach_variants()
+            data.prepare_variants()
+            self.record._paths.append(data)
+
+    def _read_native(
+        self, graph, depth_mode, depth_value, ms_filter, cb_pathsprogress
+    ):
+        """read(), with the DP run by the C++ engine (hy_dp_search).
+
+        Mirrors GraphPather._read_native: the graph is flattened, crosses the
+        boundary once, and comes back as the same hydata.Path objects the pure
+        Python DP would have built. ms_filter and incumbent are not passed --
+        the DP ignores them, exactly as the Python prototype does.
+
+        """
+        flat = hyflat.flatten(graph)
+        paths = hynative.dp_search(
+            flat, depth_mode, depth_value, ms_filter,
+            hymisc.FLAG_SKIPPED_DYNAMICS, cb_pathsprogress,
+        )
+        self.record._paths.extend(paths)
+
+    # -- The DP -------------------------------------------------------------
+
+    def _best_from_node(self, node_index, sp, spr, buffered):
+        """Top-k (score, plan) achievable from *arriving at* a base node.
+
+        This is the candidate-granularity recurrence. Its only two moves are
+        "activate here" (if this node is a legal activation candidate) and "skip
+        to the next candidate". Skipping recurses a *single* step to the next
+        candidate rather than walking to the end of the song and fanning out
+        over every downstream candidate, and the memo is keyed at every
+        candidate and landing -- so paths from different resets that converge on
+        the same (node, meter) state share one sub-result. That is what turns
+        the old O(candidates^2) reset fan-out into a per-candidate DP.
+
+        The memo key carries sp_ready_time (its tick) because it gates the
+        fill-deadline legality of activating here and is *not* implied by
+        (node, sp): two histories can reach a node with the same meter but a
+        different ready time. It is set once when the meter first reaches two
+        bars and then held unchanged across skips, so it rides through the
+        chain until an activation resets it. buffered rides along for the rare
+        squeeze-out landing that lands directly on a candidate.
+
+        The score returned excludes the base track already consumed to *reach*
+        this node; the caller adds that. Plans are identical in shape to before
+        (('act', base_index, outcome_index, child) / _PLAN_STOP / _PLAN_DONE),
+        so _replay is unchanged.
+        """
+        spr_key = spr.ticks if spr is not None else -1
+        key = (node_index, sp, spr_key, buffered)
+        cached = self._node_memo.get(key)
+        if cached is not None:
+            return cached
+
+        options = []
+        node = self._base_nodes[node_index]
+        be = node.branch_edge
+
+        # Option A: activate at this node, if it is a legal candidate.
+        if (
+            be is not None and sp >= 2 and spr is not None
+            and be.activation_fill_deadline_ms - spr.ms >= -70
+        ):
+            for oc in self._activation_outcomes(node, sp):
+                if oc['completed']:
+                    options.append((
+                        oc['delta'],
+                        ('act', node_index, oc['idx'], _PLAN_DONE),
+                    ))
+                else:
+                    landing_index = self._index[oc['landing']]
+                    for fut_score, fut_plan in self._best_from_node(
+                        landing_index, oc['residual'], None, oc['buffered']
+                    ):
+                        options.append((
+                            oc['delta'] + fut_score,
+                            ('act', node_index, oc['idx'], fut_plan),
+                        ))
+
+        # Option B: skip -- walk the base track to the next candidate (or the
+        # end), then continue from there.
+        base_seg, next_index, sp2, spr2, buf2 = self._walk_to_next_candidate(
+            node_index, sp, spr, buffered)
+        if next_index is None:
+            options.append((base_seg, _PLAN_STOP))
+        else:
+            for fut_score, fut_plan in self._best_from_node(
+                next_index, sp2, spr2, buf2
+            ):
+                options.append((base_seg + fut_score, fut_plan))
+
+        result = self._merge_topk(options)
+        self._node_memo[key] = result
+        return result
+
+    def _walk_to_next_candidate(self, node_index, sp, spr, buffered):
+        """Drive the base track forward from a node to the next candidate.
+
+        Returns (base_score, next_candidate_index_or_None, sp, sp_ready_time,
+        buffered) at that candidate. Reuses GraphPath.advance so the base score
+        and the meter/ready-time evolution are exactly the BFS's. The base score
+        between two base nodes is state-independent, but the meter is not, so
+        this is driven per (entry state) rather than precomputed here.
+        """
+        seg = GraphPath()
+        seg.currentnode = self._base_nodes[node_index]
+        seg.sp = sp
+        seg.buffered_sqinout_sp = buffered
+        seg.sp_ready_time = spr
+        seg.sp_end_time = None
+        seg.data = hydata.Path()
+        seg.score = 0
+
+        sp_cap = self._sp_cap
+        while True:
+            seg.advance(sp_cap)
+            node = seg.currentnode
+            if node is None or node.is_sp:
+                # End of song (or the guard the base track never trips).
+                return (seg.score, None, seg.sp, seg.sp_ready_time,
+                        seg.buffered_sqinout_sp)
+            if node.branch_edge is not None:
+                return (seg.score, self._index[node], seg.sp,
+                        seg.sp_ready_time, seg.buffered_sqinout_sp)
+
+    def _activation_outcomes(self, cand_node, sp):
+        """Every way activating at cand_node holding `sp` bars can resolve.
+
+        Returns a list of outcome dicts with pure score deltas (frontend + SP
+        track + backend adjustments, excluding all base-track score before the
+        activation), each landing the path back on the base track or completing
+        it in SP. Depends only on (candidate, sp), so it is memoized.
+        """
+        key = (self._index[cand_node], sp)
+        cached = self._act_memo.get(key)
+        if cached is not None:
+            return cached
+
+        seed = GraphPath()
+        seed.currentnode = cand_node
+        seed.sp = sp
+        seed.sp_ready_time = self._dummy_ready
+        seed.data = hydata.Path()
+        seed.score = 0
+        activated = seed.branch_activate()
+
+        outcomes = self._simulate_sp(activated)
+        self._act_memo[key] = outcomes
+        return outcomes
+
+    def _simulate_sp(self, active_path):
+        """Follow an activated path through the SP track, collecting outcomes.
+
+        Reuses GraphPath.advance / branch_deactivate, so the SP scoring, the
+        sqin/sqout branching (which yields a squeezed-out deactivation *and* a
+        continuing path) and backend adjustments are exactly the BFS's.
+        """
+        sp_cap = self._sp_cap
+        outcomes = []
+        p = active_path
+        idx = 0
+        while p.currentnode is not None:
+            p.advance(sp_cap)
+            node = p.currentnode
+            if node is None:
+                # The song ended while still in SP: a completed path.
+                outcomes.append({
+                    'idx': idx, 'completed': True,
+                    'delta': p.data.totalscore(), 'leftover': p.sp,
+                })
+                break
+            if node.is_sp:
+                can_extend, branchpath = p.branch_deactivate()
+                if branchpath is not None:
+                    outcomes.append({
+                        'idx': idx, 'completed': False,
+                        'delta': branchpath.data.totalscore(),
+                        'landing': branchpath.currentnode,
+                        'residual': branchpath.sp,
+                        'buffered': branchpath.buffered_sqinout_sp,
+                    })
+                    idx += 1
+                if not can_extend:
+                    break
+            else:
+                break
+        return outcomes
+
+    def _merge_topk(self, options):
+        """Collapse (score, plan) options to the best plan per distinct score,
+        then keep the depth-mode's slice: the top k distinct scores ('scores'),
+        or every score within depth_value points of the best ('points')."""
+        if not options:
+            return []
+        best_plan = {}
+        for score, plan in options:
+            if score not in best_plan:
+                best_plan[score] = plan
+        scores = sorted(best_plan, reverse=True)
+        if self._depth_mode == 'points':
+            best = scores[0]
+            scores = [s for s in scores if s + self._depth_value >= best]
+        else:
+            scores = scores[:self._k]
+        return [(s, best_plan[s]) for s in scores]
+
+    # -- Reconstruction -----------------------------------------------------
+
+    def _replay(self, plan):
+        """Rebuild a hydata.Path by replaying a backtrack plan through the real
+        GraphPath code, so the result carries genuine activations, backends and
+        squeezes -- not just the right total."""
+        sp_cap = self._sp_cap
+        p = GraphPath()
+        p.currentnode = self._graph.start
+
+        while True:
+            if plan is _PLAN_DONE:
+                break
+            if plan is _PLAN_STOP:
+                while p.currentnode is not None:
+                    p.advance(sp_cap)
+                    node = p.currentnode
+                    if node is not None and not node.is_sp and node.branch_edge:
+                        p.branch_activate()
+                break
+
+            _tag, cand_index, outcome_idx, child = plan
+
+            # Advance to the chosen candidate, mirroring skipped activations so
+            # skip counts and e-offsets stay faithful.
+            while self._index.get(p.currentnode) != cand_index:
+                p.advance(sp_cap)
+                node = p.currentnode
+                if node is None:
+                    break
+                if (
+                    not node.is_sp and node.branch_edge
+                    and self._index[node] != cand_index
+                ):
+                    p.branch_activate()
+
+            activated = p.branch_activate()
+
+            # Follow the SP track to the recorded outcome.
+            q = activated
+            idx = 0
+            landing = None
+            while q.currentnode is not None:
+                q.advance(sp_cap)
+                node = q.currentnode
+                if node is None:
+                    landing = ('completed', q)
+                    break
+                if node.is_sp:
+                    can_extend, branchpath = q.branch_deactivate()
+                    if branchpath is not None:
+                        if idx == outcome_idx:
+                            landing = ('deact', branchpath)
+                            break
+                        idx += 1
+                    if not can_extend:
+                        landing = ('deact', branchpath)
+                        break
+                else:
+                    break
+
+            if landing is None or landing[0] == 'completed':
+                p = landing[1] if landing else q
+                plan = _PLAN_DONE
+                continue
+            p = landing[1]
+            plan = child
+
+        p.data.leftover_sp = p.sp
+        return p.data
 
 
 def category_scores(chord, combo):

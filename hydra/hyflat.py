@@ -81,13 +81,25 @@ class FlatEdge:
 
 
 class FlatNode:
-    __slots__ = ('tick', 'is_sp', 'adv_edge', 'branch_edge', 'source')
+    __slots__ = (
+        'tick', 'is_sp', 'adv_edge', 'branch_edge',
+        'base_suffix', 'max_suffix', 'total_spscore_suffix',
+        'remaining_sp_phrases', 'max_spscore_density',
+        'source',
+    )
 
     def __init__(self):
         self.tick = NO_TIME
         self.is_sp = False
         self.adv_edge = -1
         self.branch_edge = -1
+        # Suffix bounds from ScoreGraph.compute_bounds, carried so the native
+        # search can run the same tight bound pruning the Python search does.
+        self.base_suffix = 0
+        self.max_suffix = 0
+        self.total_spscore_suffix = 0
+        self.remaining_sp_phrases = 0
+        self.max_spscore_density = 0.0
         self.source = None
 
 
@@ -180,6 +192,11 @@ def flatten(graph):
             fn, node = pending_nodes.pop()
             fn.adv_edge = edge_id(node.adv_edge)
             fn.branch_edge = edge_id(node.branch_edge)
+            fn.base_suffix = node.base_suffix
+            fn.max_suffix = node.max_suffix
+            fn.total_spscore_suffix = node.total_spscore_suffix
+            fn.remaining_sp_phrases = node.remaining_sp_phrases
+            fn.max_spscore_density = node.max_spscore_density
 
         while pending_edges:
             fe, edge = pending_edges.pop()
@@ -262,6 +279,16 @@ def verify_roundtrip(graph, flat):
         node = fn.source
         check(fn.tick == _tick(node.timecode), f"node {i}: tick differs")
         check(fn.is_sp == bool(node.is_sp), f"node {i}: is_sp differs")
+        check(fn.base_suffix == node.base_suffix,
+              f"node {i}: base_suffix differs")
+        check(fn.max_suffix == node.max_suffix,
+              f"node {i}: max_suffix differs")
+        check(fn.total_spscore_suffix == node.total_spscore_suffix,
+              f"node {i}: total_spscore_suffix differs")
+        check(fn.remaining_sp_phrases == node.remaining_sp_phrases,
+              f"node {i}: remaining_sp_phrases differs")
+        check(fn.max_spscore_density == node.max_spscore_density,
+              f"node {i}: max_spscore_density differs")
 
         if node.adv_edge is None:
             check(fn.adv_edge == -1, f"node {i}: adv_edge should be absent")
