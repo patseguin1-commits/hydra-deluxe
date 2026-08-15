@@ -1,14 +1,13 @@
-# Hydra — C++ port build.
+# Hydra — Windows-only C++ build. Produces:
+#   * Hydra.exe / HydraUncapped.exe   — the two GUI editions
+#   * hydra_batch / hydra_report      — the command line tools
+#   * hydra_tests                     — the doctest parity/unit harness
+#   * a zip release via CPack (build_cpp.ps1 -Package)
 #
-# One Windows-only tree that will, phase by phase, replace the Python app. For
-# now it produces:
-#   * Hydra.exe      — the GUI shell (Phase 0: a blank docked ImGui window)
-#   * hydra_tests    — the doctest harness gating each ported module vs golden/
-#
-# Third-party code (ImGui, SQLite) is vendored under third_party/ and built
-# here so there is nothing to install but a compiler + CMake. The existing
-# algorithm core in native/ is compiled in place (not moved) — the Python DLL
-# build still uses those same files until the final cutover.
+# Third-party code (ImGui, SQLite, doctest, json, stb) is vendored under
+# third_party/ and built here so there is nothing to install but a compiler +
+# CMake. native/ holds the scoring/search core the Python-era accelerator
+# already proved out, compiled in place.
 #
 # Configure/build (CMake and MSVC come from Visual Studio; see build_cpp.ps1):
 #   cmake --preset default

@@ -25,6 +25,47 @@ Hungry for more info? Check out [the wiki](https://github.com/DragonDelgar/hydra
 8. Click a path on the left side to show its details on the right side.
 9. You can return to browsing songs by X-ing out of the Song Details window.
 
+## Command line tools
+
+Two console tools ship next to the app and share its settings and database
+(they read the same `hydra_settings.ini` / `hydra.db` beside the executable):
+
+```
+hydra_batch                    Analyze every chart folder from the app's settings
+hydra_batch <folder> [...]     ...or specific folders instead
+hydra_batch --redo             Re-analyze charts already stored
+hydra_batch --reindex          Only rebuild sort columns, no analysis
+hydra_batch --db <path>        Target a specific database
+
+hydra_report                   Sortable HTML report of stored paths (top 5 per chart)
+hydra_report --paths 20        Top 20 per chart
+hydra_report --all-paths       Everything stored
+hydra_report --out report.html
+```
+
+Both take `--uncapped` to operate on the uncapped edition's settings/records
+instead.
+
+## Building from source
+
+Hydra is a native Windows app: C++17, built with CMake and MSVC (Visual
+Studio's "Desktop development with C++" workload is all it needs — the build
+script finds the VS-bundled CMake itself). Third-party code (Dear ImGui,
+SQLite, doctest) is vendored under `third_party/`.
+
+```
+.\build_cpp.ps1              # configure + build everything (Release)
+.\build_cpp.ps1 -Package     # ...then zip a release (build-cpp\package\)
+.\build_cpp.ps1 -Target hydra_tests
+.\build-cpp\Release\hydra_tests.exe    # run the test suite
+```
+
+The parity tests read a generated `golden/` corpus that is not checked in;
+regenerate it from the frozen Python oracle preserved on the `python-oracle`
+git tag (check out the tag, create its venv, and run `tools/gen_golden.py`
+and `tools/gen_golden_report.py`). Everyday development of the app itself
+does not need it — only `hydra_tests` does.
+
 ## Hydra Uncapped
 
 Every path Hydra finds rests on one rule taken from Clone Hero: the Star Power
@@ -41,24 +82,18 @@ phrase collected during SP is always worth its full 2 measures.
 **Its scores are not achievable in Clone Hero.** It is a what-if for seeing how
 much the cap costs and where, not a set of paths to play.
 
-Run it from source with:
+Run `HydraUncapped.exe` (built and shipped alongside `Hydra.exe`), or pass
+`--uncapped` to the command line tools:
 
 ```
-python hydra_uncapped.py
+hydra_batch --uncapped
+hydra_report --uncapped
 ```
 
-or build it with `python build.py --uncapped` (producing `HydraUncapped.exe`
-next to the normal `HydraTest.exe`). The command line tools take `--uncapped`:
-
-```
-python hydra_batch.py --uncapped
-python hydra_report.py --uncapped
-```
-
-It keeps its own library, settings and records (`hyapp_uncapped.db`,
-`hyapp_uncapped.ini`), so it runs alongside the normal app without either one
-disturbing the other. Charts have to be scanned and analyzed in it once:
-capped records aren't reusable, and it marks them `(Update...)`.
+It keeps its own library, settings and records (`hydra_uncapped.db`,
+`hydra_uncapped_settings.ini`), so it runs alongside the normal app without
+either one disturbing the other. Charts have to be scanned and analyzed in it
+once: capped records aren't reusable, and it marks them `(Update...)`.
 
 ### How "no ceiling" is actually reached
 
@@ -75,10 +110,11 @@ and the score stops moving. So Hydra Uncapped raises the ceiling — 16, 32, 64,
 ceiling it settled on.
 
 Two agreeing runs are strong evidence, not proof. A chart that runs out of
-ladder, or out of time (`hymisc.SP_CAP_TIME_BUDGET`, 120s), says so in the path
-details instead of quietly passing for a finished answer.
+ladder, or out of time (the 120s ladder budget), says so in the path details
+instead of quietly passing for a finished answer.
 
-Measured on this library, Expert Pro Drums 2x, depth 4:
+Measured on this library with the Python build (Expert Pro Drums 2x, depth 4;
+the C++ build is faster still):
 
 | chart | capped | uncapped | settled at |
 |---|---|---|---|

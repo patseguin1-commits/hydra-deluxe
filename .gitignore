@@ -1,22 +1,27 @@
 # Hydra local outputs.
 output/*
 
-# pycache.
-hydra/__pycache__
-test/__pycache__
-
-# HyApp. The uncapped edition keeps its own set alongside these.
+# User data the app/CLIs write next to the executable. The uncapped edition
+# keeps its own set alongside these. (hyapp.* are the retired Python app's
+# names, kept ignored so an old working copy stays clean.)
+hydra.db
+hydra_settings.ini
+hydra_uncapped.db
+hydra_uncapped_settings.ini
 hyapp.ini
 hyapp.db
-records.json
 hyapp_uncapped.ini
 hyapp_uncapped.db
-records_uncapped.json
+
+# ImGui window layout, written wherever the app runs from.
+imgui.ini
 
 # Local utility scripts, anything else
 local/*
 
-# Generated golden oracle for the C++ port (large; rebuilt via tools/gen_golden.py).
+# Generated golden oracle for the C++ parity tests (large). Rebuild it from
+# the `python-oracle` tag: check it out and run tools/gen_golden.py and
+# tools/gen_golden_report.py.
 golden/
 
 # C++ build tree (CMake).
