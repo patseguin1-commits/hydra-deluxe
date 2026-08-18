@@ -72,21 +72,14 @@ std::pair<std::vector<ScanItem>, std::vector<std::string>> discover_charts(
     const std::vector<std::string>& rootfolders,
     const std::function<void(int)>& cb_progress = nullptr);
 
-// Same folder walk as discover_charts, counting only. Lets a caller show
-// progress for the (usually longer) metadata-reading pass that follows.
-// Mirrors hyutil.get_folder_count.
-int get_folder_count(const std::vector<std::string>& rootfolders,
-                     const std::function<void(int)>& cb_progress = nullptr);
-
-// Chord counts by code, for the "how big is this chart" display. Mirrors
-// hyutil.count_chart_chords; dispatches via load_songpath, so it takes any
-// supported chart type (.mid/.chart/.sng/.srb).
+// Chord counts by code, for the "how big is this chart" display. Dispatches
+// via load_songpath, so it takes any supported chart type
+// (.mid/.chart/.sng/.srb).
 std::map<std::string, int> count_chart_chords(const std::string& filepath);
 
 // The settings a batch run applies uniformly, mirroring the `settings` tuple
 // hybatch.analyze_for_store's job carries.
 struct AnalysisSettings {
-    std::string difficulty = "Expert";
     bool prodrums = true;
     bool bass2x = true;
     int depth_mode = 0;   // matches search/graph.h's DepthMode

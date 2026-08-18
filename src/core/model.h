@@ -92,8 +92,6 @@ public:
 
     int count() const;
     int hands_count() const;
-    int ghost_count() const;
-    int accent_count() const;
 
     std::string rowstr() const;
     std::string notationstr() const;
@@ -165,7 +163,6 @@ struct BackendSqueeze {
 
     bool operator==(const BackendSqueeze& o) const;
     std::string summarystr() const;
-    std::string ratingstr() const;
 };
 
 // Multiplier squeeze. Construction validates the chord+combo and throws

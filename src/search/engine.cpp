@@ -10,13 +10,6 @@
 #include <unordered_map>
 #include <vector>
 
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
-
 namespace hydra {
 
 namespace {
@@ -115,27 +108,19 @@ Enum enumerate(const ScoreGraph& graph) {
 // `n.tick` / `e.basescore`. Built per access from the objects.
 struct NodeView {
     int64_t tick;
-    int64_t base_suffix, max_suffix, total_spscore_suffix;
-    double max_spscore_density;
-    int32_t adv_edge, branch_edge, is_sp, remaining_sp_phrases;
+    int32_t adv_edge, branch_edge, is_sp;
 };
 struct EdgeView {
     int32_t dest;
     int32_t notecount, basescore, comboscore, spscore, soloscore, accentscore,
         ghostscore;
-    int32_t frontend_points, frontend_is_accent, frontend_is_ghost;
-    int32_t skipped_dynamic_points, late_sqin_count;
+    int32_t frontend_points;
+    int32_t late_sqin_count;
     double activation_fill_deadline_ms, sqinout_timing;
     int64_t sqinout_time, sqout_time, sqin_time;
 };
 
 // ---- engine data structures (verbatim from native/hydra_search.cpp) ------
-
-const int32_t PLAN_KIND_STOP = 0;
-const int32_t PLAN_KIND_DONE = 1;
-const int32_t PLAN_KIND_ACT = 2;
-const int32_t PLAN_STOP = 0;
-const int32_t PLAN_DONE = 1;
 
 struct Act {
     int32_t parent;
@@ -248,76 +233,13 @@ private:
     uint32_t stamp_ = 0;
 };
 
-// ---- activation DP structures -------------------------------------------
-struct DpEntry {
-    int64_t score;
-    int32_t plan;
-};
-struct DpOutcome {
-    int32_t completed;
-    int32_t idx;
-    int64_t delta;
-    int32_t landing;
-    int32_t residual;
-    int32_t buffered;
-};
-struct DpPlan {
-    int32_t kind;
-    int32_t cand_index;
-    int32_t outcome_idx;
-    int32_t child;
-};
-const int64_t DP_NO_READY = (int64_t)0x7FF8000000000000ll;
-inline int64_t dp_ready_bits(double sp_ready_ms) {
-    if (std::isnan(sp_ready_ms)) return DP_NO_READY;
-    int64_t b;
-    std::memcpy(&b, &sp_ready_ms, sizeof(b));
-    return b;
-}
-struct DpNodeKey {
-    int32_t node;
-    int32_t sp;
-    int32_t buffered;
-    int64_t ready_bits;
-    bool operator==(const DpNodeKey& o) const {
-        return node == o.node && sp == o.sp && buffered == o.buffered &&
-               ready_bits == o.ready_bits;
-    }
-};
-struct DpNodeKeyHash {
-    size_t operator()(const DpNodeKey& k) const {
-        auto mix = [](uint64_t x) {
-            x += 0x9E3779B97F4A7C15ull;
-            x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
-            x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
-            return x ^ (x >> 31);
-        };
-        uint64_t h = mix((uint64_t)(uint32_t)k.node);
-        h ^= mix(((uint64_t)(uint32_t)k.sp << 32) ^ (uint32_t)k.buffered) +
-             0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
-        h ^= mix((uint64_t)k.ready_bits) + 0x9E3779B97F4A7C15ull + (h << 6) +
-             (h >> 2);
-        return (size_t)h;
-    }
-};
-struct DpWalk {
-    int64_t base_score;
-    int32_t next_index;
-    int32_t sp;
-    int32_t buffered;
-    double sp_ready_ms;
-};
-inline uint64_t dp_act_key(int32_t cand_index, int32_t sp) {
-    return (uint64_t)(uint32_t)cand_index | ((uint64_t)(uint32_t)sp << 32);
-}
-
 // ---- the engine ----------------------------------------------------------
 
 class Engine {
 public:
     Engine(const Enum& en, bool has_sp_cap, int32_t sp_cap, int32_t depth_mode,
            int32_t depth_value, bool has_ms_filter, double ms_filter,
-           bool flag_skipped_dynamics, bool no_skips, bool hard_ms_filter)
+           bool no_skips, bool hard_ms_filter)
         : en_(en),
           has_sp_cap_(has_sp_cap),
           sp_cap_(sp_cap),
@@ -325,12 +247,10 @@ public:
           depth_value_(depth_value),
           has_ms_filter_(has_ms_filter),
           ms_filter_(ms_filter),
-          flag_skipped_dynamics_(flag_skipped_dynamics),
           no_skips_(no_skips),
           hard_ms_filter_(hard_ms_filter) {}
 
     bool run();
-    bool dp_run();
 
     // Optional 0..1 progress sink, called from run()'s BFS sweep as the frontier
     // advances through the chart. Reported values are monotonic non-decreasing.
@@ -345,14 +265,9 @@ private:
         const ScoreGraphNode* o = en_.nodes[(size_t)i];
         NodeView v;
         v.tick = o->timecode.ticks();
-        v.base_suffix = o->base_suffix;
-        v.max_suffix = o->max_suffix;
-        v.total_spscore_suffix = o->total_spscore_suffix;
-        v.max_spscore_density = o->max_spscore_density;
         v.adv_edge = en_.edge_of(o->adv_edge);
         v.branch_edge = en_.edge_of(o->branch_edge);
         v.is_sp = o->is_sp ? 1 : 0;
-        v.remaining_sp_phrases = (int32_t)o->remaining_sp_phrases;
         return v;
     }
     EdgeView edge(int32_t i) const {
@@ -366,16 +281,7 @@ private:
         v.soloscore = (int32_t)o->soloscore;
         v.accentscore = (int32_t)o->accentscore;
         v.ghostscore = (int32_t)o->ghostscore;
-        v.frontend_points = 0;
-        v.frontend_is_accent = 0;
-        v.frontend_is_ghost = 0;
-        if (o->frontend.has_value()) {
-            v.frontend_points = o->frontend->points;
-            const ChordNote& an = o->frontend->chord.activation_note();
-            v.frontend_is_accent = an.is_accent() ? 1 : 0;
-            v.frontend_is_ghost = an.is_ghost() ? 1 : 0;
-        }
-        v.skipped_dynamic_points = o->skipped_dynamic_points;
+        v.frontend_points = o->frontend.has_value() ? o->frontend->points : 0;
         v.late_sqin_count = o->late_sqin_count;
         v.activation_fill_deadline_ms =
             o->activation_fill_deadline_ms.value_or(0.0);
@@ -431,24 +337,10 @@ private:
 
     void reduce_iteration_paths();
     void reduce_group(const int32_t* members, int32_t n);
-    void prune_hopeless_paths();
 
     void emit_path(const Path& p);
     void emit_variant(int32_t v, int32_t depth);
     void emit_acts(int32_t act_tail, int32_t* begin, int32_t* end);
-
-    void dp_build_index();
-    Path dp_seed(int32_t node, int32_t sp, int32_t buffered, double ready_ms);
-    std::vector<DpEntry> dp_best_from_node(int32_t node_index, int32_t sp,
-                                           double sp_ready_ms, int32_t buffered);
-    DpWalk dp_walk_to_next_candidate(int32_t node_index, int32_t sp,
-                                     double sp_ready_ms, int32_t buffered);
-    const std::vector<DpOutcome>& dp_activation_outcomes(int32_t cand_index,
-                                                         int32_t sp);
-    void dp_simulate_sp(Path p, std::vector<DpOutcome>& outcomes);
-    std::vector<DpEntry> dp_merge_topk(std::vector<DpEntry>& options);
-    int32_t dp_make_act(int32_t cand_index, int32_t outcome_idx, int32_t child);
-    Path dp_replay(int32_t plan);
 
     const Enum& en_;
     bool has_sp_cap_;
@@ -457,7 +349,6 @@ private:
     int32_t depth_value_;
     bool has_ms_filter_;
     double ms_filter_;
-    bool flag_skipped_dynamics_;
     // Every activation must record skips == 0: the declining parent is dropped
     // whenever branch_activate produced a real child. BFS only.
     bool no_skips_;
@@ -483,7 +374,6 @@ private:
     std::vector<int32_t> survivors_;
     std::vector<int64_t> beating_;
     std::vector<int64_t> dominating_;
-    std::vector<int64_t> guaranteed_;
     StampMap group_map_;
     StampMap tie_map_;
     StampMap distinct_map_;
@@ -496,20 +386,6 @@ private:
     std::vector<OutSq> out_sqs_;
     std::vector<int32_t> chain_scratch_;
     std::vector<int32_t> sq_scratch_;
-
-    std::vector<int32_t> base_nodes_;
-    std::vector<int32_t> node_to_base_;
-    std::unordered_map<DpNodeKey, std::vector<DpEntry>, DpNodeKeyHash> dp_memo_;
-    std::unordered_map<uint64_t, std::vector<DpOutcome>> dp_act_memo_;
-    std::vector<DpPlan> plans_;
-    bool dp_points_mode_ = false;
-    int32_t dp_depth_value_ = 0;
-    int32_t dp_k_ = 1;
-    double dp_dummy_ready_ms_ = 0.0;
-    bool dp_failed_ = false;
-
-    // pruning is off in every golden config, but kept for fidelity.
-    bool enable_bound_prune_ = false;
 
     std::function<void(float)> progress_cb_;
     float progress_reported_ = -1.0f;
@@ -629,19 +505,6 @@ bool Engine::branch_activate(Path& p, Path* child) {
     c.sp_end_time = aiet_val;
 
     p.currentskips += 1;
-
-    if (flag_skipped_dynamics_) {
-        if (e.frontend_is_accent) {
-            p.sc[4] -= e.skipped_dynamic_points;
-            p.skipped_accents += 1;
-            p.score -= e.skipped_dynamic_points;
-        }
-        if (e.frontend_is_ghost) {
-            p.sc[5] -= e.skipped_dynamic_points;
-            p.skipped_ghosts += 1;
-            p.score -= e.skipped_dynamic_points;
-        }
-    }
 
     if (!has_value(p.skipped_e_offset)) p.skipped_e_offset = e_offset;
 
@@ -919,64 +782,6 @@ void Engine::reduce_group(const int32_t* members, int32_t n) {
     }
 }
 
-// --- prune_hopeless_paths ------------------------------------------------
-void Engine::prune_hopeless_paths() {
-    const int32_t n = (int32_t)cur_.size();
-
-    guaranteed_.clear();
-    for (int32_t i = 0; i < n; ++i) {
-        const Path& p = cur_[(size_t)i];
-        if (p.node < 0) {
-            guaranteed_.push_back(p.score);
-        } else if (!node(p.node).is_sp) {
-            guaranteed_.push_back(p.score + node(p.node).base_suffix);
-        }
-    }
-    if (guaranteed_.empty()) return;
-
-    int64_t bar;
-    if (depth_mode_ == DEPTH_SCORES) {
-        std::sort(guaranteed_.begin(), guaranteed_.end(),
-                  [](int64_t a, int64_t b) { return a > b; });
-        guaranteed_.erase(std::unique(guaranteed_.begin(), guaranteed_.end()),
-                          guaranteed_.end());
-        const int64_t band = (int64_t)depth_value_ + 1;
-        if ((int64_t)guaranteed_.size() < band) return;
-        bar = guaranteed_[(size_t)(band - 1)];
-    } else if (depth_mode_ == DEPTH_POINTS) {
-        int64_t mx = guaranteed_[0];
-        for (size_t i = 1; i < guaranteed_.size(); ++i) {
-            if (guaranteed_[i] > mx) mx = guaranteed_[i];
-        }
-        bar = mx - depth_value_;
-    } else {
-        return;
-    }
-
-    const double bar_d = (double)bar;
-    for (int32_t i = 0; i < n; ++i) {
-        if (removed_[(size_t)i]) continue;
-        const Path& p = cur_[(size_t)i];
-        if (p.node < 0) continue;
-        const NodeView nd = node(p.node);
-
-        double ceiling;
-        if (nd.is_sp) {
-            ceiling = (double)p.score + (double)nd.max_suffix;
-        } else {
-            const int64_t total_sp = nd.total_spscore_suffix;
-            const double sp_measures =
-                2.0 * (double)(p.sp + nd.remaining_sp_phrases);
-            double tight_sp = sp_measures * nd.max_spscore_density;
-            if (tight_sp > (double)total_sp) tight_sp = (double)total_sp;
-            ceiling = (double)p.score + (double)nd.max_suffix -
-                      (double)total_sp + tight_sp;
-        }
-
-        if (ceiling < bar_d) removed_[(size_t)i] = 1;
-    }
-}
-
 // --- reduce_iteration_paths ----------------------------------------------
 void Engine::reduce_iteration_paths() {
     const int32_t n = (int32_t)cur_.size();
@@ -1054,10 +859,6 @@ void Engine::reduce_iteration_paths() {
         if (end - begin > 1) {
             reduce_group(&group_members_[(size_t)begin], end - begin);
         }
-    }
-
-    if (enable_bound_prune_) {
-        prune_hopeless_paths();
     }
 
     int32_t w = 0;
@@ -1242,349 +1043,6 @@ bool Engine::run() {
     return true;
 }
 
-// --- DP methods ----------------------------------------------------------
-void Engine::dp_build_index() {
-    node_to_base_.assign(en_.nodes.size(), -1);
-    base_nodes_.clear();
-    for (int32_t nd = en_.start; nd >= 0;) {
-        node_to_base_[(size_t)nd] = (int32_t)base_nodes_.size();
-        base_nodes_.push_back(nd);
-        const NodeView n = node(nd);
-        nd = n.adv_edge >= 0 ? edge(n.adv_edge).dest : -1;
-    }
-}
-
-Path Engine::dp_seed(int32_t nd, int32_t sp, int32_t buffered, double ready_ms) {
-    Path p;
-    std::memset(&p, 0, sizeof(p));
-    p.node = nd;
-    p.sp = sp;
-    p.buffered = buffered;
-    p.act_tail = -1;
-    p.var_head = -1;
-    p.tied_count = 1;
-    p.sp_end_time = NO_TIME;
-    p.sp_ready_ms = ready_ms;
-    p.skipped_e_offset = NO_DOUBLE;
-    p.diff_prefix = NO_DOUBLE;
-    return p;
-}
-
-DpWalk Engine::dp_walk_to_next_candidate(int32_t node_index, int32_t sp,
-                                         double sp_ready_ms, int32_t buffered) {
-    Path seg = dp_seed(base_nodes_[(size_t)node_index], sp, buffered, sp_ready_ms);
-    for (;;) {
-        advance(seg);
-        if (seg.node == NODE_BROKEN) {
-            dp_failed_ = true;
-            return DpWalk{0, -1, sp, buffered, sp_ready_ms};
-        }
-        if (seg.node < 0 || node(seg.node).is_sp) {
-            return DpWalk{seg.score, -1, seg.sp, seg.buffered, seg.sp_ready_ms};
-        }
-        if (node(seg.node).branch_edge >= 0) {
-            return DpWalk{seg.score, node_to_base_[(size_t)seg.node], seg.sp,
-                          seg.buffered, seg.sp_ready_ms};
-        }
-    }
-}
-
-std::vector<DpEntry> Engine::dp_best_from_node(int32_t node_index, int32_t sp,
-                                               double sp_ready_ms,
-                                               int32_t buffered) {
-    const DpNodeKey key{node_index, sp, buffered, dp_ready_bits(sp_ready_ms)};
-    auto it = dp_memo_.find(key);
-    if (it != dp_memo_.end()) return it->second;
-
-    std::vector<DpEntry> options;
-    const NodeView n = node(base_nodes_[(size_t)node_index]);
-
-    if (n.branch_edge >= 0 && sp >= 2 && has_value(sp_ready_ms)) {
-        const EdgeView be = edge(n.branch_edge);
-        if (be.activation_fill_deadline_ms - sp_ready_ms >=
-            -kCalibrationFillWindowMs) {
-            const std::vector<DpOutcome>& outs =
-                dp_activation_outcomes(node_index, sp);
-            if (dp_failed_) return {};
-            for (const DpOutcome& oc : outs) {
-                if (oc.completed) {
-                    const int32_t plan =
-                        dp_make_act(node_index, oc.idx, PLAN_DONE);
-                    options.push_back(DpEntry{oc.delta, plan});
-                } else {
-                    std::vector<DpEntry> futs = dp_best_from_node(
-                        node_to_base_[(size_t)oc.landing], oc.residual,
-                        NO_DOUBLE, oc.buffered);
-                    if (dp_failed_) return {};
-                    for (const DpEntry& fe : futs) {
-                        const int32_t plan =
-                            dp_make_act(node_index, oc.idx, fe.plan);
-                        options.push_back(DpEntry{oc.delta + fe.score, plan});
-                    }
-                }
-            }
-        }
-    }
-
-    DpWalk w = dp_walk_to_next_candidate(node_index, sp, sp_ready_ms, buffered);
-    if (dp_failed_) return {};
-    if (w.next_index < 0) {
-        options.push_back(DpEntry{w.base_score, PLAN_STOP});
-    } else {
-        std::vector<DpEntry> futs =
-            dp_best_from_node(w.next_index, w.sp, w.sp_ready_ms, w.buffered);
-        if (dp_failed_) return {};
-        for (const DpEntry& fe : futs) {
-            options.push_back(DpEntry{w.base_score + fe.score, fe.plan});
-        }
-    }
-
-    std::vector<DpEntry> result = dp_merge_topk(options);
-    dp_memo_.emplace(key, result);
-    return result;
-}
-
-const std::vector<DpOutcome>& Engine::dp_activation_outcomes(int32_t cand_index,
-                                                             int32_t sp) {
-    const uint64_t key = dp_act_key(cand_index, sp);
-    auto it = dp_act_memo_.find(key);
-    if (it != dp_act_memo_.end()) return it->second;
-
-    Path seed = dp_seed(base_nodes_[(size_t)cand_index], sp, 0, dp_dummy_ready_ms_);
-    Path activated;
-    std::vector<DpOutcome> outcomes;
-    const bool ok = branch_activate(seed, &activated);
-    if (seed.node == NODE_BROKEN) {
-        dp_failed_ = true;
-    } else if (ok) {
-        dp_simulate_sp(activated, outcomes);
-    }
-
-    auto res = dp_act_memo_.emplace(key, std::move(outcomes));
-    return res.first->second;
-}
-
-void Engine::dp_simulate_sp(Path p, std::vector<DpOutcome>& outcomes) {
-    int32_t idx = 0;
-    while (p.node >= 0) {
-        advance(p);
-        if (p.node == NODE_BROKEN) {
-            dp_failed_ = true;
-            return;
-        }
-        if (p.node < 0) {
-            DpOutcome o;
-            o.completed = 1;
-            o.idx = idx;
-            o.delta = p.score;
-            o.landing = -1;
-            o.residual = 0;
-            o.buffered = 0;
-            outcomes.push_back(o);
-            break;
-        }
-        if (node(p.node).is_sp) {
-            Path child;
-            bool has_child = false;
-            const bool can_extend = branch_deactivate(p, &child, &has_child);
-            if (has_child) {
-                DpOutcome o;
-                o.completed = 0;
-                o.idx = idx;
-                o.delta = child.score;
-                o.landing = child.node;
-                o.residual = child.sp;
-                o.buffered = child.buffered;
-                outcomes.push_back(o);
-                ++idx;
-            }
-            if (!can_extend) break;
-        } else {
-            break;
-        }
-    }
-}
-
-std::vector<DpEntry> Engine::dp_merge_topk(std::vector<DpEntry>& options) {
-    if (options.empty()) return {};
-
-    std::unordered_map<int64_t, int32_t> best_plan;
-    best_plan.reserve(options.size() * 2);
-    for (const DpEntry& e : options) best_plan.emplace(e.score, e.plan);
-
-    std::vector<int64_t> scores;
-    scores.reserve(best_plan.size());
-    for (const auto& kv : best_plan) scores.push_back(kv.first);
-    std::sort(scores.begin(), scores.end(), std::greater<int64_t>());
-
-    if (dp_points_mode_) {
-        const int64_t best = scores[0];
-        std::vector<int64_t> kept;
-        for (int64_t s : scores) {
-            if (s + dp_depth_value_ >= best) kept.push_back(s);
-        }
-        scores.swap(kept);
-    } else if ((int32_t)scores.size() > dp_k_) {
-        scores.resize((size_t)dp_k_);
-    }
-
-    std::vector<DpEntry> result;
-    result.reserve(scores.size());
-    for (int64_t s : scores) result.push_back(DpEntry{s, best_plan[s]});
-    return result;
-}
-
-int32_t Engine::dp_make_act(int32_t cand_index, int32_t outcome_idx,
-                            int32_t child) {
-    DpPlan pl;
-    pl.kind = PLAN_KIND_ACT;
-    pl.cand_index = cand_index;
-    pl.outcome_idx = outcome_idx;
-    pl.child = child;
-    plans_.push_back(pl);
-    return (int32_t)plans_.size() - 1;
-}
-
-Path Engine::dp_replay(int32_t plan) {
-    Path p = dp_seed(en_.start, 0, 0, NO_DOUBLE);
-
-    for (;;) {
-        const DpPlan pl = plans_[(size_t)plan];
-        if (pl.kind == PLAN_KIND_DONE) break;
-        if (pl.kind == PLAN_KIND_STOP) {
-            while (p.node >= 0) {
-                advance(p);
-                if (p.node == NODE_BROKEN) {
-                    dp_failed_ = true;
-                    return p;
-                }
-                if (p.node >= 0 && !node(p.node).is_sp &&
-                    node(p.node).branch_edge >= 0) {
-                    Path child;
-                    branch_activate(p, &child);
-                    if (p.node == NODE_BROKEN) {
-                        dp_failed_ = true;
-                        return p;
-                    }
-                }
-            }
-            break;
-        }
-
-        const int32_t cand_index = pl.cand_index;
-        const int32_t outcome_idx = pl.outcome_idx;
-        const int32_t child_plan = pl.child;
-
-        while (!(p.node >= 0 && node_to_base_[(size_t)p.node] == cand_index)) {
-            advance(p);
-            if (p.node == NODE_BROKEN) {
-                dp_failed_ = true;
-                return p;
-            }
-            if (p.node < 0) break;
-            if (!node(p.node).is_sp && node(p.node).branch_edge >= 0 &&
-                node_to_base_[(size_t)p.node] != cand_index) {
-                Path child;
-                branch_activate(p, &child);
-                if (p.node == NODE_BROKEN) {
-                    dp_failed_ = true;
-                    return p;
-                }
-            }
-        }
-        if (p.node < 0) {
-            dp_failed_ = true;
-            return p;
-        }
-
-        Path activated;
-        const bool ok = branch_activate(p, &activated);
-        if (p.node == NODE_BROKEN || !ok) {
-            dp_failed_ = true;
-            return p;
-        }
-
-        Path q = activated;
-        int32_t idx = 0;
-        int32_t landing_kind = -1;
-        Path landing_path{};
-        while (q.node >= 0) {
-            advance(q);
-            if (q.node == NODE_BROKEN) {
-                dp_failed_ = true;
-                return q;
-            }
-            if (q.node < 0) {
-                landing_kind = 0;
-                landing_path = q;
-                break;
-            }
-            if (node(q.node).is_sp) {
-                Path child;
-                bool has_child = false;
-                const bool can_extend = branch_deactivate(q, &child, &has_child);
-                if (has_child) {
-                    if (idx == outcome_idx) {
-                        landing_kind = 1;
-                        landing_path = child;
-                        break;
-                    }
-                    ++idx;
-                }
-                if (!can_extend) {
-                    landing_kind = 1;
-                    landing_path = child;
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
-
-        if (landing_kind != 1) {
-            p = (landing_kind == 0) ? landing_path : q;
-            plan = PLAN_DONE;
-            continue;
-        }
-        p = landing_path;
-        plan = child_plan;
-    }
-
-    return p;
-}
-
-bool Engine::dp_run() {
-    dp_build_index();
-
-    dp_points_mode_ = depth_mode_ == DEPTH_POINTS;
-    dp_depth_value_ = depth_value_;
-    dp_k_ = depth_value_ + 1;
-    dp_dummy_ready_ms_ = -1e18;
-    dp_failed_ = false;
-
-    plans_.clear();
-    plans_.push_back(DpPlan{PLAN_KIND_STOP, -1, -1, -1});
-    plans_.push_back(DpPlan{PLAN_KIND_DONE, -1, -1, -1});
-
-    std::vector<DpEntry> entries = dp_best_from_node(0, 0, NO_DOUBLE, 0);
-    if (dp_failed_) return false;
-
-    std::vector<Path> finals;
-    finals.reserve(entries.size());
-    for (const DpEntry& e : entries) {
-        Path fp = dp_replay(e.plan);
-        if (dp_failed_) return false;
-        finals.push_back(fp);
-    }
-
-    std::stable_sort(finals.begin(), finals.end(),
-                     [](const Path& a, const Path& b) {
-                         return a.score > b.score;
-                     });
-    for (const Path& fp : finals) emit_path(fp);
-    return true;
-}
-
 // ---- rebuild the decision log into hydata Paths -------------------------
 // Mirrors hynative._rebuild + _graph_multsqueezes, reading the graph objects
 // straight off the enumeration.
@@ -1693,56 +1151,20 @@ std::vector<MPath> rebuild(const Enum& en, const std::vector<OutPath>& out_paths
 
 std::vector<MPath> run_search(const ScoreGraph& graph, int depth_mode,
                               int depth_value, std::optional<double> ms_filter,
-                              bool use_dp, bool no_skips, bool hard_ms_filter,
+                              bool no_skips, bool hard_ms_filter,
                               const std::function<void(float)>& on_progress) {
     Enum en = enumerate(graph);
 
     const bool has_cap = graph.sp_meter_cap().has_value();
     const int32_t cap = static_cast<int32_t>(graph.sp_meter_cap().value_or(0));
 
-    // The DP enumerates activation sets directly and never walks the BFS
-    // decline branch or reduce_iteration_paths, so it has nowhere to apply
-    // either constraint.
-    if ((no_skips || hard_ms_filter) && use_dp)
-        throw std::runtime_error("no_skips/hard_ms_filter are BFS-only constraints");
-
     Engine engine(en, has_cap, cap, depth_mode, depth_value,
                   ms_filter.has_value(), ms_filter.value_or(0.0),
-                  /*flag_skipped_dynamics=*/false, no_skips, hard_ms_filter);
+                  no_skips, hard_ms_filter);
     if (on_progress) engine.set_progress_cb(on_progress);
 
-    bool ok;
-    if (use_dp) {
-#ifdef _WIN32
-        // The DP recurses candidate-deep; run it on a large reserved stack.
-        struct Ctx {
-            Engine* engine;
-            bool ok;
-        } ctx{&engine, false};
-        HANDLE th = CreateThread(
-            nullptr, (SIZE_T)512 * 1024 * 1024,
-            [](LPVOID param) -> DWORD {
-                Ctx* c = static_cast<Ctx*>(param);
-                c->ok = c->engine->dp_run();
-                return 0;
-            },
-            &ctx, STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
-        if (th == nullptr) {
-            ok = engine.dp_run();
-        } else {
-            WaitForSingleObject(th, INFINITE);
-            CloseHandle(th);
-            ok = ctx.ok;
-        }
-#else
-        ok = engine.dp_run();
-#endif
-    } else {
-        ok = engine.run();
-    }
-
-    if (!ok)
-        throw std::runtime_error("native search reached a broken state");
+    if (!engine.run())
+        throw std::runtime_error("search reached a broken state");
 
     return rebuild(en, engine.out_paths(), engine.out_acts(), engine.out_sqs(),
                    collect_multsqueezes(graph));

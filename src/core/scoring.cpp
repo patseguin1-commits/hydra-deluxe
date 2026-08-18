@@ -1,0 +1,81 @@
+#include "core/scoring.h"
+
+#include <vector>
+
+#include "core/timing.h"  // to_multiplier
+
+namespace hydra {
+
+CategoryScores category_scores(const Chord& chord, int combo) {
+    // Every possible cross-multiplication of the score multipliers, named as
+    // in the original.
+    int base_note = 0, base_cymbal = 0;
+    int combo_note = 0, combo_cymbal = 0;
+    int sp_note = 0, sp_cymbal = 0;
+    int combosp_note = 0, combosp_cymbal = 0;
+    int dynamic_note_accent = 0, dynamic_cymbal = 0;
+    int dynamic_note_ghost = 0;
+    int combodynamic_note = 0, combodynamic_cymbal = 0;
+    int spdynamic_note = 0, spdynamic_cymbal = 0;
+    int combospdynamic_note = 0, combospdynamic_cymbal = 0;
+
+    int sqout_reduction = 0;
+
+    const std::vector<ChordNote> ordering = chord.notes(true);
+    for (size_t i = 0; i < ordering.size(); ++i) {
+        const ChordNote& note = ordering[i];
+        const bool is_cymbal = note.is_cymbal();
+        const bool is_accent = note.is_accent();
+        const bool is_ghost = note.is_ghost();
+        // is_dynamic() is dynamictype != NORMAL, i.e. accent or ghost.
+        const bool is_dynamic = is_accent || is_ghost;
+
+        combo += 1;
+        const int combo_multiplier = to_multiplier(combo);
+        const int extra = combo_multiplier - 1;
+
+        const int basevalue = 50;
+        const int cymbvalue = 15;
+
+        const int cymb = is_cymbal ? cymbvalue : 0;
+        const int dyn_cymb = (is_cymbal && is_dynamic) ? cymbvalue : 0;
+
+        base_note += basevalue;
+        base_cymbal += cymb;
+        combo_note += basevalue * extra;
+        combo_cymbal += cymb * extra;
+        sp_note += basevalue;
+        sp_cymbal += cymb;
+        combosp_note += basevalue * extra;
+        combosp_cymbal += cymb * extra;
+        dynamic_note_accent += is_accent ? basevalue : 0;
+        dynamic_note_ghost += is_ghost ? basevalue : 0;
+        dynamic_cymbal += dyn_cymb;
+        combodynamic_note += is_dynamic ? basevalue * extra : 0;
+        combodynamic_cymbal += dyn_cymb * extra;
+        spdynamic_note += is_dynamic ? basevalue : 0;
+        spdynamic_cymbal += dyn_cymb;
+        combospdynamic_note += is_dynamic ? basevalue * extra : 0;
+        combospdynamic_cymbal += dyn_cymb * extra;
+
+        // Quick and dirty SqOut calculation -- first note only.
+        if (i == 0) {
+            sqout_reduction =
+                (basevalue + cymb) * combo_multiplier * (is_dynamic ? 2 : 1);
+        }
+    }
+
+    CategoryScores out;
+    out.base = base_note + base_cymbal + dynamic_cymbal;
+    out.combo =
+        combo_note + combo_cymbal + combodynamic_note + combodynamic_cymbal;
+    out.sp = sp_note + sp_cymbal + combosp_note + combosp_cymbal +
+             spdynamic_note + spdynamic_cymbal + combospdynamic_note +
+             combospdynamic_cymbal;
+    out.accent = dynamic_note_accent;
+    out.ghost = dynamic_note_ghost;
+    out.sqout_reduction = sqout_reduction;
+    return out;
+}
+
+}  // namespace hydra

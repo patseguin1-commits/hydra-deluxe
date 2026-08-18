@@ -927,36 +927,28 @@ Song ChartParser::parse(const std::vector<uint8_t>& data, bool pro,
 
 // ---- public loaders -----------------------------------------------------
 
-Song load_songbytes_mid(const std::vector<uint8_t>& data,
-                        const std::string& difficulty, bool pro, bool bass2x) {
-    (void)difficulty;
+Song load_songbytes_mid(const std::vector<uint8_t>& data, bool pro,
+                        bool bass2x) {
     MidiFile mid(data);
     return MidiParser().parse(mid, pro, bass2x);
 }
 
-Song load_songbytes_chart(const std::vector<uint8_t>& data,
-                          const std::string& difficulty, bool pro,
+Song load_songbytes_chart(const std::vector<uint8_t>& data, bool pro,
                           bool bass2x) {
-    (void)difficulty;
     return ChartParser().parse(data, pro, bass2x);
 }
 
-Song load_songpath_mid(const std::string& path, const std::string& difficulty,
-                       bool pro, bool bass2x) {
-    (void)difficulty;
+Song load_songpath_mid(const std::string& path, bool pro, bool bass2x) {
     MidiFile mid = MidiFile::from_file(path);
     return MidiParser().parse(mid, pro, bass2x);
 }
 
-Song load_songpath_chart(const std::string& path, const std::string& difficulty,
-                         bool pro, bool bass2x) {
-    (void)difficulty;
+Song load_songpath_chart(const std::string& path, bool pro, bool bass2x) {
     std::vector<uint8_t> data = read_file_bytes(path);
     return ChartParser().parse(data, pro, bass2x);
 }
 
-Song load_songpath_sng(const std::string& path, const std::string& difficulty,
-                       bool pro, bool bass2x) {
+Song load_songpath_sng(const std::string& path, bool pro, bool bass2x) {
     std::vector<uint8_t> buf = read_file_bytes(path);
 
     auto read_u64 = [&buf](size_t pos) {
@@ -1018,12 +1010,11 @@ Song load_songpath_sng(const std::string& path, const std::string& difficulty,
     }
 
     if (loader == Loader::Mid)
-        return load_songbytes_mid(notebytes, difficulty, pro, bass2x);
-    return load_songbytes_chart(notebytes, difficulty, pro, bass2x);
+        return load_songbytes_mid(notebytes, pro, bass2x);
+    return load_songbytes_chart(notebytes, pro, bass2x);
 }
 
-Song load_songpath_srb(const std::string& path, const std::string& difficulty,
-                       bool pro, bool bass2x) {
+Song load_songpath_srb(const std::string& path, bool pro, bool bass2x) {
     std::vector<uint8_t> buf = read_file_bytes(path);
     if (buf.size() <= kSrbHeaderSize)
         throw std::runtime_error("Truncated SRB file.");
@@ -1053,22 +1044,20 @@ Song load_songpath_srb(const std::string& path, const std::string& difficulty,
     else  // Unexpected filename: sniff the payload instead.
         is_mid = notebytes.size() >= 4 && std::memcmp(notebytes.data(), "MThd", 4) == 0;
 
-    if (is_mid) return load_songbytes_mid(notebytes, difficulty, pro, bass2x);
-    return load_songbytes_chart(notebytes, difficulty, pro, bass2x);
+    if (is_mid) return load_songbytes_mid(notebytes, pro, bass2x);
+    return load_songbytes_chart(notebytes, pro, bass2x);
 }
 
-Song load_songpath(const std::string& path, const std::string& difficulty,
-                   bool pro, bool bass2x) {
+Song load_songpath(const std::string& path, bool pro, bool bass2x) {
     std::string low = ascii_casefold(path);
     auto ends_with = [&low](const char* suf) {
         size_t n = std::strlen(suf);
         return low.size() >= n && low.compare(low.size() - n, n, suf) == 0;
     };
-    if (ends_with(".mid")) return load_songpath_mid(path, difficulty, pro, bass2x);
-    if (ends_with(".chart"))
-        return load_songpath_chart(path, difficulty, pro, bass2x);
-    if (ends_with(".sng")) return load_songpath_sng(path, difficulty, pro, bass2x);
-    if (ends_with(".srb")) return load_songpath_srb(path, difficulty, pro, bass2x);
+    if (ends_with(".mid")) return load_songpath_mid(path, pro, bass2x);
+    if (ends_with(".chart")) return load_songpath_chart(path, pro, bass2x);
+    if (ends_with(".sng")) return load_songpath_sng(path, pro, bass2x);
+    if (ends_with(".srb")) return load_songpath_srb(path, pro, bass2x);
     throw std::runtime_error("unexpected chart type: " + path);
 }
 

@@ -29,11 +29,11 @@ int count_sp_phrases(const Song& song) {
 }
 
 HydraRecord read(const ScoreGraph& graph, int depth_mode, int depth_value,
-                 std::optional<double> ms_filter, bool use_dp,
+                 std::optional<double> ms_filter,
                  const std::function<void(float)>& on_progress) {
     HydraRecord record;
     record.ms_limit = ms_filter;
-    record.paths = run_search(graph, depth_mode, depth_value, ms_filter, use_dp,
+    record.paths = run_search(graph, depth_mode, depth_value, ms_filter,
                               /*no_skips=*/false, /*hard_ms_filter=*/false,
                               on_progress);
     return record;
@@ -88,7 +88,7 @@ std::vector<Path> search_allzero(const ScoreGraph& graph,
     std::vector<Path> paths;
     try {
         paths = run_search(graph, /*depth_mode=*/0, /*depth_value=*/0,
-                           /*ms_filter=*/0.0, /*use_dp=*/false,
+                           /*ms_filter=*/0.0,
                            /*no_skips=*/true, /*hard_ms_filter=*/true,
                            on_progress);
     } catch (const std::runtime_error&) {
@@ -116,7 +116,7 @@ HydraRecord analyze_at_cap(const Song& song, int sp_cap, int depth_mode,
     ScoreGraph graph(song, cap);
     const bool split = want_allzero && static_cast<bool>(on_progress);
     HydraRecord record = read(
-        graph, depth_mode, depth_value, ms_filter, false,
+        graph, depth_mode, depth_value, ms_filter,
         split ? scaled_progress(on_progress, 0.0f, kMainProgressShare) : on_progress);
     record.sp_cap = sp_cap;
     // The graph is still alive here, so the all-0 pass reuses it instead of

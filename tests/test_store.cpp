@@ -66,7 +66,7 @@ TEST_CASE("records round-trip through RecordStore across the corpus and config m
     int checks = 0, mismatches = 0;
 
     for (const std::string& path : corpus::chart_paths()) {
-        Song song = load_songpath(path, "Expert", true, true);
+        Song song = load_songpath(path, true, true);
         if (song.is_empty()) continue;
 
         for (const Config& cfg : kMatrix) {
@@ -159,7 +159,7 @@ TEST_CASE("records round-trip through RecordStore across the corpus and config m
 TEST_CASE("record blob: version 2 carries all-0 paths and version 1 still reads") {
     std::optional<HydraRecord> record;
     for (const std::string& path : corpus::chart_paths()) {
-        Song song = load_songpath(path, "Expert", true, true);
+        Song song = load_songpath(path, true, true);
         if (song.is_empty()) continue;
         try {
             HydraRecord r = analyze_chart(song, /*capped=*/true, 0, 4, 10.0);
@@ -208,7 +208,7 @@ TEST_CASE("RecordStore maintenance: has_record, list_records, reindex, drop_stal
     std::optional<Song> song;
     std::optional<HydraRecord> record;
     for (const std::string& path : corpus::chart_paths()) {
-        Song s = load_songpath(path, "Expert", true, true);
+        Song s = load_songpath(path, true, true);
         if (s.is_empty()) continue;
         try {
             record = analyze_chart(s, true, 0, 10, std::nullopt);

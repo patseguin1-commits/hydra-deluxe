@@ -6,8 +6,7 @@
 #
 # Third-party code (ImGui, SQLite, miniz, doctest, json, stb) is vendored under
 # third_party/ and built here so there is nothing to install but a compiler +
-# CMake. native/ holds the scoring/search core the Python-era accelerator
-# already proved out, compiled in place.
+# CMake.
 #
 # Configure/build (CMake and MSVC come from Visual Studio; see build_cpp.ps1):
 #   cmake --preset default
@@ -54,22 +53,12 @@ add_library(miniz STATIC third_party/miniz/miniz.c)
 target_include_directories(miniz PUBLIC third_party/miniz)
 target_compile_options(miniz PRIVATE /W1 /EHsc)
 
-# ---- the existing algorithm core, compiled in place ----------------------
-# Reused verbatim (Phase 3 wires the native graph into these); compiling them
-# here proves they build under the new toolchain and keeps the known-good
-# scoring/search logic as the single source of truth.
-add_library(hydra_native STATIC
-    native/hydra_score.cpp
-    native/hydra_search.cpp
-)
-target_include_directories(hydra_native PUBLIC native)
-target_compile_options(hydra_native PRIVATE ${HYDRA_WARNINGS})
-
-# ---- ported foundation modules (Phase 1+) --------------------------------
+# ---- the application core (everything below the GUI/CLI shells) ----------
 add_library(hydra_core STATIC
     src/core/timing.cpp
     src/core/chord_tables.cpp
     src/core/model.cpp
+    src/core/scoring.cpp
     src/parse/midi.cpp
     src/parse/song.cpp
     src/parse/srb.cpp
@@ -88,11 +77,9 @@ target_include_directories(hydra_core PUBLIC src)
 # third_party/sqlite: the store. third_party/json: nlohmann, used by the DMBot
 # client to parse the leaderboard API. (The report's own JSON is hand-rolled.)
 target_include_directories(hydra_core PRIVATE third_party/sqlite third_party/json)
-# search/ wires the native ScoreGraph into the existing hydra_native engine, so
-# hydra_core needs its headers (native/) and symbols (hy_search, hy_category_*).
 # store/ needs sqlite3; app/ hashes chart files via CNG (bcrypt.lib) and walks
 # folders via the Win32 Find*File API (already linked into every Windows exe).
-target_link_libraries(hydra_core PUBLIC hydra_native sqlite3 miniz)
+target_link_libraries(hydra_core PUBLIC sqlite3 miniz)
 # bcrypt: CNG (chart-file MD5). winhttp: the DMBot leaderboard client (net/).
 target_link_libraries(hydra_core PRIVATE bcrypt winhttp)
 target_compile_options(hydra_core PRIVATE ${HYDRA_WARNINGS})
@@ -165,7 +152,7 @@ add_executable(hydra_tests
     tests/test_analysis.cpp
     tests/test_report.cpp
 )
-target_link_libraries(hydra_tests PRIVATE hydra_core hydra_native)
+target_link_libraries(hydra_tests PRIVATE hydra_core)
 target_include_directories(hydra_tests PRIVATE
     third_party/doctest
     third_party/json
@@ -202,7 +189,7 @@ include(CPack)
 
 # ---- hydra_bench: engine timing harness (not a test) ---------------------
 add_executable(hydra_bench tools/bench.cpp)
-target_link_libraries(hydra_bench PRIVATE hydra_core hydra_native)
+target_link_libraries(hydra_bench PRIVATE hydra_core)
 target_include_directories(hydra_bench PRIVATE tests third_party/json)
 target_compile_options(hydra_bench PRIVATE ${HYDRA_WARNINGS})
 target_compile_definitions(hydra_bench PRIVATE

@@ -5,9 +5,7 @@
 // meter maps. The MidiParser and ChartParser live in the .cpp; callers use the
 // load_songpath_* functions.
 //
-// The difficulty argument is accepted for signature parity with hysong but is
-// not used to filter: these parsers read the Expert charting only, exactly as
-// Python does.
+// The parsers read the Expert charting only.
 
 #ifndef HYDRA_PARSE_SONG_H
 #define HYDRA_PARSE_SONG_H
@@ -73,23 +71,16 @@ private:
     std::optional<SongTiming> timing_;
 };
 
-Song load_songpath_mid(const std::string& path, const std::string& difficulty,
-                       bool pro, bool bass2x);
-Song load_songpath_chart(const std::string& path, const std::string& difficulty,
-                         bool pro, bool bass2x);
-Song load_songpath_sng(const std::string& path, const std::string& difficulty,
-                       bool pro, bool bass2x);
-Song load_songpath_srb(const std::string& path, const std::string& difficulty,
-                       bool pro, bool bass2x);
+Song load_songpath_mid(const std::string& path, bool pro, bool bass2x);
+Song load_songpath_chart(const std::string& path, bool pro, bool bass2x);
+Song load_songpath_sng(const std::string& path, bool pro, bool bass2x);
+Song load_songpath_srb(const std::string& path, bool pro, bool bass2x);
 
-Song load_songbytes_mid(const std::vector<uint8_t>& data,
-                        const std::string& difficulty, bool pro, bool bass2x);
-Song load_songbytes_chart(const std::vector<uint8_t>& data,
-                          const std::string& difficulty, bool pro, bool bass2x);
+Song load_songbytes_mid(const std::vector<uint8_t>& data, bool pro, bool bass2x);
+Song load_songbytes_chart(const std::vector<uint8_t>& data, bool pro, bool bass2x);
 
 // Dispatch on the file extension (.mid/.chart/.sng/.srb, case-insensitive).
-Song load_songpath(const std::string& path, const std::string& difficulty,
-                   bool pro, bool bass2x);
+Song load_songpath(const std::string& path, bool pro, bool bass2x);
 
 }  // namespace hydra
 

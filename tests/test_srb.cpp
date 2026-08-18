@@ -174,8 +174,8 @@ TEST_CASE("srb: a wrapped chart parses identically to the loose file") {
         std::string path = fixture_dir() + "\\wrapped" + c.ext + ".srb";
         write_bytes(path, srb);
 
-        Song direct = load_songpath(src, "Expert", true, true);
-        Song via_srb = load_songpath(path, "Expert", true, true);
+        Song direct = load_songpath(src, true, true);
+        Song via_srb = load_songpath(path, true, true);
         CHECK_MESSAGE(songs_equal(direct, via_srb), src);
     }
 }
@@ -188,15 +188,15 @@ TEST_CASE("srb: an unexpected notes filename falls back to payload sniffing") {
     std::string path = fixture_dir() + "\\sniffed.srb";
     write_bytes(path, srb);
 
-    Song direct = load_songpath(src, "Expert", true, true);
-    Song via_srb = load_songpath_srb(path, "Expert", true, true);
+    Song direct = load_songpath(src, true, true);
+    Song via_srb = load_songpath_srb(path, true, true);
     CHECK(songs_equal(direct, via_srb));
 }
 
 TEST_CASE("srb: malformed containers throw instead of crashing") {
     std::string tiny = fixture_dir() + "\\tiny.srb";
     write_bytes(tiny, {1, 2, 3});
-    CHECK_THROWS_AS(load_songpath_srb(tiny, "Expert", true, true),
+    CHECK_THROWS_AS(load_songpath_srb(tiny, true, true),
                     std::runtime_error);
 
     std::string garbage = fixture_dir() + "\\garbage.srb";
@@ -204,7 +204,7 @@ TEST_CASE("srb: malformed containers throw instead of crashing") {
     for (size_t i = 0; i < junk.size(); ++i)
         junk[i] = static_cast<uint8_t>(i * 37 + 11);
     write_bytes(garbage, junk);
-    CHECK_THROWS_AS(load_songpath_srb(garbage, "Expert", true, true),
+    CHECK_THROWS_AS(load_songpath_srb(garbage, true, true),
                     std::runtime_error);
 
     // Metadata stream present but the notes stream is cut off mid-way.
@@ -214,7 +214,7 @@ TEST_CASE("srb: malformed containers throw instead of crashing") {
     whole.resize(whole.size() / 2);
     std::string truncated = fixture_dir() + "\\truncated.srb";
     write_bytes(truncated, whole);
-    CHECK_THROWS_AS(load_songpath_srb(truncated, "Expert", true, true),
+    CHECK_THROWS_AS(load_songpath_srb(truncated, true, true),
                     std::runtime_error);
 }
 

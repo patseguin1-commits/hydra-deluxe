@@ -65,7 +65,7 @@ static void folder_breakdown(const std::string& folder) {
         auto t = clk::now();
         std::optional<Song> song_opt;
         try {
-            song_opt.emplace(load_songpath(it.notespath, "Expert", true, true));
+            song_opt.emplace(load_songpath(it.notespath, true, true));
         } catch (const std::exception& e) {
             std::printf("  (skipped: %s)\n\n", e.what());
             continue;
@@ -185,7 +185,7 @@ static void corpus_bench() {
     std::vector<Song> songs;
     for (const std::string& path : corpus::chart_paths()) {
         try {
-            songs.push_back(load_songpath(path, "Expert", true, true));
+            songs.push_back(load_songpath(path, true, true));
         } catch (const std::exception&) {
         }
     }

@@ -581,40 +581,10 @@ std::pair<std::vector<ScanItem>, std::vector<std::string>> discover_charts(
     return discover_charts(rootfolders, callbacks, nullptr);
 }
 
-int get_folder_count(const std::vector<std::string>& rootfolders,
-                     const std::function<void(int)>& cb_progress) {
-    std::vector<std::pair<std::string, std::string>> unexplored;
-    std::set<std::string> visited;
-    for (const std::string& root : rootfolders) {
-        if (is_dir(root)) unexplored.push_back({root, root});
-        visited.insert(root);
-    }
-
-    while (!unexplored.empty()) {
-        auto [dir, origin] = unexplored.back();
-        unexplored.pop_back();
-        // Swallow per-folder failures like discover_charts does — this count
-        // is only a progress denominator, and an exception here would
-        // otherwise escape ScanJob's thread and terminate the app.
-        try {
-            for (const DirEntry& e : list_dir(dir)) {
-                if (!e.is_dir) continue;
-                std::string subpath = join_path(dir, e.name);
-                if (visited.insert(subpath).second) {
-                    if (cb_progress) cb_progress(static_cast<int>(visited.size()));
-                    unexplored.push_back({subpath, origin});
-                }
-            }
-        } catch (const std::exception&) {
-        }
-    }
-    return static_cast<int>(visited.size());
-}
-
 // ---- chord counting -------------------------------------------------------
 
 std::map<std::string, int> count_chart_chords(const std::string& filepath) {
-    Song song = load_songpath(filepath, "Expert", true, true);
+    Song song = load_songpath(filepath, true, true);
     std::map<std::string, int> counts;
     for (const SongTimestamp& ts : song.sequence) ++counts[ts.chord.code()];
     return counts;
@@ -625,8 +595,7 @@ std::map<std::string, int> count_chart_chords(const std::string& filepath) {
 AnalysisResult analyze_chart_file(const std::string& filepath,
                                   const AnalysisSettings& settings,
                                   const std::function<void(float)>& on_progress) {
-    Song song =
-        load_songpath(filepath, settings.difficulty, settings.prodrums, settings.bass2x);
+    Song song = load_songpath(filepath, settings.prodrums, settings.bass2x);
     HydraRecord record = analyze_chart(song, /*capped=*/!settings.uncapped,
                                        settings.depth_mode, settings.depth_value,
                                        settings.ms_filter, settings.sp_cap, on_progress,

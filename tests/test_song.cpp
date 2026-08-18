@@ -16,7 +16,7 @@ using namespace hydra;
 TEST_CASE("song parse holds its invariants over the corpus") {
     int charts = 0, nonempty = 0;
     for (const std::string& path : corpus::chart_paths()) {
-        Song song = load_songpath(path, "Expert", true, true);
+        Song song = load_songpath(path, true, true);
         ++charts;
         if (song.is_empty()) continue;
         ++nonempty;

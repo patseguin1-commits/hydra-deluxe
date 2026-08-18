@@ -54,7 +54,7 @@ TEST_CASE("count_chart_chords matches the song parser's code tally") {
         if (ext != "mid" && ext != "chart") continue;  // count_chart_chords doesn't take .sng
 
         // The same tally computed through the full parser.
-        hydra::Song song = hydra::load_songpath(path, "Expert", true, true);
+        hydra::Song song = hydra::load_songpath(path, true, true);
         std::map<std::string, int> expected;
         for (const hydra::SongTimestamp& ts : song.sequence)
             ++expected[ts.chord.code()];

@@ -106,7 +106,6 @@ std::string Settings::chartmode_key() const {
 
 AnalysisSettings Settings::to_analysis_settings() const {
     AnalysisSettings s;
-    s.difficulty = view_difficulty;
     s.prodrums = view_prodrums;
     s.bass2x = view_bass2x;
     s.depth_mode = depth_mode;

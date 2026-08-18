@@ -1,12 +1,7 @@
-// ScoreGraph — the C++ port of hydra/hypath.py's ScoreGraph (+ nodes/edges).
-//
-// A song modelled as a two-track graph (base / SP) of timecode nodes joined by
-// advance edges (deeper into the song, accruing points) and branch edges
-// (toggling SP without advancing time). The native search in native/ consumes
-// a flattened form of this graph; search/flat.h builds that form.
-//
-// Ported to match the Python graph structurally, field-for-field, because the
-// golden analysis diff checks the paths the search finds over it.
+// ScoreGraph — a song modelled as a two-track graph (base / SP) of timecode
+// nodes joined by advance edges (deeper into the song, accruing points) and
+// branch edges (toggling SP without advancing time). The engine in
+// search/engine.cpp searches over it.
 
 #ifndef HYDRA_SEARCH_GRAPH_H
 #define HYDRA_SEARCH_GRAPH_H
@@ -21,7 +16,6 @@
 
 #include "core/model.h"
 #include "core/timing.h"
-#include "hydra_score.h"  // hy_scores
 #include "parse/song.h"
 
 namespace hydra {
@@ -38,13 +32,6 @@ struct ScoreGraphNode {
     ScoreGraphEdge* branch_edge = nullptr;
     bool is_sp = false;
     std::optional<Chord> chord;
-
-    // Suffix bounds over the rest of the song from here (compute_bounds).
-    int64_t base_suffix = 0;
-    int64_t max_suffix = 0;
-    int64_t remaining_sp_phrases = 0;
-    int64_t total_spscore_suffix = 0;
-    double max_spscore_density = 0.0;
 };
 
 struct ScoreGraphEdge {
@@ -69,7 +56,6 @@ struct ScoreGraphEdge {
     // Set only on activation edges; absent (nullopt / empty) otherwise.
     std::optional<double> activation_fill_deadline_ms;
     std::map<int, Timecode> activation_initial_end_times;  // SP meter -> Timecode
-    int skipped_dynamic_points = 0;
 
     std::optional<Timecode> sqinout_time;
     std::optional<double> sqinout_timing;
@@ -77,11 +63,6 @@ struct ScoreGraphEdge {
     std::optional<Timecode> sqout_time;
     std::optional<Timecode> sqin_time;
 };
-
-// The per-chord score breakdown, from the native hy_category_scores (a
-// line-for-line transcription of hypath.category_scores). Notes must be
-// base-sorted, which Chord::notes(true) provides.
-hy_scores category_scores(const Chord& chord, int combo);
 
 class ScoreGraph {
 public:
@@ -96,7 +77,6 @@ public:
 private:
     // Graph construction, mirroring ScoreGraph.__init__/helpers.
     void build();
-    void compute_bounds();
 
     void store_notecount(int64_t count);
     void store_soloscore(int64_t points);
@@ -124,7 +104,6 @@ private:
     void advance_tracks(const Timecode& tc, const std::optional<Chord>& chord);
     ScoreGraphEdge* add_act_edge(const Chord& frontend_chord,
                                  int frontend_points,
-                                 int skipped_dynamic_reduction,
                                  int64_t fill_length_ticks);
     void add_deact_edge();
 

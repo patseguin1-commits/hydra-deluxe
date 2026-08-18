@@ -192,20 +192,6 @@ int Chord::hands_count() const {
     return at(NoteColor::Kick).has_value() ? count() - 1 : count();
 }
 
-int Chord::ghost_count() const {
-    int n = 0;
-    for (const auto& slot : notemap_)
-        if (slot.has_value() && slot->is_ghost()) ++n;
-    return n;
-}
-
-int Chord::accent_count() const {
-    int n = 0;
-    for (const auto& slot : notemap_)
-        if (slot.has_value() && slot->is_accent()) ++n;
-    return n;
-}
-
 std::string Chord::rowstr() const {
     std::vector<ChordNote> ns = notes();
     std::string inner;
@@ -333,17 +319,6 @@ std::string BackendSqueeze::summarystr() const {
     if (off < 3) return "Standard";
     if (off < 70) return "Hard (uncounted)";
     return "Insane (uncounted)";
-}
-
-std::string BackendSqueeze::ratingstr() const {
-    double off = offset_ms.value_or(0.0);
-    const std::pair<int, const char*> thresholds[] = {
-        {-140, "Free"},   {-105, "Free"},  {-70, "Free"},    {-35, "Trivial"},
-        {-2, "Easy"},     {2, "Normal"},   {35, "Hard"},     {70, "Extreme"},
-        {105, "Insane"},  {140, "Insane+"}};
-    for (const auto& t : thresholds)
-        if (off < t.first) return t.second;
-    return "Impossible";
 }
 
 // ---- MultSqueeze --------------------------------------------------------

@@ -79,8 +79,6 @@ public:
     std::optional<double> opt_f64();
     std::optional<std::string> opt_str();
 
-    bool at_end() const { return pos_ >= bytes_.size(); }
-
 private:
     void need(size_t n) const;
 

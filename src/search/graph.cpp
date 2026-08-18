@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <stdexcept>
 
+#include "core/scoring.h"
+
 namespace hydra {
 
 // How far apart (ms) a note and a deactivation can be and still be a SqIn/SqOut,
@@ -20,24 +22,6 @@ struct TickGreater {
     }
 };
 }  // namespace
-
-hy_scores category_scores(const Chord& chord, int combo) {
-    std::vector<ChordNote> ordering = chord.notes(true);
-    int n = static_cast<int>(ordering.size());
-    std::vector<uint8_t> flags(n > 0 ? static_cast<size_t>(n) : 1u, 0);
-    for (int i = 0; i < n; ++i) {
-        uint8_t f = 0;
-        if (ordering[static_cast<size_t>(i)].is_cymbal()) f |= HY_NOTE_CYMBAL;
-        if (ordering[static_cast<size_t>(i)].is_accent()) f |= HY_NOTE_ACCENT;
-        if (ordering[static_cast<size_t>(i)].is_ghost()) f |= HY_NOTE_GHOST;
-        // hymisc.FLAG_SKIPPED_DYNAMICS is off for every golden config, so the
-        // activation flag is never set.
-        flags[static_cast<size_t>(i)] = f;
-    }
-    hy_scores out{};
-    hy_category_scores(flags.data(), n, combo, 0, &out);
-    return out;
-}
 
 ScoreGraphNode* ScoreGraph::new_node(const Timecode& tc, bool is_sp) {
     node_pool_.emplace_back();
@@ -71,7 +55,6 @@ ScoreGraph::ScoreGraph(const Song& song, std::optional<int> sp_meter_cap)
     proto_sp_edge_ = new_edge();
 
     build();
-    compute_bounds();
 }
 
 void ScoreGraph::build() {
@@ -97,7 +80,7 @@ void ScoreGraph::build() {
         if (timestamp.flag_solo)
             store_soloscore(100 * timestamp.chord.count());
 
-        hy_scores sg = category_scores(timestamp.chord, combo_);
+        CategoryScores sg = category_scores(timestamp.chord, combo_);
 
         try {
             MultSqueeze msq(timestamp.chord, combo_);
@@ -161,8 +144,7 @@ void ScoreGraph::build() {
         if (timestamp.has_activation()) {
             advance_tracks(timestamp.timecode, timestamp.chord);
             ScoreGraphEdge* act_edge = add_act_edge(
-                timestamp.chord, sg.sp, sg.skipped_dynamic_reduction,
-                *timestamp.activation_length);
+                timestamp.chord, sg.sp, *timestamp.activation_length);
 
             for (const auto& kv : act_edge->activation_initial_end_times) {
                 const Timecode& end_time = kv.second;
@@ -323,7 +305,6 @@ void ScoreGraph::advance_tracks(const Timecode& tc,
 
 ScoreGraphEdge* ScoreGraph::add_act_edge(const Chord& frontend_chord,
                                          int frontend_points,
-                                         int skipped_dynamic_reduction,
                                          int64_t fill_length_ticks) {
     ScoreGraphEdge* act_edge = new_edge();
     act_edge->dest = sp_track_head_;
@@ -339,8 +320,6 @@ ScoreGraphEdge* ScoreGraph::add_act_edge(const Chord& frontend_chord,
     for (int sp = 2; sp <= max_sp_bars(); ++sp)
         act_edge->activation_initial_end_times[sp] =
             plusmeasure(act_edge->dest->timecode, 2 * sp);
-
-    act_edge->skipped_dynamic_points = skipped_dynamic_reduction;
 
     base_track_head_->branch_edge = act_edge;
     return act_edge;
@@ -370,88 +349,6 @@ void ScoreGraph::add_deact_edge() {
 
     recent_deact_edges_.push_back(deact_edge);
     sp_track_head_->branch_edge = deact_edge;
-}
-
-void ScoreGraph::compute_bounds() {
-    std::vector<ScoreGraphNode*> base_nodes, sp_nodes;
-    for (ScoreGraphNode* n = start_; n != nullptr;
-         n = (n->adv_edge ? n->adv_edge->dest : nullptr))
-        base_nodes.push_back(n);
-    for (ScoreGraphNode* n = sp_start_; n != nullptr;
-         n = (n->adv_edge ? n->adv_edge->dest : nullptr))
-        sp_nodes.push_back(n);
-
-    int64_t base_running = 0, max_running = 0, sp_running = 0,
-            phrase_running = 0;
-    double density_running = 0.0;
-
-    for (int i = static_cast<int>(base_nodes.size()) - 1; i >= 0; --i) {
-        ScoreGraphNode* b_node = base_nodes[static_cast<size_t>(i)];
-        ScoreGraphNode* s_node =
-            (i < static_cast<int>(sp_nodes.size()))
-                ? sp_nodes[static_cast<size_t>(i)]
-                : nullptr;
-
-        b_node->base_suffix = base_running;
-        b_node->max_suffix = max_running;
-        b_node->total_spscore_suffix = sp_running;
-        b_node->remaining_sp_phrases = phrase_running;
-        b_node->max_spscore_density = density_running;
-        if (s_node) {
-            s_node->base_suffix = base_running;
-            s_node->max_suffix = max_running;
-            s_node->total_spscore_suffix = sp_running;
-            s_node->remaining_sp_phrases = phrase_running;
-            s_node->max_spscore_density = density_running;
-        }
-
-        ScoreGraphEdge* b_edge =
-            (i > 0) ? base_nodes[static_cast<size_t>(i - 1)]->adv_edge : nullptr;
-        ScoreGraphEdge* s_edge =
-            (i > 0 && (i - 1) < static_cast<int>(sp_nodes.size()))
-                ? sp_nodes[static_cast<size_t>(i - 1)]->adv_edge
-                : nullptr;
-
-        if (b_edge) {
-            base_running += b_edge->basescore + b_edge->comboscore +
-                            b_edge->spscore + b_edge->soloscore +
-                            b_edge->accentscore + b_edge->ghostscore;
-        }
-        if (s_edge) {
-            max_running += s_edge->basescore + s_edge->comboscore +
-                           s_edge->spscore + s_edge->soloscore +
-                           s_edge->accentscore + s_edge->ghostscore;
-            sp_running += s_edge->spscore;
-            phrase_running += static_cast<int64_t>(s_edge->sp_times.size());
-
-            ScoreGraphNode* src = sp_nodes[static_cast<size_t>(i - 1)];
-            double span = s_edge->dest->timecode.measures_decimal() -
-                          src->timecode.measures_decimal();
-            if (span > 0) {
-                double density = static_cast<double>(s_edge->spscore) / span;
-                if (density > density_running) density_running = density;
-            }
-        }
-
-        if (i > 0) {
-            ScoreGraphEdge* act_edge =
-                base_nodes[static_cast<size_t>(i - 1)]->branch_edge;
-            if (act_edge && act_edge->frontend.has_value())
-                max_running += act_edge->frontend->points;
-
-            ScoreGraphEdge* deact_edge =
-                ((i - 1) < static_cast<int>(sp_nodes.size()))
-                    ? sp_nodes[static_cast<size_t>(i - 1)]->branch_edge
-                    : nullptr;
-            if (deact_edge) {
-                for (const BackendSqueeze& be : deact_edge->backends) {
-                    int64_t gain = be.points > 0 ? be.points : 0;
-                    if (be.sqout_points > gain) gain = be.sqout_points;
-                    max_running += gain;
-                }
-            }
-        }
-    }
 }
 
 }  // namespace hydra

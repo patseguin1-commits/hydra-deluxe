@@ -24,7 +24,7 @@ TEST_CASE("search invariants hold across the corpus and config knobs") {
     int charts = 0, mismatches = 0;
 
     for (const std::string& path : corpus::chart_paths()) {
-        Song song = load_songpath(path, "Expert", true, true);
+        Song song = load_songpath(path, true, true);
         if (song.is_empty()) continue;
         ++charts;
 
@@ -90,7 +90,7 @@ TEST_CASE("search_allzero returns only all-0 paths inside the 0 ms limit") {
     int checks = 0, mismatches = 0, found = 0;
 
     for (const std::string& path : corpus::chart_paths()) {
-        Song song = load_songpath(path, "Expert", true, true);
+        Song song = load_songpath(path, true, true);
         if (song.is_empty()) continue;
 
         ScoreGraph graph(song, 4);
