@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "app/analysis.h"
+#include "core/winstr.h"
 #include "corpus_util.h"
 #include "parse/song.h"
 #include "store/record_store.h"
@@ -27,24 +28,7 @@
 
 using namespace hydra::app;
 
-namespace {
-
-// Chart libraries routinely have non-ASCII paths (this corpus has one with a
-// fullwidth slash); std::ifstream's narrow-string overload goes through the
-// system codepage on Windows and mangles those, so round-trip through UTF-16
-// like analysis.cpp's own file reads do.
-bool file_exists_utf8(const std::string& utf8_path) {
-    int wlen =
-        MultiByteToWideChar(CP_UTF8, 0, utf8_path.data(), (int)utf8_path.size(), nullptr, 0);
-    std::wstring wpath((size_t)wlen, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, utf8_path.data(), (int)utf8_path.size(), &wpath[0], wlen);
-    FILE* f = _wfopen(wpath.c_str(), L"rb");
-    if (!f) return false;
-    std::fclose(f);
-    return true;
-}
-
-}  // namespace
+using hydra::file_exists_utf8;
 
 TEST_CASE("count_chart_chords matches the song parser's code tally") {
     int checked = 0;

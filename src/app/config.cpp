@@ -8,6 +8,8 @@
 #include <cstdlib>
 #include <fstream>
 
+#include "core/winstr.h"
+
 namespace hydra::app {
 
 namespace {
@@ -29,13 +31,7 @@ std::string exe_dir() {
     std::wstring path(buf, n);
     size_t pos = path.find_last_of(L"\\/");
     std::wstring dir = pos == std::wstring::npos ? L"." : path.substr(0, pos);
-
-    int len = WideCharToMultiByte(CP_UTF8, 0, dir.data(), static_cast<int>(dir.size()), nullptr,
-                                  0, nullptr, nullptr);
-    std::string out(static_cast<size_t>(len), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, dir.data(), static_cast<int>(dir.size()), &out[0], len,
-                        nullptr, nullptr);
-    return out;
+    return wide_to_utf8(dir);
 }
 
 std::string db_path(bool uncapped) {

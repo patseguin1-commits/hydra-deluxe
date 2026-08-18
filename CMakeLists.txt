@@ -1,7 +1,7 @@
 # Hydra — Windows-only C++ build. Produces:
 #   * Hydra.exe / HydraUncapped.exe   — the two GUI editions
 #   * hydra_batch / hydra_report      — the command line tools
-#   * hydra_tests                     — the doctest parity/unit harness
+#   * hydra_tests                     — the doctest harness
 #   * a zip release via CPack (build_cpp.ps1 -Package)
 #
 # Third-party code (ImGui, SQLite, miniz, doctest, json, stb) is vendored under
@@ -13,7 +13,9 @@
 #   cmake --build --preset default
 
 cmake_minimum_required(VERSION 3.21)
-project(Hydra VERSION 1.4.1 LANGUAGES C CXX RC)  # keep in step with app/edition.h
+# The single source of the version: window titles, the record staleness stamp,
+# and the HTTP User-Agent all derive from it via src/core/version.h.
+project(Hydra VERSION 1.4.1 LANGUAGES C CXX RC)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,10 +25,13 @@ if(NOT MSVC)
     message(FATAL_ERROR "Hydra's C++ port is Windows/MSVC only.")
 endif()
 
-# Strict flags for our own code; third-party gets relaxed warnings so a vendor
-# update never turns into a wall of warnings in our build.
-set(HYDRA_WARNINGS /W4 /EHsc)
-add_compile_options(/O2)
+# Parallel compilation within each target.
+add_compile_options(/MP)
+
+# Strict flags for our own code, applied via this interface target; third-party
+# gets relaxed warnings so a vendor update never turns into a wall of warnings.
+add_library(hydra_warnings INTERFACE)
+target_compile_options(hydra_warnings INTERFACE /W4 /EHsc)
 
 # ---- third_party: Dear ImGui (core + Win32/DX11 backends) ----------------
 add_library(imgui STATIC
@@ -43,22 +48,24 @@ target_include_directories(imgui PUBLIC
 )
 target_compile_options(imgui PRIVATE /W1 /EHsc)
 
-# ---- third_party: SQLite3 amalgamation (used from Phase 4) ---------------
+# ---- third_party: SQLite3 amalgamation -----------------------------------
 add_library(sqlite3 STATIC third_party/sqlite/sqlite3.c)
 target_include_directories(sqlite3 PUBLIC third_party/sqlite)
 target_compile_definitions(sqlite3 PRIVATE SQLITE_ENABLE_FTS5=0)
+target_compile_options(sqlite3 PRIVATE /W1)
 
 # ---- third_party: miniz (raw deflate, for Clone Hero .srb bundles) -------
 add_library(miniz STATIC third_party/miniz/miniz.c)
 target_include_directories(miniz PUBLIC third_party/miniz)
 target_compile_options(miniz PRIVATE /W1 /EHsc)
 
-# ---- the application core (everything below the GUI/CLI shells) ----------
+# ---- hydra_core: everything below the GUI/CLI shells ---------------------
 add_library(hydra_core STATIC
     src/core/timing.cpp
     src/core/chord_tables.cpp
     src/core/model.cpp
     src/core/scoring.cpp
+    src/core/winstr.cpp
     src/parse/midi.cpp
     src/parse/song.cpp
     src/parse/srb.cpp
@@ -69,57 +76,71 @@ add_library(hydra_core STATIC
     src/store/record_store.cpp
     src/app/analysis.cpp
     src/app/config.cpp
+    src/app/html_page.cpp
     src/app/report.cpp
-    src/app/dm_report.cpp
-    src/net/dmbot_client.cpp
 )
 target_include_directories(hydra_core PUBLIC src)
-# third_party/sqlite: the store. third_party/json: nlohmann, used by the DMBot
-# client to parse the leaderboard API. (The report's own JSON is hand-rolled.)
-target_include_directories(hydra_core PRIVATE third_party/sqlite third_party/json)
+target_compile_definitions(hydra_core PUBLIC HYDRA_VERSION="${PROJECT_VERSION}")
 # store/ needs sqlite3; app/ hashes chart files via CNG (bcrypt.lib) and walks
 # folders via the Win32 Find*File API (already linked into every Windows exe).
 target_link_libraries(hydra_core PUBLIC sqlite3 miniz)
-# bcrypt: CNG (chart-file MD5). winhttp: the DMBot leaderboard client (net/).
-target_link_libraries(hydra_core PRIVATE bcrypt winhttp)
-target_compile_options(hydra_core PRIVATE ${HYDRA_WARNINGS})
+target_link_libraries(hydra_core PRIVATE bcrypt hydra_warnings)
+
+# ---- hydra_dm: the DMBot leaderboards feature (GUI-only) -----------------
+# Kept out of hydra_core so the CLI tools don't link WinHTTP or carry the
+# comparison page. third_party/json parses the leaderboard API responses.
 # /utf-8: dm_report.cpp's HTML template embeds non-ASCII glyphs (arrows, em
 # dash) in string literals; without this MSVC reads the source in the system
-# code page and can mangle them. Harmless for the ASCII-only sources here.
-target_compile_options(hydra_core PRIVATE /utf-8)
+# code page and can mangle them.
+add_library(hydra_dm STATIC
+    src/app/dm_report.cpp
+    src/net/dmbot_client.cpp
+)
+target_link_libraries(hydra_dm PUBLIC hydra_core)
+target_link_libraries(hydra_dm PRIVATE winhttp hydra_warnings)
+target_include_directories(hydra_dm PRIVATE third_party/json)
+target_compile_options(hydra_dm PRIVATE /utf-8)
+
+# ---- hydra_ui: the edition-agnostic half of the GUI ----------------------
+# Compiled once and linked into both editions; only the sources that read
+# hydra::kUncapped (main, app_state, details_view) build per edition.
+add_library(hydra_ui STATIC
+    src/ui/icons.cpp
+    src/ui/jobs.cpp
+    src/ui/library_view.cpp
+    src/ui/theme.cpp
+    src/ui/win32_dialogs.cpp
+)
+# stb_image.h is third-party; keep icons.cpp out of our /W4 sweep like the
+# other vendored libraries above.
+set_source_files_properties(src/ui/icons.cpp PROPERTIES COMPILE_OPTIONS "/W1")
+target_include_directories(hydra_ui PRIVATE third_party/stb)
+target_link_libraries(hydra_ui PUBLIC hydra_dm imgui)
+# shell32: ShellExecuteW (opening reports); ole32: the folder-picker dialog.
+target_link_libraries(hydra_ui PRIVATE ole32 shell32 hydra_warnings)
 
 # ---- Hydra.exe / HydraUncapped.exe: the GUI shells -----------------------
 # Two editions from one source set (see src/app/edition.h). hydra_core is
 # edition-agnostic -- the uncapped SP semantics are a runtime parameter -- so
-# both link the same static lib; only HydraUncapped is compiled with
+# both link the same static libs; only HydraUncapped is compiled with
 # -DHYDRA_UNCAPPED, which flips the edition constants (title, db/ini names,
-# the uncapped flag). Mirrors hydra_app.py + hydra_uncapped.py.
+# the uncapped flag).
 set(HYDRA_GUI_SOURCES
-    src/app/main.cpp
-    src/app/hydra.rc
+    src/ui/main.cpp
+    src/ui/hydra.rc
     src/ui/app_state.cpp
-    src/ui/icons.cpp
-    src/ui/jobs.cpp
-    src/ui/library_view.cpp
     src/ui/details_view.cpp
-    src/ui/theme.cpp
-    src/ui/win32_dialogs.cpp
 )
-# stb_image.h is third-party; keep it out of our /W4 sweep like the other
-# vendored libraries above. (Source-scoped: applies in every target below.)
-set_source_files_properties(src/ui/icons.cpp PROPERTIES COMPILE_OPTIONS "/W1")
 
 foreach(edition IN ITEMS Hydra HydraUncapped)
     add_executable(${edition} WIN32 ${HYDRA_GUI_SOURCES})
-    target_include_directories(${edition} PRIVATE third_party/stb)
-    # shell32: ShellExecuteW, which ReportJob uses to open the finished report.
-    target_link_libraries(${edition} PRIVATE hydra_core imgui d3d11 dxgi d3dcompiler ole32 shell32)
-    target_compile_options(${edition} PRIVATE ${HYDRA_WARNINGS})
+    target_link_libraries(${edition} PRIVATE hydra_ui d3d11 dxgi d3dcompiler
+                          shell32 hydra_warnings)
     # GUI-subsystem app entered from a standard int main(), like the ImGui example.
     target_link_options(${edition} PRIVATE /ENTRY:mainCRTStartup)
     # resource/ (fonts, icons) is read relative to the exe at runtime; keep a
     # copy beside every build output so the exe doesn't need to run from the
-    # repo root. Mirrors what Phase 6's packaging step zips up.
+    # repo root.
     add_custom_command(TARGET ${edition} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
                 "${CMAKE_SOURCE_DIR}/resource" "$<TARGET_FILE_DIR:${edition}>/resource"
@@ -128,17 +149,15 @@ endforeach()
 target_compile_definitions(HydraUncapped PRIVATE HYDRA_UNCAPPED)
 
 # ---- hydra_batch / hydra_report: the command-line tools ------------------
-# Console ports of hydra_batch.py / hydra_report.py. One exe each serves both
-# editions: --uncapped selects the uncapped settings/db at runtime, the way
-# the Python CLIs read the flag from sys.argv (hymisc.py) — no second build.
+# One exe each serves both editions: --uncapped selects the uncapped
+# settings/db at runtime — no second build.
 add_executable(hydra_batch src/cli/batch.cpp)
 add_executable(hydra_report src/cli/report.cpp)
 foreach(tool IN ITEMS hydra_batch hydra_report)
-    target_link_libraries(${tool} PRIVATE hydra_core)
-    target_compile_options(${tool} PRIVATE ${HYDRA_WARNINGS})
+    target_link_libraries(${tool} PRIVATE hydra_core hydra_warnings)
 endforeach()
 
-# ---- hydra_tests: the parity/unit harness (doctest) ----------------------
+# ---- hydra_tests: the doctest harness ------------------------------------
 add_executable(hydra_tests
     tests/test_main.cpp
     tests/test_timing.cpp
@@ -152,12 +171,11 @@ add_executable(hydra_tests
     tests/test_analysis.cpp
     tests/test_report.cpp
 )
-target_link_libraries(hydra_tests PRIVATE hydra_core)
+target_link_libraries(hydra_tests PRIVATE hydra_core hydra_warnings)
 target_include_directories(hydra_tests PRIVATE
     third_party/doctest
     third_party/json
 )
-target_compile_options(hydra_tests PRIVATE ${HYDRA_WARNINGS})
 # doctest.h specializes std::tuple, which newer MSVC flags (C5285); harmless.
 target_compile_options(hydra_tests PRIVATE /wd5285)
 
@@ -171,13 +189,11 @@ target_compile_definitions(hydra_tests PRIVATE
 enable_testing()
 add_test(NAME hydra_tests COMMAND hydra_tests)
 
-# ---- packaging (replaces the PyInstaller build.py/specs) -----------------
+# ---- packaging -----------------------------------------------------------
 # `cpack -G ZIP` (or build_cpp.ps1 -Package) produces Hydra-<ver>-win64.zip:
 # both GUI editions, both CLI tools, resource/, LICENSE and README, all in one
-# folder the way the PyInstaller dist shipped. User data (hydra*.db/.ini) is
-# created next to the exe at runtime and never lives in the package, so a
-# rebuilt zip can't clobber anyone's records — the problem build.py existed
-# to work around.
+# folder. User data (hydra*.db/.ini) is created next to the exe at runtime and
+# never lives in the package, so a rebuilt zip can't clobber anyone's records.
 install(TARGETS Hydra HydraUncapped hydra_batch hydra_report RUNTIME DESTINATION .)
 install(DIRECTORY resource/ DESTINATION resource)
 install(FILES LICENSE README.md DESTINATION .)
@@ -187,11 +203,10 @@ set(CPACK_PACKAGE_FILE_NAME "Hydra-${PROJECT_VERSION}-win64")
 set(CPACK_PACKAGE_DIRECTORY "${CMAKE_BINARY_DIR}/package")
 include(CPack)
 
-# ---- hydra_bench: engine timing harness (not a test) ---------------------
-add_executable(hydra_bench tools/bench.cpp)
-target_link_libraries(hydra_bench PRIVATE hydra_core)
+# ---- hydra_bench: engine timing harness (not a test; built on demand) ----
+add_executable(hydra_bench EXCLUDE_FROM_ALL tools/bench.cpp)
+target_link_libraries(hydra_bench PRIVATE hydra_core hydra_warnings)
 target_include_directories(hydra_bench PRIVATE tests third_party/json)
-target_compile_options(hydra_bench PRIVATE ${HYDRA_WARNINGS})
 target_compile_definitions(hydra_bench PRIVATE
     HYDRA_INPUT_DIR="${CMAKE_SOURCE_DIR}/testdata/input"
 )

@@ -8,12 +8,24 @@
       "generator": "Visual Studio 18 2026",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build-cpp"
+    },
+    {
+      "name": "vs2022",
+      "displayName": "MSVC x64 (Visual Studio 17 2022)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build-cpp"
     }
   ],
   "buildPresets": [
     {
       "name": "default",
       "configurePreset": "default",
+      "configuration": "Release"
+    },
+    {
+      "name": "vs2022",
+      "configurePreset": "vs2022",
       "configuration": "Release"
     }
   ]

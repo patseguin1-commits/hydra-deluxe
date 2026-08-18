@@ -7,23 +7,11 @@
 #include <shobjidl.h>
 #include <wrl/client.h>
 
+#include "core/winstr.h"
+
 using Microsoft::WRL::ComPtr;
 
 namespace hydra::ui {
-
-namespace {
-
-std::string wide_to_utf8(const std::wstring& w) {
-    if (w.empty()) return "";
-    int len = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0,
-                                  nullptr, nullptr);
-    std::string s(static_cast<size_t>(len), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), &s[0], len, nullptr,
-                        nullptr);
-    return s;
-}
-
-}  // namespace
 
 std::optional<std::string> browse_for_folder(HWND owner, bool* failed) {
     if (failed) *failed = false;

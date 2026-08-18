@@ -5,13 +5,16 @@
 #include <algorithm>
 #include <stdexcept>
 
+#include "core/version.h"
 #include "store/serialize.h"
 
 namespace hydra::store {
 
 namespace {
 
-constexpr const char* kHydraVersion = "1.4.1";
+// Stamps every stored row; a mismatch marks the row stale (see reindex /
+// drop_stale_records). Single-sourced from CMake's project version.
+constexpr const char* kHydraVersion = HYDRA_VERSION;
 
 // RAII wrapper so every query site finalizes even on an early throw.
 struct Stmt {

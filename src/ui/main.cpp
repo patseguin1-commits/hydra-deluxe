@@ -17,7 +17,7 @@
 
 #include "app/config.h"
 #include "app/edition.h"
-#include "app/resource.h"
+#include "ui/resource.h"
 #include "ui/app_state.h"
 #include "ui/details_view.h"
 #include "ui/fonts.h"

@@ -3,9 +3,7 @@
 #include <algorithm>
 #include <cstdio>
 
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
+#include "core/winstr.h"  // fopen_utf8
 
 namespace hydra {
 namespace {
@@ -135,14 +133,7 @@ MidiFile MidiFile::from_file(const std::string& path) {
     // The path arrives as UTF-8; chart libraries contain non-ASCII filenames
     // (e.g. a fullwidth slash), so open through the wide API rather than fopen,
     // which would use the ANSI codepage and fail to find the file.
-    std::FILE* f = nullptr;
-    int wlen = ::MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
-    if (wlen > 0) {
-        std::wstring wpath(static_cast<size_t>(wlen), L'\0');
-        ::MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, &wpath[0], wlen);
-        if (!wpath.empty() && wpath.back() == L'\0') wpath.pop_back();
-        f = ::_wfopen(wpath.c_str(), L"rb");
-    }
+    std::FILE* f = fopen_utf8(path, L"rb");
     if (!f) throw MidiError("cannot open MIDI file: " + path);
     std::fseek(f, 0, SEEK_END);
     long n = std::ftell(f);

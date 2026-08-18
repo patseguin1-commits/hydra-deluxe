@@ -1,5 +1,3 @@
-#define _CRT_SECURE_NO_WARNINGS  // _wfopen; matches parse/midi.cpp's file open.
-
 #include "parse/song.h"
 
 #include <algorithm>
@@ -10,43 +8,15 @@
 #include <stdexcept>
 #include <unordered_map>
 
+#include "core/winstr.h"  // read_file_bytes
 #include "parse/midi.h"
 #include "parse/srb.h"
-
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
 
 namespace hydra {
 
 // ---- shared helpers -----------------------------------------------------
 
 namespace {
-
-// Read a whole file, opening via _wfopen so non-ASCII chart paths work (the
-// library contains e.g. a fullwidth slash). Mirrors parse/midi.cpp's approach.
-std::vector<uint8_t> read_file_bytes(const std::string& utf8_path) {
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8_path.c_str(), -1, nullptr, 0);
-    std::wstring wpath(static_cast<size_t>(wlen), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, utf8_path.c_str(), -1, &wpath[0], wlen);
-
-    FILE* f = _wfopen(wpath.c_str(), L"rb");
-    if (f == nullptr)
-        throw std::runtime_error("cannot open file: " + utf8_path);
-
-    std::fseek(f, 0, SEEK_END);
-    long size = std::ftell(f);
-    std::fseek(f, 0, SEEK_SET);
-
-    std::vector<uint8_t> buf(size > 0 ? static_cast<size_t>(size) : 0);
-    if (size > 0) {
-        size_t got = std::fread(buf.data(), 1, buf.size(), f);
-        buf.resize(got);
-    }
-    std::fclose(f);
-    return buf;
-}
 
 std::string strip(const std::string& s) {
     const char* ws = " \t\r\n\v\f";

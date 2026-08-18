@@ -23,18 +23,7 @@ namespace hydra::ui {
 ScanJob::ScanJob(std::vector<std::string> rootfolders, store::RecordStore& store)
     : rootfolders_(std::move(rootfolders)), store_(store) {}
 
-ScanJob::~ScanJob() {
-    if (thread_.joinable()) {
-        cancel();
-        thread_.join();
-    }
-}
-
-void ScanJob::start() {
-    thread_ = std::thread([this] { run(); });
-}
-
-void ScanJob::cancel() { cancel_.store(true); }
+void ScanJob::start() { spawn([this] { run(); }); }
 
 ScanProgress ScanJob::snapshot() const {
     std::lock_guard<std::mutex> lock(mu_);
@@ -117,18 +106,7 @@ BatchJob::BatchJob(std::optional<std::string> search, std::string chartmode,
       redo_(redo),
       workers_(app::batch_worker_count()) {}
 
-BatchJob::~BatchJob() {
-    if (thread_.joinable()) {
-        cancel();
-        thread_.join();
-    }
-}
-
-void BatchJob::start() {
-    thread_ = std::thread([this] { run(); });
-}
-
-void BatchJob::cancel() { cancel_.store(true); }
+void BatchJob::start() { spawn([this] { run(); }); }
 
 BatchJob::Snapshot BatchJob::snapshot() const {
     std::lock_guard<std::mutex> lock(mu_);
@@ -191,17 +169,42 @@ void BatchJob::run() {
 
 // ---- ReportJob --------------------------------------------------------
 
-std::wstring report_html_path(bool uncapped) {
+namespace {
+
+// Report pages live next to the db, edition-suffixed so the two editions
+// never overwrite each other's page.
+std::wstring html_artifact_path(bool uncapped, const wchar_t* name,
+                                const wchar_t* name_uncapped) {
     std::filesystem::path dbp = std::filesystem::u8path(app::db_path(uncapped));
-    return (dbp.parent_path() /
-            (uncapped ? L"hydra_paths_uncapped.html" : L"hydra_paths.html"))
-        .wstring();
+    return (dbp.parent_path() / (uncapped ? name_uncapped : name)).wstring();
+}
+
+bool open_in_browser(const std::wstring& path) {
+    HINSTANCE rc = ShellExecuteW(nullptr, L"open", path.c_str(), nullptr,
+                                 nullptr, SW_SHOWNORMAL);
+    return reinterpret_cast<INT_PTR>(rc) > 32;
+}
+
+// The shared report tail: write the page and open it in the browser.
+void write_and_open(const std::filesystem::path& outpath, const std::string& html,
+                    bool open_when_done) {
+    std::ofstream f(outpath, std::ios::binary | std::ios::trunc);
+    if (!f) throw std::runtime_error("cannot write " + outpath.u8string());
+    f << html;
+    f.close();
+    if (open_when_done && !open_in_browser(outpath.wstring()))
+        throw std::runtime_error("could not open " + outpath.u8string());
+}
+
+}  // namespace
+
+std::wstring report_html_path(bool uncapped) {
+    return html_artifact_path(uncapped, L"hydra_paths.html",
+                              L"hydra_paths_uncapped.html");
 }
 
 bool open_report_in_browser(bool uncapped) {
-    HINSTANCE rc = ShellExecuteW(nullptr, L"open", report_html_path(uncapped).c_str(),
-                                 nullptr, nullptr, SW_SHOWNORMAL);
-    return reinterpret_cast<INT_PTR>(rc) > 32;
+    return open_in_browser(report_html_path(uncapped));
 }
 
 bool report_file_exists(bool uncapped) {
@@ -211,16 +214,10 @@ bool report_file_exists(bool uncapped) {
 ReportJob::ReportJob(store::RecordStore& store, bool uncapped, bool open_when_done)
     : store_(store), uncapped_(uncapped), open_when_done_(open_when_done) {}
 
-ReportJob::~ReportJob() {
-    if (thread_.joinable()) thread_.join();
-}
-
-void ReportJob::start() {
-    thread_ = std::thread([this] { run(); });
-}
+void ReportJob::start() { spawn([this] { run(); }); }
 
 void ReportJob::run() {
-    try {
+    run_guarded([this] {
         auto [songs, records] = store_.counts();
         std::vector<app::report::ReportRow> rows =
             app::report::collect_rows(store_, 5, uncapped_);
@@ -235,60 +232,33 @@ void ReportJob::run() {
                              ". Timing tiers match Hydra's squeeze ratings; "
                              "'Beyond' is past the stock 140 ms window.";
 
-        std::filesystem::path outpath = report_html_path(uncapped_);
-
-        std::ofstream f(outpath, std::ios::binary | std::ios::trunc);
-        if (!f) throw std::runtime_error("cannot write " + outpath.u8string());
-        f << app::report::build_html(rows, subtitle, footer);
-        f.close();
-
-        if (open_when_done_ && !open_report_in_browser(uncapped_))
-            throw std::runtime_error("could not open " + outpath.u8string());
-        ok_ = true;
-    } catch (const std::exception& e) {
-        error_ = e.what();
-        ok_ = false;
-    }
-    finished_.store(true);
+        write_and_open(report_html_path(uncapped_),
+                       app::report::build_html(rows, subtitle, footer),
+                       open_when_done_);
+        return true;
+    });
 }
 
 // ---- DmFetchUsersJob --------------------------------------------------
 
-DmFetchUsersJob::DmFetchUsersJob() = default;
-
-DmFetchUsersJob::~DmFetchUsersJob() {
-    cancel_.store(true);
-    if (thread_.joinable()) thread_.join();
-}
-
-void DmFetchUsersJob::start() {
-    thread_ = std::thread([this] { run(); });
-}
+void DmFetchUsersJob::start() { spawn([this] { run(); }); }
 
 void DmFetchUsersJob::run() {
-    try {
+    run_guarded([this] {
         users_ = net::fetch_users(net::kDefaultApiBase, &cancel_);
-        ok_ = true;
-    } catch (const std::exception& e) {
-        error_ = e.what();
-        ok_ = false;
-    }
-    finished_.store(true);
+        return true;
+    });
 }
 
 // ---- DmReportJob ------------------------------------------------------
 
 std::wstring dm_report_html_path(bool uncapped) {
-    std::filesystem::path dbp = std::filesystem::u8path(app::db_path(uncapped));
-    return (dbp.parent_path() /
-            (uncapped ? L"hydra_dmcompare_uncapped.html" : L"hydra_dmcompare.html"))
-        .wstring();
+    return html_artifact_path(uncapped, L"hydra_dmcompare.html",
+                              L"hydra_dmcompare_uncapped.html");
 }
 
 bool open_dm_report_in_browser(bool uncapped) {
-    HINSTANCE rc = ShellExecuteW(nullptr, L"open", dm_report_html_path(uncapped).c_str(), nullptr,
-                                 nullptr, SW_SHOWNORMAL);
-    return reinterpret_cast<INT_PTR>(rc) > 32;
+    return open_in_browser(dm_report_html_path(uncapped));
 }
 
 DmReportJob::DmReportJob(store::RecordStore& store, std::string discord_id, std::string username,
@@ -299,21 +269,14 @@ DmReportJob::DmReportJob(store::RecordStore& store, std::string discord_id, std:
       chartmode_(std::move(chartmode)),
       uncapped_(uncapped) {}
 
-DmReportJob::~DmReportJob() {
-    cancel_.store(true);
-    if (thread_.joinable()) thread_.join();
-}
-
-void DmReportJob::start() {
-    thread_ = std::thread([this] { run(); });
-}
+void DmReportJob::start() { spawn([this] { run(); }); }
 
 void DmReportJob::run() {
-    try {
+    run_guarded([this] {
         std::vector<net::DmScore> scores =
             net::fetch_scores(discord_id_, net::kDefaultApiBase, &cancel_);
         std::vector<app::dm_report::DmReportRow> rows =
-            app::dm_report::collect_dm_rows(store_, scores, chartmode_, uncapped_);
+            app::dm_report::collect_dm_rows(store_, scores, chartmode_);
         if (rows.empty())
             throw std::runtime_error("this user has no scores to compare");
 
@@ -333,20 +296,11 @@ void DmReportJob::run() {
             ". Above-optimal scores are expected — Hydra's optimal excludes several score "
             "backends, and older Clone Hero versions allowed fills that are impossible now.";
 
-        std::filesystem::path outpath = dm_report_html_path(uncapped_);
-        std::ofstream f(outpath, std::ios::binary | std::ios::trunc);
-        if (!f) throw std::runtime_error("cannot write " + outpath.u8string());
-        f << app::dm_report::build_dm_html(rows, subtitle, footer);
-        f.close();
-
-        if (!open_dm_report_in_browser(uncapped_))
-            throw std::runtime_error("could not open " + outpath.u8string());
-        ok_ = true;
-    } catch (const std::exception& e) {
-        error_ = e.what();
-        ok_ = false;
-    }
-    finished_.store(true);
+        write_and_open(dm_report_html_path(uncapped_),
+                       app::dm_report::build_dm_html(rows, subtitle, footer),
+                       /*open_when_done=*/true);
+        return true;
+    });
 }
 
 // ---- AnalyzeJob -------------------------------------------------------
@@ -364,34 +318,25 @@ AnalyzeJob::AnalyzeJob(store::ChartLibraryEntry song, std::string chartmode,
       chartmode_(std::move(chartmode)),
       settings_(std::move(settings)) {}
 
-AnalyzeJob::~AnalyzeJob() {
-    if (thread_.joinable()) {
-        cancel();
-        thread_.join();
-    }
-}
-
-void AnalyzeJob::cancel() { cancel_.store(true); }
-
 void AnalyzeJob::start() {
     // The thread constructor itself can throw (std::system_error when the OS
     // refuses the thread); route that through the modal's error path instead
     // of letting it escape start_analyze and terminate the app.
     try {
-        thread_ = std::thread([this] {
-            try {
-                result_ = app::analyze_chart_file(song_.notespath, settings_, [this](float f) {
-                    if (cancel_.load(std::memory_order_relaxed)) throw AnalysisCancelled{};
-                    progress_.store(f, std::memory_order_relaxed);
-                });
-                ok_ = true;
-            } catch (const AnalysisCancelled&) {
-                ok_ = false;  // no error text: the UI discards a cancelled job
-            } catch (const std::exception& e) {
-                error_ = e.what();
-                ok_ = false;
-            }
-            finished_.store(true);
+        spawn([this] {
+            run_guarded([this] {
+                try {
+                    result_ = app::analyze_chart_file(
+                        song_.notespath, settings_, [this](float f) {
+                            if (cancel_.load(std::memory_order_relaxed))
+                                throw AnalysisCancelled{};
+                            progress_.store(f, std::memory_order_relaxed);
+                        });
+                    return true;
+                } catch (const AnalysisCancelled&) {
+                    return false;  // no error text: the UI discards a cancelled job
+                }
+            });
         });
     } catch (const std::exception& e) {
         error_ = e.what();

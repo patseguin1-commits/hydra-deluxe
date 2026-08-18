@@ -45,7 +45,7 @@ struct DmReportRow {
 // matched Hydra record's when the leaderboard entry is an "unknown" one.
 std::vector<DmReportRow> collect_dm_rows(store::RecordStore& store,
                                          const std::vector<net::DmScore>& scores,
-                                         const std::string& chartmode, bool uncapped);
+                                         const std::string& chartmode);
 
 // The self-contained comparison page. Same __SUBTITLE__/__FOOTER__/__DATA__
 // placeholder mechanism as report::build_html, with its own columns.

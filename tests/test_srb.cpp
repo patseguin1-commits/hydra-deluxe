@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "app/analysis.h"
+#include "core/winstr.h"
 #include "corpus_util.h"
 #include "miniz.h"
 #include "parse/song.h"
@@ -32,28 +33,12 @@ using namespace hydra;
 
 namespace {
 
-std::wstring utf8_to_wide(const std::string& s) {
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
-    std::wstring w(static_cast<size_t>(wlen), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, &w[0], wlen);
-    w.resize(w.size() - 1);  // drop the terminator
-    return w;
-}
-
 std::vector<uint8_t> read_bytes(const std::string& path) {
-    FILE* f = _wfopen(utf8_to_wide(path).c_str(), L"rb");
-    REQUIRE_MESSAGE(f != nullptr, "cannot open " << path);
-    std::fseek(f, 0, SEEK_END);
-    long size = std::ftell(f);
-    std::fseek(f, 0, SEEK_SET);
-    std::vector<uint8_t> buf(size > 0 ? static_cast<size_t>(size) : 0);
-    if (size > 0) buf.resize(std::fread(buf.data(), 1, buf.size(), f));
-    std::fclose(f);
-    return buf;
+    return hydra::read_file_bytes(path);
 }
 
 void write_bytes(const std::string& path, const std::vector<uint8_t>& data) {
-    FILE* f = _wfopen(utf8_to_wide(path).c_str(), L"wb");
+    FILE* f = hydra::fopen_utf8(path, L"wb");
     REQUIRE_MESSAGE(f != nullptr, "cannot write " << path);
     if (!data.empty()) std::fwrite(data.data(), 1, data.size(), f);
     std::fclose(f);

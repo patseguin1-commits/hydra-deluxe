@@ -14,6 +14,9 @@
 
 #include "json.hpp"
 
+#include "core/version.h"
+#include "core/winstr.h"
+
 namespace hydra::net {
 
 namespace {
@@ -32,14 +35,6 @@ struct Handle {
     explicit operator bool() const { return h != nullptr; }
 };
 
-std::wstring widen(const std::string& s) {
-    if (s.empty()) return {};
-    int len = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0);
-    std::wstring out((size_t)len, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), &out[0], len);
-    return out;
-}
-
 [[noreturn]] void fail(const std::string& what) {
     throw std::runtime_error(what + " (error " + std::to_string(GetLastError()) + ")");
 }
@@ -48,7 +43,7 @@ std::wstring widen(const std::string& s) {
 // user-facing message on any transport error or a non-200 status. Checks
 // `cancel` between read chunks.
 std::string http_get(const std::string& url, const std::atomic<bool>* cancel) {
-    std::wstring wurl = widen(url);
+    std::wstring wurl = hydra::utf8_to_wide(url);
 
     URL_COMPONENTS uc{};
     uc.dwStructSize = sizeof(uc);
@@ -66,7 +61,8 @@ std::string http_get(const std::string& url, const std::atomic<bool>* cancel) {
 
     // A real User-Agent: Cloudflare (which fronts the backend) rejects empty
     // or missing ones with a 403 before the request ever reaches the API.
-    Handle session(WinHttpOpen(L"Hydra/1.4.1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+    Handle session(WinHttpOpen(L"Hydra/" HYDRA_VERSION_W,
+                               WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
     if (!session) fail("could not start the network session");
 

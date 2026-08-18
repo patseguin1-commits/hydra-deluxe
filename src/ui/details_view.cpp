@@ -6,6 +6,7 @@
 #include <windows.h>
 
 #include "app/edition.h"
+#include "core/winstr.h"
 #include "imgui.h"
 #include "ui/fonts.h"
 #include "ui/icons.h"
@@ -21,14 +22,6 @@
 namespace hydra::ui {
 
 namespace {
-
-bool file_exists_utf8(const std::string& utf8_path) {
-    int wlen =
-        MultiByteToWideChar(CP_UTF8, 0, utf8_path.data(), (int)utf8_path.size(), nullptr, 0);
-    std::wstring wpath((size_t)wlen, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, utf8_path.data(), (int)utf8_path.size(), &wpath[0], wlen);
-    return GetFileAttributesW(wpath.c_str()) != INVALID_FILE_ATTRIBUTES;
-}
 
 std::string measurestr(const Timecode& tc) {
     const int64_t* mbt = tc.measure_beats_ticks();

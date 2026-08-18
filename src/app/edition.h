@@ -9,6 +9,8 @@
 // shell binds an edition, here.
 #pragma once
 
+#include "core/version.h"
+
 namespace hydra {
 
 // Per-edition user file names (hydra{_uncapped}.db / .ini) are built at
@@ -16,11 +18,12 @@ namespace hydra {
 // their edition with --uncapped rather than a build flag.
 #ifdef HYDRA_UNCAPPED
 inline constexpr bool kUncapped = true;
-inline constexpr const wchar_t* kWindowTitleW = L"Hydra Uncapped v1.4.1";
+inline constexpr const wchar_t* kWindowTitleW =
+    L"Hydra Uncapped v" HYDRA_VERSION_W;
 inline constexpr const wchar_t* kAppUserModelIDW = L"Hydra.Uncapped";
 #else
 inline constexpr bool kUncapped = false;
-inline constexpr const wchar_t* kWindowTitleW = L"Hydra v1.4.1";
+inline constexpr const wchar_t* kWindowTitleW = L"Hydra v" HYDRA_VERSION_W;
 inline constexpr const wchar_t* kAppUserModelIDW = L"Hydra.Hydra";
 #endif
 
