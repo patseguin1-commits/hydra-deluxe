@@ -1,2 +1,13 @@
-# Auto detect text files and perform LF normalization
 * text=auto
+
+# The chart corpus and binary assets must never go through CRLF
+# normalization; a converted .mid silently breaks parsing.
+*.mid binary
+*.chart -text
+*.sng binary
+*.srb binary
+*.db binary
+*.ttf binary
+*.png binary
+*.PNG binary
+*.ico binary

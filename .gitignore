@@ -1,17 +1,13 @@
 # Hydra local outputs.
-output/*
+/output/
 
 # User data the app/CLIs write next to the executable. The uncapped edition
-# keeps its own set alongside these. (hyapp.* are the retired Python app's
-# names, kept ignored so an old working copy stays clean.)
-hydra.db
+# keeps its own set alongside these.
+*.db
 hydra_settings.ini
-hydra_uncapped.db
 hydra_uncapped_settings.ini
-hyapp.ini
-hyapp.db
-hyapp_uncapped.ini
-hyapp_uncapped.db
+hydra_ui.ini
+hydra_uncapped_ui.ini
 
 # ImGui window layout, written wherever the app runs from.
 imgui.ini
@@ -19,10 +15,20 @@ imgui.ini
 # Local utility scripts, anything else
 local/*
 
-# Generated golden oracle for the C++ parity tests (large). Rebuild it from
-# the `python-oracle` tag: check it out and run tools/gen_golden.py and
-# tools/gen_golden_report.py.
+# Golden parity data (removed in Phase C; ignored until then).
 golden/
 
-# C++ build tree (CMake).
+# C++ build tree (CMake) and IDE state.
 build-cpp/
+.vs/
+out/
+CMakeUserPresets.json
+compile_commands.json
+
+# Retired Python-era build output locations.
+build/
+dist/
+
+# Claude Code local state (the shared output style stays tracked).
+.claude/*
+!.claude/output-styles/

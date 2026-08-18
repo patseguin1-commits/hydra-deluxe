@@ -119,13 +119,16 @@ int main(int, char**)
     io.ConfigDpiScaleViewports = true;
     hydra::ui::g_ui_scale = main_scale;  // for the views' explicit pixel sizes
 
-    // Fonts, matching hydra_app.py's MainFont/MonoFont (resource/ is copied
-    // beside the exe by the build; see CMakeLists.txt). Falls back to
-    // ImGui's built-in font if the files aren't found, rather than asserting.
+    // Fonts (resource/ is copied beside the exe by the build; see
+    // CMakeLists.txt). exe-relative, not cwd-relative: the app may be
+    // launched with any working directory (e.g. a shortcut's Start-in).
+    // Falls back to ImGui's built-in font if the files aren't found,
+    // rather than asserting.
+    const std::string resource_dir = hydra::app::exe_dir() + "\\resource\\";
     ImFont* main_font = io.Fonts->AddFontFromFileTTF(
-        "resource/ShipporiAntiqueB1-Regular.ttf", 18.0f);
+        (resource_dir + "ShipporiAntiqueB1-Regular.ttf").c_str(), 18.0f);
     hydra::ui::g_mono_font = io.Fonts->AddFontFromFileTTF(
-        "resource/CourierPrime-Regular.ttf", 18.0f);
+        (resource_dir + "CourierPrime-Regular.ttf").c_str(), 18.0f);
     if (main_font) io.FontDefault = main_font;
 
     // CJK fallback: Clone Hero libraries are full of Japanese (and other
