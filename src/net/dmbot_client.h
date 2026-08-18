@@ -67,6 +67,12 @@ std::vector<DmScore> fetch_scores(const std::string& discord_id,
                                   const std::string& api_base = kDefaultApiBase,
                                   const std::atomic<bool>* cancel = nullptr);
 
+// The JSON halves of the two fetches, separated from the WinHTTP transport so
+// tests can exercise them with canned payloads. Throw std::runtime_error with
+// a user-facing message on unparseable or unexpectedly-shaped bodies.
+std::vector<DmUser> parse_users_json(const std::string& body);
+std::vector<DmScore> parse_scores_json(const std::string& body);
+
 }  // namespace hydra::net
 
 #endif  // HYDRA_NET_DMBOT_CLIENT_H

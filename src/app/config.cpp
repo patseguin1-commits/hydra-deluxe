@@ -43,9 +43,13 @@ std::string ini_path(bool uncapped) {
 }
 
 Settings Settings::load(bool uncapped) {
+    return load_file(ini_path(uncapped), uncapped);
+}
+
+Settings Settings::load_file(const std::string& path, bool uncapped) {
     Settings s;
     s.uncapped = uncapped;
-    std::ifstream f(ini_path(uncapped));
+    std::ifstream f(path);
     if (!f) return s;  // defaults
 
     std::string line;
@@ -74,8 +78,10 @@ Settings Settings::load(bool uncapped) {
     return s;
 }
 
-bool Settings::save() const {
-    std::ofstream f(ini_path(uncapped), std::ios::trunc);
+bool Settings::save() const { return save_file(ini_path(uncapped)); }
+
+bool Settings::save_file(const std::string& path) const {
+    std::ofstream f(path, std::ios::trunc);
     if (!f) return false;
 
     f << "is_rescan=" << (is_rescan ? 1 : 0) << "\n";

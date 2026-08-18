@@ -68,6 +68,11 @@ struct Settings {
     // never call save()).
     bool save() const;
 
+    // Explicit-path forms, so tests can round-trip through a temp file
+    // without touching the real per-edition INI. load/save delegate here.
+    static Settings load_file(const std::string& path, bool uncapped);
+    bool save_file(const std::string& path) const;
+
     // "Expert Pro Drums, 2x Bass" — mirrors HyAppUserSettings.chartmode_key.
     std::string chartmode_key() const;
 

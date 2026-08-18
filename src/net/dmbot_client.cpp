@@ -172,8 +172,8 @@ json parse_json(const std::string& body) {
 
 }  // namespace
 
-std::vector<DmUser> fetch_users(const std::string& api_base, const std::atomic<bool>* cancel) {
-    json root = parse_json(http_get(api_base + "/all-users", cancel));
+std::vector<DmUser> parse_users_json(const std::string& body) {
+    json root = parse_json(body);
     if (!root.is_array()) throw std::runtime_error("unexpected user-list format");
 
     std::vector<DmUser> users;
@@ -193,9 +193,8 @@ std::vector<DmUser> fetch_users(const std::string& api_base, const std::atomic<b
     return users;
 }
 
-std::vector<DmScore> fetch_scores(const std::string& discord_id, const std::string& api_base,
-                                  const std::atomic<bool>* cancel) {
-    json root = parse_json(http_get(api_base + "/user/" + discord_id + "/scores", cancel));
+std::vector<DmScore> parse_scores_json(const std::string& body) {
+    json root = parse_json(body);
 
     std::vector<DmScore> scores;
     auto add_all = [&](const char* key, bool known) {
@@ -210,6 +209,15 @@ std::vector<DmScore> fetch_scores(const std::string& discord_id, const std::stri
     add_all("scores", /*known=*/true);
     add_all("unknown_scores", /*known=*/false);
     return scores;
+}
+
+std::vector<DmUser> fetch_users(const std::string& api_base, const std::atomic<bool>* cancel) {
+    return parse_users_json(http_get(api_base + "/all-users", cancel));
+}
+
+std::vector<DmScore> fetch_scores(const std::string& discord_id, const std::string& api_base,
+                                  const std::atomic<bool>* cancel) {
+    return parse_scores_json(http_get(api_base + "/user/" + discord_id + "/scores", cancel));
 }
 
 }  // namespace hydra::net

@@ -170,8 +170,11 @@ add_executable(hydra_tests
     tests/test_store.cpp
     tests/test_analysis.cpp
     tests/test_report.cpp
+    tests/test_config.cpp
+    tests/test_dm_report.cpp
 )
-target_link_libraries(hydra_tests PRIVATE hydra_core hydra_warnings)
+# hydra_dm: test_dm_report exercises the leaderboards join and JSON parsers.
+target_link_libraries(hydra_tests PRIVATE hydra_dm hydra_warnings)
 target_include_directories(hydra_tests PRIVATE
     third_party/doctest
     third_party/json
