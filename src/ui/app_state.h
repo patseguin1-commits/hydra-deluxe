@@ -29,7 +29,17 @@ using Settings = app::Settings;
 
 // One page of the library table, plus enough to know if there's more.
 struct LibraryPage {
+    // The "Best Path" cell's state, resolved once per page refresh — querying
+    // the store per visible row per frame contended the store's mutex with
+    // batch workers thousands of times a second.
+    enum class SummaryState { New, Current, Stale };
+    struct RowSummary {
+        SummaryState state = SummaryState::New;
+        std::string bestpath;  // set when state == Current
+    };
+
     std::vector<store::ChartLibraryEntry> rows;
+    std::vector<RowSummary> summaries;  // parallel to `rows`
     int64_t total_count = 0;
 };
 
@@ -70,16 +80,58 @@ public:
     int record_generation = 0;  // bumped by refresh_viewed_record(); invalidates UI selection caches
     void refresh_viewed_record();
 
+    // Timing context for `selected`'s song, loaded alongside viewed_record —
+    // the store is DB+mutex, so the per-frame details view must never query
+    // it. nullopt when the song isn't registered.
+    std::optional<SongTiming> viewed_timing;
+
     // Background jobs (at most one of each kind runs at a time).
     std::unique_ptr<ScanJob> scan_job;
     std::unique_ptr<BatchJob> batch_job;
     std::unique_ptr<AnalyzeJob> analyze_job;
+    // Bumped by start_analyze(). The details modal keys its per-job completion
+    // state on this, NOT on the AnalyzeJob's address: the heap can hand a new
+    // job the previous job's block, and a pointer compare then leaves the
+    // "already stored" flag stale, silently discarding the finished analysis.
+    int analyze_generation = 0;
+    std::unique_ptr<ReportJob> report_job;
+
+    // Whether this batch run has already kicked off its path report — one
+    // report per run, however long the finished modal stays open.
+    bool report_started = false;
+
+    // "Compare dmleaderboards user" picker + its two network jobs. The fetch
+    // job loads the ladder into dm_users; the report job builds the HTML.
+    bool dm_picker_open = false;
+    std::vector<net::DmUser> dm_users;
+    std::unique_ptr<DmFetchUsersJob> dm_fetch_job;
+    std::unique_ptr<DmReportJob> dm_report_job;
 
     void start_scan();
     void start_batch(bool redo);
     void start_analyze();  // analyzes `selected` under the current chartmode
+    void start_dm_fetch();  // loads the dmleaderboards user list
+    void start_dm_report(const std::string& discord_id, const std::string& username);
 
     bool batch_redo = false;  // "redo existing" checkbox state
+
+    // "Analyze library" opens its modal in a confirm stage before any work
+    // starts; true while that stage is showing (batch_job not yet created).
+    bool batch_confirm_pending = false;
+
+    // Set by the details modal's "Rescan library" remedy: the main window
+    // starts the scan on its next frame (the scan modal belongs to it).
+    bool request_scan = false;
+
+    // Transient feedback line ("folder already added", save failures, ...).
+    // The view times the fade-out off status_generation changing.
+    std::string status_message;
+    int status_generation = 0;
+    void set_status(std::string message);
+
+    // settings.save() + a status message when the INI can't be written —
+    // save() failing silently made changes look persisted when they weren't.
+    void save_settings();
 
     // Clipboard text set by the details view when a path is picked, copied on
     // Ctrl+C — mirrors appstate.current_path_copytext.

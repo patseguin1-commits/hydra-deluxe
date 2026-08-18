@@ -12,15 +12,27 @@
 
 #include "core/model.h"
 #include "parse/song.h"
+#include "search/graph.h"
 
 namespace hydra {
 
+// The best all-0 path over an already-built graph: the highest-scoring path
+// whose activations all record skips == 0, under a fixed 0 ms timing limit,
+// with its tied variations as variants. Empty when the chart offers no such
+// path. This is a second, constrained search because the main search keeps
+// paths by score band and drops the all-0 path when it scores below the band.
+// It has no activation branching, so it is far cheaper than the main search.
+std::vector<Path> search_allzero(const ScoreGraph& graph,
+                                 const std::function<void(float)>& on_progress = {});
+
 // One pathing run with a given SP meter ceiling. build_cap, when set, is the
 // ceiling the graph is actually built at (the record still reports sp_cap).
+// want_allzero also runs search_allzero over the same graph and stores it in
+// the record's allzero_paths.
 // Mirrors hyutil._analyze_at_cap.
 HydraRecord analyze_at_cap(const Song& song, int sp_cap, int depth_mode,
                            int depth_value, std::optional<double> ms_filter,
-                           std::optional<int> build_cap,
+                           std::optional<int> build_cap, bool want_allzero = false,
                            const std::function<void(float)>& on_progress = {});
 
 // The uncapped edition: raise the ceiling up SP_CAP_LADDER until the score
@@ -30,8 +42,11 @@ HydraRecord analyze_at_cap(const Song& song, int sp_cap, int depth_mode,
 // always finishes), keeping the best rung so far and flagging it unsettled --
 // hyutil's SP_CAP_TIME_BUDGET. nullopt runs every rung to completion (what the
 // golden generator does), so it must stay unset in the parity tests.
+// want_allzero runs the all-0 pass once, after the ladder settles, at the
+// settled ceiling -- never per rung.
 HydraRecord analyze_uncapped(const Song& song, int depth_mode, int depth_value,
                              std::optional<double> ms_filter,
+                             bool want_allzero = false,
                              const std::function<void(float)>& on_progress = {},
                              std::optional<double> time_budget_s = std::nullopt);
 

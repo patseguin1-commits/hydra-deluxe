@@ -196,6 +196,56 @@ TEST_CASE("analysis matches golden across the corpus and config matrix") {
     MESSAGE("checked " << checks << " analyses");
 }
 
+// The all-0 pass is a second, constrained search. Its whole contract is that
+// every activation it reports records skips == 0, that the 0 ms limit is a
+// requirement rather than a preference, and that it never scores above the
+// unconstrained optimum.
+TEST_CASE("search_allzero returns only all-0 paths inside the 0 ms limit") {
+    const golden::json idx = golden::index();
+    int checks = 0, mismatches = 0, found = 0;
+
+    for (const auto& entry : idx) {
+        const std::string relpath = entry["relpath"].get<std::string>();
+        const std::string path = std::string(HYDRA_INPUT_DIR) + "/" + relpath;
+
+        Song song = load_songpath(path, "Expert", true, true);
+        if (song.is_empty()) continue;
+
+        ScoreGraph graph(song, 4);
+        std::vector<Path> allzero = search_allzero(graph);
+        ++checks;
+        if (allzero.empty()) continue;
+        ++found;
+
+        HydraRecord holder;
+        holder.allzero_paths = allzero;
+        const int64_t optimum = run_search(graph, 0, 0, std::nullopt, false).front().totalscore();
+
+        std::string d;
+        for (const Path* p : holder.all_allzero_paths()) {
+            if (!p->is_allzero()) {
+                d = "not all-0: " + p->pathstring();
+                break;
+            }
+            if (p->difficulty().value_or(0.0) > 0.0) {
+                d = "over the 0 ms limit: " + p->pathstring() + " needs " +
+                    std::to_string(*p->difficulty()) + " ms";
+                break;
+            }
+            if (p->totalscore() > optimum) {
+                d = "scores above the optimum: " + p->pathstring();
+                break;
+            }
+        }
+        if (!d.empty() && ++mismatches <= 8)
+            CHECK_MESSAGE(false, relpath << " " << d);
+    }
+
+    CHECK(mismatches == 0);
+    CHECK(found > 0);
+    MESSAGE("checked " << checks << " charts, " << found << " with an all-0 path");
+}
+
 TEST_CASE("DP best score equals BFS best score over a cap ladder") {
     const int caps[] = {4, 16, 32};
 

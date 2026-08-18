@@ -46,6 +46,11 @@ void apply_theme() {
     // (0.60 default), which would wash out the explicit colors
     // begin_disabled_button()/begin_disabled_input() push below -- so
     // disable that multiply entirely and rely on the explicit push instead.
+    //
+    // INVARIANT: because of this, a bare ImGui::BeginDisabled() renders
+    // EXACTLY like an enabled control (it only swallows input) -- every
+    // disabled control must go through begin_disabled_button()/
+    // begin_disabled_input() so the user can see it's disabled.
     style.DisabledAlpha = 1.0f;
 }
 

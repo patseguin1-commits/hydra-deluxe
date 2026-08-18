@@ -7,9 +7,11 @@
 //     hydra_report --out report.html
 //     hydra_report --db <path>       # a specific database
 //     hydra_report --uncapped        # the uncapped edition's records
+//     hydra_report --no-open         # don't launch the page when done
 //
 // The page is self-contained: open it anywhere, click any column to sort,
-// filter by text, difficulty tier, or best-path-only.
+// filter by text, difficulty tier, or best-path-only. The finished page
+// opens in the default browser unless --no-open is given.
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -34,6 +36,7 @@ int main(int argc, char** argv) {
     std::string out = "hydra_paths.html";
     std::optional<std::string> dbpath;
     bool uncapped = false;
+    bool open_when_done = true;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -42,6 +45,7 @@ int main(int argc, char** argv) {
         else if (arg == "--out" && i + 1 < argc) out = argv[++i];
         else if (arg == "--db" && i + 1 < argc) dbpath = argv[++i];
         else if (arg == "--uncapped") uncapped = true;
+        else if (arg == "--no-open") open_when_done = false;
         else {
             std::fprintf(stderr, "Unknown option: %s\n", arg.c_str());
             return 2;
@@ -86,5 +90,15 @@ int main(int argc, char** argv) {
 
     std::printf("Wrote %s path rows to %s\n", hydra::group_thousands(
                     static_cast<int64_t>(rows.size())).c_str(), out.c_str());
+
+    if (open_when_done) {
+        // Hand the page to the default browser. ShellExecuteW returns > 32 on
+        // success; failure (no association, whatever) isn't worth failing the
+        // run over — the file is already written and its path was printed.
+        HINSTANCE rc = ShellExecuteW(nullptr, L"open", outpath.c_str(), nullptr,
+                                     nullptr, SW_SHOWNORMAL);
+        if (reinterpret_cast<INT_PTR>(rc) <= 32)
+            std::fprintf(stderr, "Could not open the page automatically.\n");
+    }
     return 0;
 }

@@ -29,9 +29,19 @@ namespace hydra {
 // on_progress, if set, receives a monotonic 0..1 fraction as the BFS frontier
 // sweeps the chart (BFS only; ignored by the DP). Lets the UI show a real
 // progress bar for a heavy chart instead of an indeterminate spinner.
+// no_skips constrains the search to paths whose activations all record
+// skips == 0 -- the "all-0" path a player hits by activating at every first
+// opportunity. It removes all activation branching, so such a search is far
+// cheaper than an unconstrained one.
+// hard_ms_filter turns ms_filter from a preference into a requirement. By
+// default an over-limit path still survives while nothing outscores it, so the
+// best path a search reports can need more timing than the limit allows; with
+// this set, an over-limit path is dropped outright.
+// Both are BFS only: run_search throws when either is set with use_dp.
 std::vector<Path> run_search(const ScoreGraph& graph, int depth_mode,
                              int depth_value, std::optional<double> ms_filter,
-                             bool use_dp,
+                             bool use_dp, bool no_skips = false,
+                             bool hard_ms_filter = false,
                              const std::function<void(float)>& on_progress = {});
 
 }  // namespace hydra

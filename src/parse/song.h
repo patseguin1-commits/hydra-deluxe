@@ -1,6 +1,6 @@
 // Chart parsing — the C++ port of hydra/hysong.py.
 //
-// Turns a .mid/.chart/.sng file into a Song: a tick-ordered sequence of
+// Turns a .mid/.chart/.sng/.srb file into a Song: a tick-ordered sequence of
 // SongTimestamps (a Timecode + Chord + solo/SP/fill flags), plus the tempo and
 // meter maps. The MidiParser and ChartParser live in the .cpp; callers use the
 // load_songpath_* functions.
@@ -79,13 +79,15 @@ Song load_songpath_chart(const std::string& path, const std::string& difficulty,
                          bool pro, bool bass2x);
 Song load_songpath_sng(const std::string& path, const std::string& difficulty,
                        bool pro, bool bass2x);
+Song load_songpath_srb(const std::string& path, const std::string& difficulty,
+                       bool pro, bool bass2x);
 
 Song load_songbytes_mid(const std::vector<uint8_t>& data,
                         const std::string& difficulty, bool pro, bool bass2x);
 Song load_songbytes_chart(const std::vector<uint8_t>& data,
                           const std::string& difficulty, bool pro, bool bass2x);
 
-// Dispatch on the file extension (.mid/.chart/.sng, case-insensitive).
+// Dispatch on the file extension (.mid/.chart/.sng/.srb, case-insensitive).
 Song load_songpath(const std::string& path, const std::string& difficulty,
                    bool pro, bool bass2x);
 

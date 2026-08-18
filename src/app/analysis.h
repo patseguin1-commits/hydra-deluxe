@@ -26,7 +26,9 @@
 namespace hydra::app {
 
 // One chart file found on disk, with enough metadata to register it in the
-// store. Mirrors hyutil.ScanItem.
+// store. Mirrors hyutil.ScanItem. `sig` fingerprints the source files
+// (sizes + mtimes) so a later rescan can skip re-hashing unchanged charts;
+// it never leaves the charts table and is not part of record identity.
 struct ScanItem {
     std::string md5;
     std::string title;
@@ -34,17 +36,38 @@ struct ScanItem {
     std::string charter;
     std::string notespath;
     std::string rootfolder;
+    std::string sig;
+};
 
-    static ScanItem from_notes_ini_pair(const std::string& notes_path,
-                                        const std::string& ini_path,
-                                        const std::string& rootfolder);
-    static ScanItem from_sng(const std::string& sng_path, const std::string& rootfolder);
+// Progress/cancel hooks for the extended scan. Callbacks fire on the calling
+// thread only (never a worker), like run_batch's.
+struct ScanCallbacks {
+    // Running count of folders visited during enumeration (monotonic; the
+    // same values the simple overload's cb_progress sees).
+    std::function<void(int)> on_folders;
+    // Chart-reading progress: fired once with done=0 when the total becomes
+    // known (enumeration finished), then per chart processed. `cached` counts
+    // charts satisfied from the rescan cache without touching the file.
+    std::function<void(int done, int total, int cached)> on_charts;
+    const std::atomic<bool>* cancel = nullptr;
 };
 
 // Recursively searches rootfolders for chart-bearing folders: notes.mid (or
-// notes.chart, if no .mid) alongside a song.ini, plus every .sng file.
+// notes.chart, if no .mid) alongside a song.ini, plus every .sng and .srb file.
 // Re-encountered folders are skipped. Mirrors hyutil.discover_charts.
-// cb_progress, if set, is called with the running count of folders visited.
+//
+// The walk itself is a serial single pass; hashing/metadata reads run on a
+// batch_worker_count() thread pool. Results keep the serial walk's order.
+// `cache` (from RecordStore::chart_library_cache), if given, lets a chart
+// whose files' sizes+mtimes are unchanged reuse its previous md5/metadata
+// without any file I/O. A failing chart file is skipped with an error entry;
+// its folder's other charts and subtree still scan (unlike the Python
+// original, which dropped the whole folder).
+std::pair<std::vector<ScanItem>, std::vector<std::string>> discover_charts(
+    const std::vector<std::string>& rootfolders, const ScanCallbacks& callbacks,
+    const store::ChartLibraryCache* cache = nullptr);
+
+// Compatibility form: folder progress only, no cache, no cancel.
 std::pair<std::vector<ScanItem>, std::vector<std::string>> discover_charts(
     const std::vector<std::string>& rootfolders,
     const std::function<void(int)>& cb_progress = nullptr);
@@ -56,7 +79,8 @@ int get_folder_count(const std::vector<std::string>& rootfolders,
                      const std::function<void(int)>& cb_progress = nullptr);
 
 // Chord counts by code, for the "how big is this chart" display. Mirrors
-// hyutil.count_chart_chords. filepath must end in .mid or .chart.
+// hyutil.count_chart_chords; dispatches via load_songpath, so it takes any
+// supported chart type (.mid/.chart/.sng/.srb).
 std::map<std::string, int> count_chart_chords(const std::string& filepath);
 
 // The settings a batch run applies uniformly, mirroring the `settings` tuple
@@ -77,7 +101,7 @@ struct AnalysisSettings {
     std::optional<double> uncapped_time_budget_s;
 };
 
-// Loads and analyzes one chart file (.mid/.chart/.sng), producing a record and
+// Loads and analyzes one chart file (.mid/.chart/.sng/.srb), producing a record and
 // the song's timing (for the store's songmeta row). Mirrors
 // hyutil.analyze_chart_file + hybatch.analyze_for_store's non-store half.
 struct AnalysisResult {

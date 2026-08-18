@@ -112,6 +112,43 @@ TEST_CASE("midi: running status and zero-velocity note_on") {
     CHECK(event_view(mid) == expected);
 }
 
+TEST_CASE("midi: running status survives a meta event") {
+    // Rock Band rip MIDIs omit the status byte on the channel event right
+    // after a meta event. The SMF spec forbids the pattern, but mido reads it:
+    // only channel statuses become the running status; 0xFF never does. If a
+    // meta byte clobbered it, every note after the first [mix ...] text event
+    // would be consumed as meta garbage and the drum track would parse empty.
+    std::vector<uint8_t> track = {
+        0x00, 0x90, 0x60, 0x64,                    // note_on note 96 vel 100
+        0x30, 0xFF, 0x01, 0x03, 'm', 'i', 'x',     // +48 text "mix"
+        0x30, 0x61, 0x5A,                          // +48, running status through
+                                                   // the meta: note 97 vel 90
+        0x00, 0xFF, 0x2F, 0x00,                    // end of track
+    };
+    hydra::MidiFile mid(smf(track));
+    json expected = json::array({ json::array({
+        json::array({0, "note_on", 96, 100}),
+        json::array({48, "text", "text", "mix"}),
+        json::array({96, "note_on", 97, 90}),
+    }) });
+    CHECK(event_view(mid) == expected);
+}
+
+TEST_CASE("midi: first track_name wins over later ones") {
+    // mido's MidiTrack.name is the first track_name meta. Some drum charts
+    // carry extra 0x03 metas mid-track ("Drums" after "PART DRUMS"); if the
+    // last one won, hysong's exact name match would skip the whole track.
+    std::vector<uint8_t> track = {
+        0x00, 0xFF, 0x03, 0x0A, 'P', 'A', 'R', 'T', ' ', 'D', 'R', 'U', 'M', 'S',
+        0x00, 0x90, 0x60, 0x64,                    // note_on note 96 vel 100
+        0x00, 0xFF, 0x03, 0x05, 'D', 'r', 'u', 'm', 's',
+        0x00, 0xFF, 0x2F, 0x00,                    // end of track
+    };
+    hydra::MidiFile mid(smf(track));
+    REQUIRE(mid.tracks.size() == 1);
+    CHECK(mid.tracks[0].name == "PART DRUMS");
+}
+
 TEST_CASE("midi: sysex and skipped metas do not lose time") {
     std::vector<uint8_t> track = {
         0x00, 0x90, 0x60, 0x64,               // note_on note 96 vel 100

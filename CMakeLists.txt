@@ -4,7 +4,7 @@
 #   * hydra_tests                     — the doctest parity/unit harness
 #   * a zip release via CPack (build_cpp.ps1 -Package)
 #
-# Third-party code (ImGui, SQLite, doctest, json, stb) is vendored under
+# Third-party code (ImGui, SQLite, miniz, doctest, json, stb) is vendored under
 # third_party/ and built here so there is nothing to install but a compiler +
 # CMake. native/ holds the scoring/search core the Python-era accelerator
 # already proved out, compiled in place.
@@ -14,7 +14,7 @@
 #   cmake --build --preset default
 
 cmake_minimum_required(VERSION 3.21)
-project(Hydra VERSION 1.3.1 LANGUAGES C CXX)  # keep in step with app/edition.h
+project(Hydra VERSION 1.4.1 LANGUAGES C CXX RC)  # keep in step with app/edition.h
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -49,6 +49,11 @@ add_library(sqlite3 STATIC third_party/sqlite/sqlite3.c)
 target_include_directories(sqlite3 PUBLIC third_party/sqlite)
 target_compile_definitions(sqlite3 PRIVATE SQLITE_ENABLE_FTS5=0)
 
+# ---- third_party: miniz (raw deflate, for Clone Hero .srb bundles) -------
+add_library(miniz STATIC third_party/miniz/miniz.c)
+target_include_directories(miniz PUBLIC third_party/miniz)
+target_compile_options(miniz PRIVATE /W1 /EHsc)
+
 # ---- the existing algorithm core, compiled in place ----------------------
 # Reused verbatim (Phase 3 wires the native graph into these); compiling them
 # here proves they build under the new toolchain and keeps the known-good
@@ -67,6 +72,7 @@ add_library(hydra_core STATIC
     src/core/model.cpp
     src/parse/midi.cpp
     src/parse/song.cpp
+    src/parse/srb.cpp
     src/search/graph.cpp
     src/search/engine.cpp
     src/search/pather.cpp
@@ -75,16 +81,25 @@ add_library(hydra_core STATIC
     src/app/analysis.cpp
     src/app/config.cpp
     src/app/report.cpp
+    src/app/dm_report.cpp
+    src/net/dmbot_client.cpp
 )
 target_include_directories(hydra_core PUBLIC src)
-target_include_directories(hydra_core PRIVATE third_party/sqlite)
+# third_party/sqlite: the store. third_party/json: nlohmann, used by the DMBot
+# client to parse the leaderboard API. (The report's own JSON is hand-rolled.)
+target_include_directories(hydra_core PRIVATE third_party/sqlite third_party/json)
 # search/ wires the native ScoreGraph into the existing hydra_native engine, so
 # hydra_core needs its headers (native/) and symbols (hy_search, hy_category_*).
 # store/ needs sqlite3; app/ hashes chart files via CNG (bcrypt.lib) and walks
 # folders via the Win32 Find*File API (already linked into every Windows exe).
-target_link_libraries(hydra_core PUBLIC hydra_native sqlite3)
-target_link_libraries(hydra_core PRIVATE bcrypt)
+target_link_libraries(hydra_core PUBLIC hydra_native sqlite3 miniz)
+# bcrypt: CNG (chart-file MD5). winhttp: the DMBot leaderboard client (net/).
+target_link_libraries(hydra_core PRIVATE bcrypt winhttp)
 target_compile_options(hydra_core PRIVATE ${HYDRA_WARNINGS})
+# /utf-8: dm_report.cpp's HTML template embeds non-ASCII glyphs (arrows, em
+# dash) in string literals; without this MSVC reads the source in the system
+# code page and can mangle them. Harmless for the ASCII-only sources here.
+target_compile_options(hydra_core PRIVATE /utf-8)
 
 # ---- Hydra.exe / HydraUncapped.exe: the GUI shells -----------------------
 # Two editions from one source set (see src/app/edition.h). hydra_core is
@@ -94,6 +109,7 @@ target_compile_options(hydra_core PRIVATE ${HYDRA_WARNINGS})
 # the uncapped flag). Mirrors hydra_app.py + hydra_uncapped.py.
 set(HYDRA_GUI_SOURCES
     src/app/main.cpp
+    src/app/hydra.rc
     src/ui/app_state.cpp
     src/ui/icons.cpp
     src/ui/jobs.cpp
@@ -109,7 +125,8 @@ set_source_files_properties(src/ui/icons.cpp PROPERTIES COMPILE_OPTIONS "/W1")
 foreach(edition IN ITEMS Hydra HydraUncapped)
     add_executable(${edition} WIN32 ${HYDRA_GUI_SOURCES})
     target_include_directories(${edition} PRIVATE third_party/stb)
-    target_link_libraries(${edition} PRIVATE hydra_core imgui d3d11 dxgi d3dcompiler ole32)
+    # shell32: ShellExecuteW, which ReportJob uses to open the finished report.
+    target_link_libraries(${edition} PRIVATE hydra_core imgui d3d11 dxgi d3dcompiler ole32 shell32)
     target_compile_options(${edition} PRIVATE ${HYDRA_WARNINGS})
     # GUI-subsystem app entered from a standard int main(), like the ImGui example.
     target_link_options(${edition} PRIVATE /ENTRY:mainCRTStartup)
@@ -142,6 +159,7 @@ add_executable(hydra_tests
     tests/test_midi.cpp
     tests/test_model.cpp
     tests/test_song.cpp
+    tests/test_srb.cpp
     tests/test_search.cpp
     tests/test_store.cpp
     tests/test_analysis.cpp

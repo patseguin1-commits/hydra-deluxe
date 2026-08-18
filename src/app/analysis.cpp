@@ -9,12 +9,14 @@
 #include <algorithm>
 #include <condition_variable>
 #include <cstdio>
+#include <cstring>
 #include <deque>
 #include <mutex>
 #include <set>
 #include <thread>
 #include <tuple>
 
+#include "parse/srb.h"
 #include "search/pather.h"
 
 namespace hydra::app {
@@ -61,6 +63,10 @@ std::vector<uint8_t> read_file_bytes(const std::string& utf8_path) {
 struct DirEntry {
     std::string name;
     bool is_dir;
+    // Size and last-write time (FILETIME ticks) straight from the find data —
+    // the rescan cache's change fingerprint, at no extra stat cost.
+    uint64_t size = 0;
+    uint64_t mtime = 0;
 };
 
 std::vector<DirEntry> list_dir(const std::string& dir_utf8) {
@@ -72,8 +78,11 @@ std::vector<DirEntry> list_dir(const std::string& dir_utf8) {
     do {
         std::wstring name = fd.cFileName;
         if (name == L"." || name == L"..") continue;
+        uint64_t size = (static_cast<uint64_t>(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
+        uint64_t mtime = (static_cast<uint64_t>(fd.ftLastWriteTime.dwHighDateTime) << 32) |
+                         fd.ftLastWriteTime.dwLowDateTime;
         out.push_back({wide_to_utf8(name),
-                       (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0});
+                       (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0, size, mtime});
     } while (FindNextFileW(h, &fd));
     FindClose(h);
     return out;
@@ -117,40 +126,86 @@ std::string lower(const std::string& s) {
     return out;
 }
 
+// Case-insensitive suffix check without the per-call allocations the old
+// lowercase-both-strings version paid on every file in every folder.
 bool ends_with_ci(const std::string& s, const char* suffix) {
-    std::string suf = lower(suffix);
-    std::string low = lower(s);
-    return low.size() >= suf.size() &&
-           low.compare(low.size() - suf.size(), suf.size(), suf) == 0;
+    size_t n = std::strlen(suffix);
+    if (s.size() < n) return false;
+    for (size_t i = 0; i < n; ++i) {
+        unsigned char a = static_cast<unsigned char>(s[s.size() - n + i]);
+        unsigned char b = static_cast<unsigned char>(suffix[i]);
+        if (std::tolower(a) != std::tolower(b)) return false;
+    }
+    return true;
 }
 
 // ---- MD5 (Windows CNG), mirroring hashlib.file_digest(f, "md5") ----------
+//
+// The digest of the full raw chart file is record identity (songmeta.hyhash),
+// so it must stay exactly MD5-of-all-bytes; only *how* the bytes reach the
+// hash changed: streamed in chunks (like Python's file_digest) instead of a
+// whole-file buffer, with the algorithm provider opened once per scan worker
+// instead of once per file.
 
-std::string md5_hex(const std::vector<uint8_t>& data) {
-    BCRYPT_ALG_HANDLE alg = nullptr;
-    if (!BCRYPT_SUCCESS(BCryptOpenAlgorithmProvider(&alg, BCRYPT_MD5_ALGORITHM, nullptr, 0)))
-        throw std::runtime_error("BCryptOpenAlgorithmProvider(MD5) failed");
+class Md5Provider {
+public:
+    Md5Provider() {
+        if (!BCRYPT_SUCCESS(
+                BCryptOpenAlgorithmProvider(&alg_, BCRYPT_MD5_ALGORITHM, nullptr, 0)))
+            throw std::runtime_error("BCryptOpenAlgorithmProvider(MD5) failed");
+    }
+    ~Md5Provider() {
+        if (alg_) BCryptCloseAlgorithmProvider(alg_, 0);
+    }
+    Md5Provider(const Md5Provider&) = delete;
+    Md5Provider& operator=(const Md5Provider&) = delete;
+
+    BCRYPT_ALG_HANDLE handle() const { return alg_; }
+
+private:
+    BCRYPT_ALG_HANDLE alg_ = nullptr;
+};
+
+struct HashedFile {
+    std::string md5;
+    std::vector<uint8_t> head;  // first `head_capture` bytes, for .sng metadata
+};
+
+HashedFile stream_md5(BCRYPT_ALG_HANDLE alg, const std::string& path,
+                      size_t head_capture) {
+    FILE* f = _wfopen(utf8_to_wide(path).c_str(), L"rb");
+    if (f == nullptr) throw std::runtime_error("cannot open file: " + path);
 
     BCRYPT_HASH_HANDLE hash = nullptr;
-    std::string hex;
-    if (BCRYPT_SUCCESS(BCryptCreateHash(alg, &hash, nullptr, 0, nullptr, 0, 0))) {
-        BCryptHashData(hash, const_cast<PUCHAR>(data.data()), static_cast<ULONG>(data.size()), 0);
-
-        UCHAR digest[16];
-        if (BCRYPT_SUCCESS(BCryptFinishHash(hash, digest, sizeof(digest), 0))) {
-            static const char* kHexDigits = "0123456789abcdef";
-            hex.resize(32);
-            for (int i = 0; i < 16; ++i) {
-                hex[static_cast<size_t>(2 * i)] = kHexDigits[digest[i] >> 4];
-                hex[static_cast<size_t>(2 * i + 1)] = kHexDigits[digest[i] & 0xF];
-            }
-        }
-        BCryptDestroyHash(hash);
+    if (!BCRYPT_SUCCESS(BCryptCreateHash(alg, &hash, nullptr, 0, nullptr, 0, 0))) {
+        std::fclose(f);
+        throw std::runtime_error("MD5 hashing failed");
     }
-    BCryptCloseAlgorithmProvider(alg, 0);
 
-    if (hex.empty()) throw std::runtime_error("MD5 hashing failed");
-    return hex;
+    HashedFile out;
+    std::vector<uint8_t> buf(1 << 20);
+    size_t got;
+    while ((got = std::fread(buf.data(), 1, buf.size(), f)) > 0) {
+        BCryptHashData(hash, buf.data(), static_cast<ULONG>(got), 0);
+        if (out.head.size() < head_capture) {
+            size_t want = std::min(head_capture - out.head.size(), got);
+            out.head.insert(out.head.end(), buf.data(), buf.data() + want);
+        }
+    }
+    std::fclose(f);
+
+    UCHAR digest[16];
+    bool ok = BCRYPT_SUCCESS(BCryptFinishHash(hash, digest, sizeof(digest), 0));
+    BCryptDestroyHash(hash);
+    if (!ok) throw std::runtime_error("MD5 hashing failed");
+
+    static const char* kHexDigits = "0123456789abcdef";
+    out.md5.resize(32);
+    for (int i = 0; i < 16; ++i) {
+        out.md5[static_cast<size_t>(2 * i)] = kHexDigits[digest[i] >> 4];
+        out.md5[static_cast<size_t>(2 * i + 1)] = kHexDigits[digest[i] & 0xF];
+    }
+    return out;
 }
 
 // ---- song.ini metadata, mirroring ScanItem.get_metadata_ini --------------
@@ -212,10 +267,20 @@ std::tuple<std::string, std::string, std::string> read_metadata_ini(const std::s
 }
 
 // ---- .sng metadata, mirroring ScanItem.get_metadata_sng -------------------
+//
+// Parses the metadata block from the head bytes captured while the file was
+// being hashed — the old version read the entire archive (chart + audio, can
+// be hundreds of MB) a second time to get three strings from its first few
+// KB. A truncated buffer degrades exactly like a truncated file did: the
+// bounds checks stop early and missing keys keep their <unknown> defaults.
 
-std::tuple<std::string, std::string, std::string> read_metadata_sng(const std::string& path) {
-    std::vector<uint8_t> buf = read_file_bytes(path);
+// How much of a .sng/.srb to keep for metadata. A .sng block starts at offset
+// 34 and a .srb's deflated block at offset 16; real metadata is a few KB, so
+// 1 MB is far beyond any legitimate block.
+constexpr size_t kSngHeadCapture = 1 << 20;
 
+std::tuple<std::string, std::string, std::string> parse_sng_metadata(
+    const std::vector<uint8_t>& buf) {
     auto u64_at = [&buf](size_t pos) {
         uint64_t v = 0;
         for (int i = 0; i < 8; ++i) v |= static_cast<uint64_t>(buf[pos + i]) << (8 * i);
@@ -261,65 +326,74 @@ std::tuple<std::string, std::string, std::string> read_metadata_sng(const std::s
     return {title, artist, charter};
 }
 
-}  // namespace
+// ---- .srb metadata --------------------------------------------------------
+//
+// Clone Hero's bundled songs (see parse/srb.h for the reverse-engineered
+// container layout). The metadata block is a deflate stream starting right
+// after the 16-byte header, so the head bytes captured while hashing always
+// contain it. Any parse failure degrades to the <unknown> defaults, matching
+// the .sng path.
 
-// ---- ScanItem ---------------------------------------------------------
+std::tuple<std::string, std::string, std::string> parse_srb_metadata(
+    const std::vector<uint8_t>& buf) {
+    std::string title = "<unknown title>";
+    std::string artist = "<unknown artist>";
+    std::string charter = "<unknown charter>";
 
-ScanItem ScanItem::from_notes_ini_pair(const std::string& notes_path,
-                                       const std::string& ini_path,
-                                       const std::string& rootfolder) {
-    ScanItem item;
-    item.md5 = md5_hex(read_file_bytes(notes_path));
-    std::tie(item.title, item.artist, item.charter) = read_metadata_ini(ini_path);
-    item.notespath = notes_path;
-    item.rootfolder = rootfolder;
-    return item;
-}
+    try {
+        std::vector<uint8_t> meta = srb_inflate_stream(
+            buf.data(), buf.size(), kSrbHeaderSize, kSrbMaxMetadata, nullptr);
+        SrbMetadata md;
+        if (srb_parse_metadata(meta, md)) {
+            if (!md.name.empty()) title = md.name;
+            if (!md.artist.empty()) artist = md.artist;
+            if (!md.charter.empty()) charter = md.charter;
+        }
+    } catch (const std::exception&) {
+        // Corrupt/truncated container: keep the defaults.
+    }
 
-ScanItem ScanItem::from_sng(const std::string& sng_path, const std::string& rootfolder) {
-    ScanItem item;
-    item.md5 = md5_hex(read_file_bytes(sng_path));
-    std::tie(item.title, item.artist, item.charter) = read_metadata_sng(sng_path);
-    item.notespath = sng_path;
-    item.rootfolder = rootfolder;
-    return item;
+    return {title, artist, charter};
 }
 
 // ---- discovery ----------------------------------------------------------
+//
+// Two stages. Enumerate: a serial single-pass walk (one directory listing
+// per folder, no file contents touched) collecting every chart-bearing
+// folder's pending work. Read: a batch_worker_count() thread pool hashes the
+// chart files and reads their metadata, short-circuiting through the rescan
+// cache when a file's size+mtime fingerprint is unchanged. Results keep the
+// walk's order, so output ordering matches the old serial scanner.
 
-namespace {
+// One chart the walk found, before any of its bytes have been read. Folder
+// charts are a notes.mid/.chart plus a song.ini; .sng and .srb are standalone
+// archives with embedded metadata.
+enum class ChartKind { Folder, Sng, Srb };
 
-void process_folder(const std::string& folder, const std::string& origin_folder,
-                    std::vector<ScanItem>& out) {
-    std::string found_mid, found_chart, found_ini;
-    std::vector<std::string> found_sngs;
+struct PendingChart {
+    ChartKind kind = ChartKind::Folder;
+    std::string notes_path;  // the hashed file: notes.mid/.chart, .sng, or .srb
+    std::string ini_path;    // empty for archives
+    std::string rootfolder;
+    std::string sig;
+};
 
-    for (const DirEntry& e : list_dir(folder)) {
-        if (e.is_dir) continue;
-        std::string full = join_path(folder, e.name);
-        if (e.name == "notes.mid") found_mid = full;
-        else if (e.name == "notes.chart") found_chart = full;
-        else if (e.name == "song.ini") found_ini = full;
-        else if (ends_with_ci(e.name, ".sng")) found_sngs.push_back(full);
-    }
-
-    if (!found_mid.empty() && !found_ini.empty())
-        out.push_back(ScanItem::from_notes_ini_pair(found_mid, found_ini, origin_folder));
-    else if (!found_chart.empty() && !found_ini.empty())
-        out.push_back(ScanItem::from_notes_ini_pair(found_chart, found_ini, origin_folder));
-
-    for (const std::string& f : found_sngs)
-        out.push_back(ScanItem::from_sng(f, origin_folder));
+std::string sig_of(const DirEntry& notes, const DirEntry* ini) {
+    std::string sig = std::to_string(notes.size) + ":" + std::to_string(notes.mtime);
+    if (ini) sig += ":" + std::to_string(ini->size) + ":" + std::to_string(ini->mtime);
+    return sig;
 }
 
 }  // namespace
 
 std::pair<std::vector<ScanItem>, std::vector<std::string>> discover_charts(
-    const std::vector<std::string>& rootfolders,
-    const std::function<void(int)>& cb_progress) {
-    std::vector<ScanItem> scanitems;
+    const std::vector<std::string>& rootfolders, const ScanCallbacks& callbacks,
+    const store::ChartLibraryCache* cache) {
     std::vector<std::string> errors;
+    const std::atomic<bool>* cancel = callbacks.cancel;
 
+    // ---- stage 1: enumerate ------------------------------------------------
+    std::vector<PendingChart> pending;
     std::vector<std::pair<std::string, std::string>> unexplored;
     std::set<std::string> visited;
     for (const std::string& root : rootfolders) {
@@ -328,16 +402,53 @@ std::pair<std::vector<ScanItem>, std::vector<std::string>> discover_charts(
     }
 
     while (!unexplored.empty()) {
+        if (cancel && cancel->load()) break;
         auto [dir, origin] = unexplored.back();
         unexplored.pop_back();
 
         try {
-            process_folder(dir, relpath(parent_of(dir), origin), scanitems);
-            for (const DirEntry& e : list_dir(dir)) {
-                if (!e.is_dir) continue;
-                std::string subpath = join_path(dir, e.name);
+            std::vector<DirEntry> entries = list_dir(dir);
+
+            const DirEntry* found_mid = nullptr;
+            const DirEntry* found_chart = nullptr;
+            const DirEntry* found_ini = nullptr;
+            std::vector<std::pair<const DirEntry*, ChartKind>> found_archives;
+            std::vector<const DirEntry*> subdirs;
+            for (const DirEntry& e : entries) {
+                if (e.is_dir) subdirs.push_back(&e);
+                else if (e.name == "notes.mid") found_mid = &e;
+                else if (e.name == "notes.chart") found_chart = &e;
+                else if (e.name == "song.ini") found_ini = &e;
+                else if (ends_with_ci(e.name, ".sng"))
+                    found_archives.push_back({&e, ChartKind::Sng});
+                else if (ends_with_ci(e.name, ".srb"))
+                    found_archives.push_back({&e, ChartKind::Srb});
+            }
+
+            std::string rootfolder = relpath(parent_of(dir), origin);
+            const DirEntry* notes = found_mid ? found_mid : found_chart;
+            if (notes && found_ini) {
+                PendingChart pc;
+                pc.notes_path = join_path(dir, notes->name);
+                pc.ini_path = join_path(dir, found_ini->name);
+                pc.rootfolder = rootfolder;
+                pc.sig = sig_of(*notes, found_ini);
+                pending.push_back(std::move(pc));
+            }
+            for (auto [archive, kind] : found_archives) {
+                PendingChart pc;
+                pc.kind = kind;
+                pc.notes_path = join_path(dir, archive->name);
+                pc.rootfolder = rootfolder;
+                pc.sig = sig_of(*archive, nullptr);
+                pending.push_back(std::move(pc));
+            }
+
+            for (const DirEntry* sub : subdirs) {
+                std::string subpath = join_path(dir, sub->name);
                 if (visited.insert(subpath).second) {
-                    if (cb_progress) cb_progress(static_cast<int>(visited.size()));
+                    if (callbacks.on_folders)
+                        callbacks.on_folders(static_cast<int>(visited.size()));
                     unexplored.push_back({subpath, origin});
                 }
             }
@@ -346,7 +457,128 @@ std::pair<std::vector<ScanItem>, std::vector<std::string>> discover_charts(
         }
     }
 
+    // ---- stage 2: read (hash + metadata), parallel -------------------------
+    int total = static_cast<int>(pending.size());
+    if (callbacks.on_charts) callbacks.on_charts(0, total, 0);
+
+    std::vector<std::optional<ScanItem>> results(pending.size());
+    if (total > 0 && !(cancel && cancel->load())) {
+        struct ReadNote {
+            bool cached = false;
+            std::string error;
+        };
+        std::mutex q_mu;
+        std::condition_variable q_cv;
+        std::deque<ReadNote> notes_q;
+        std::atomic<size_t> next{0};
+        std::atomic<int> workers_live{0};
+
+        int nworkers = std::max(1, std::min(batch_worker_count(), total));
+        std::vector<std::thread> pool;
+        pool.reserve(static_cast<size_t>(nworkers));
+        workers_live.store(nworkers);
+        for (int w = 0; w < nworkers; ++w) {
+            pool.emplace_back([&]() {
+                // One CNG provider per worker, reused across every file it
+                // hashes. Created lazily so an all-cache-hits rescan never
+                // touches CNG at all.
+                std::optional<Md5Provider> md5;
+
+                for (;;) {
+                    size_t i = next.fetch_add(1);
+                    if (i >= pending.size()) break;
+                    if (cancel && cancel->load()) break;
+
+                    const PendingChart& pc = pending[i];
+                    ReadNote note;
+                    try {
+                        if (cache) {
+                            auto it = cache->find(pc.notes_path);
+                            if (it != cache->end() && it->second.sig == pc.sig) {
+                                results[i] = ScanItem{it->second.md5, it->second.title,
+                                                      it->second.artist, it->second.charter,
+                                                      pc.notes_path, pc.rootfolder, pc.sig};
+                                note.cached = true;
+                            }
+                        }
+                        if (!results[i]) {
+                            if (!md5) md5.emplace();
+                            ScanItem item;
+                            if (pc.kind != ChartKind::Folder) {
+                                HashedFile hf =
+                                    stream_md5(md5->handle(), pc.notes_path, kSngHeadCapture);
+                                item.md5 = std::move(hf.md5);
+                                std::tie(item.title, item.artist, item.charter) =
+                                    pc.kind == ChartKind::Sng
+                                        ? parse_sng_metadata(hf.head)
+                                        : parse_srb_metadata(hf.head);
+                            } else {
+                                HashedFile hf = stream_md5(md5->handle(), pc.notes_path, 0);
+                                item.md5 = std::move(hf.md5);
+                                std::tie(item.title, item.artist, item.charter) =
+                                    read_metadata_ini(pc.ini_path);
+                            }
+                            item.notespath = pc.notes_path;
+                            item.rootfolder = pc.rootfolder;
+                            item.sig = pc.sig;
+                            results[i] = std::move(item);
+                        }
+                    } catch (const std::exception& e) {
+                        note.error = e.what();
+                    }
+
+                    {
+                        std::lock_guard<std::mutex> lock(q_mu);
+                        notes_q.push_back(std::move(note));
+                    }
+                    q_cv.notify_one();
+                }
+
+                // Last worker out wakes the consumer even if the queue is
+                // empty (cancel can leave claimed items unpushed; the
+                // consumer must not wait for them forever).
+                if (workers_live.fetch_sub(1) == 1) q_cv.notify_one();
+            });
+        }
+
+        // Consume on the calling thread: progress/error callbacks fire here
+        // only, mirroring run_batch's worker/consumer split.
+        int done = 0, cached_count = 0;
+        for (;;) {
+            ReadNote note;
+            {
+                std::unique_lock<std::mutex> lock(q_mu);
+                q_cv.wait(lock, [&] {
+                    return !notes_q.empty() || workers_live.load() == 0;
+                });
+                if (notes_q.empty()) break;  // workers gone, nothing left
+                note = std::move(notes_q.front());
+                notes_q.pop_front();
+            }
+
+            ++done;
+            if (note.cached) ++cached_count;
+            if (!note.error.empty()) errors.push_back(std::move(note.error));
+            if (callbacks.on_charts) callbacks.on_charts(done, total, cached_count);
+            if (done == total) break;
+        }
+
+        for (std::thread& t : pool) t.join();
+    }
+
+    std::vector<ScanItem> scanitems;
+    scanitems.reserve(results.size());
+    for (std::optional<ScanItem>& r : results)
+        if (r) scanitems.push_back(std::move(*r));
     return {scanitems, errors};
+}
+
+std::pair<std::vector<ScanItem>, std::vector<std::string>> discover_charts(
+    const std::vector<std::string>& rootfolders,
+    const std::function<void(int)>& cb_progress) {
+    ScanCallbacks callbacks;
+    callbacks.on_folders = cb_progress;
+    return discover_charts(rootfolders, callbacks, nullptr);
 }
 
 int get_folder_count(const std::vector<std::string>& rootfolders,
@@ -361,13 +593,19 @@ int get_folder_count(const std::vector<std::string>& rootfolders,
     while (!unexplored.empty()) {
         auto [dir, origin] = unexplored.back();
         unexplored.pop_back();
-        for (const DirEntry& e : list_dir(dir)) {
-            if (!e.is_dir) continue;
-            std::string subpath = join_path(dir, e.name);
-            if (visited.insert(subpath).second) {
-                if (cb_progress) cb_progress(static_cast<int>(visited.size()));
-                unexplored.push_back({subpath, origin});
+        // Swallow per-folder failures like discover_charts does — this count
+        // is only a progress denominator, and an exception here would
+        // otherwise escape ScanJob's thread and terminate the app.
+        try {
+            for (const DirEntry& e : list_dir(dir)) {
+                if (!e.is_dir) continue;
+                std::string subpath = join_path(dir, e.name);
+                if (visited.insert(subpath).second) {
+                    if (cb_progress) cb_progress(static_cast<int>(visited.size()));
+                    unexplored.push_back({subpath, origin});
+                }
             }
+        } catch (const std::exception&) {
         }
     }
     return static_cast<int>(visited.size());

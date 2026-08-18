@@ -232,13 +232,17 @@ std::vector<uint8_t> write_record(const HydraRecord& record) {
     w.u32(static_cast<uint32_t>(record.paths.size()));
     for (const Path& p : record.paths) write_path(w, p);
 
+    // Format version 2 and later.
+    w.u32(static_cast<uint32_t>(record.allzero_paths.size()));
+    for (const Path& p : record.allzero_paths) write_path(w, p);
+
     return std::move(w.bytes);
 }
 
 HydraRecord read_record(const std::vector<uint8_t>& blob) {
     BinaryReader r(blob);
     uint32_t version = r.u32();
-    if (version != kBlobFormatVersion)
+    if (version < 1 || version > kBlobFormatVersion)
         throw SerializeError("unsupported record blob format version");
 
     HydraRecord record;
@@ -250,7 +254,16 @@ HydraRecord read_record(const std::vector<uint8_t>& blob) {
     record.paths.reserve(npaths);
     for (uint32_t i = 0; i < npaths; ++i) record.paths.push_back(read_path(r));
 
+    // A version 1 blob ends here. It keeps an empty allzero_paths, so the
+    // record loads fine and simply shows no all-0 path until re-analyzed.
+    if (version >= 2) {
+        uint32_t nzero = r.u32();
+        record.allzero_paths.reserve(nzero);
+        for (uint32_t i = 0; i < nzero; ++i) record.allzero_paths.push_back(read_path(r));
+    }
+
     for (Path& p : record.paths) p.prepare_variants();
+    for (Path& p : record.allzero_paths) p.prepare_variants();
 
     return record;
 }
@@ -271,11 +284,13 @@ void restore_path(Path& path, const SongTiming& timing) {
 
 void restore_timecodes(HydraRecord& record, const SongTiming& timing) {
     for (Path& p : record.paths) restore_path(p, timing);
+    for (Path& p : record.allzero_paths) restore_path(p, timing);
     // variant_tail activations alias the same Activation values copied from
     // the base path's all_activations() by prepare_variants(); rebuild it
     // fresh from the now-restored base path so it doesn't keep stale
     // Timecode::raw ticks-only values.
     for (Path& p : record.paths) p.prepare_variants();
+    for (Path& p : record.allzero_paths) p.prepare_variants();
 }
 
 }  // namespace hydra::store

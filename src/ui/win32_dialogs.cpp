@@ -25,13 +25,18 @@ std::string wide_to_utf8(const std::wstring& w) {
 
 }  // namespace
 
-std::optional<std::string> browse_for_folder(HWND owner) {
+std::optional<std::string> browse_for_folder(HWND owner, bool* failed) {
+    if (failed) *failed = false;
+
     HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     bool we_initialized_com = SUCCEEDED(hr);
     // RPC_E_CHANGED_MODE means COM is already initialized on this thread in a
     // different mode (the Win32/DX11 message loop may have done so) -- fine,
     // just don't uninitialize what we didn't initialize.
-    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) return std::nullopt;
+    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
+        if (failed) *failed = true;
+        return std::nullopt;
+    }
 
     std::optional<std::string> result;
     ComPtr<IFileOpenDialog> dialog;
@@ -51,6 +56,9 @@ std::optional<std::string> browse_for_folder(HWND owner) {
                 }
             }
         }
+        // Show() failing is (almost always) the user cancelling: not a failure.
+    } else {
+        if (failed) *failed = true;
     }
 
     if (we_initialized_com) CoUninitialize();

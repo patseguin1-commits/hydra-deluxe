@@ -72,13 +72,15 @@ Settings Settings::load(bool uncapped) {
         else if (key == "mslimit_value") s.mslimit_value = std::atoi(value.c_str());
         else if (key == "sp_cap_enabled") s.sp_cap_enabled = (value == "1");
         else if (key == "sp_cap_value") s.sp_cap_value = std::atoi(value.c_str());
+        else if (key == "auto_open_report") s.auto_open_report = (value == "1");
+        else if (key == "dm_last_user") s.dm_last_user = value;
     }
     return s;
 }
 
-void Settings::save() const {
+bool Settings::save() const {
     std::ofstream f(ini_path(uncapped), std::ios::trunc);
-    if (!f) return;  // best-effort, like hymisc's own config write
+    if (!f) return false;
 
     f << "is_rescan=" << (is_rescan ? 1 : 0) << "\n";
     f << "view_difficulty=" << view_difficulty << "\n";
@@ -90,7 +92,10 @@ void Settings::save() const {
     f << "mslimit_value=" << mslimit_value << "\n";
     f << "sp_cap_enabled=" << (sp_cap_enabled ? 1 : 0) << "\n";
     f << "sp_cap_value=" << sp_cap_value << "\n";
+    f << "auto_open_report=" << (auto_open_report ? 1 : 0) << "\n";
+    if (!dm_last_user.empty()) f << "dm_last_user=" << dm_last_user << "\n";
     for (const std::string& folder : chartfolders) f << "chartfolder=" << folder << "\n";
+    return f.good();
 }
 
 std::string Settings::chartmode_key() const {

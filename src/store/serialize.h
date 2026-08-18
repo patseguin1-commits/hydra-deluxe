@@ -27,10 +27,14 @@
 
 namespace hydra::store {
 
-// Bumped whenever write_record's layout changes. A blob written with a
-// different version is not read; the caller treats it like a version
-// mismatch (see RecordStore::get_record).
-constexpr uint32_t kBlobFormatVersion = 1;
+// Bumped whenever write_record's layout changes. A blob written with a newer
+// version is not read; the caller treats it like a version mismatch (see
+// RecordStore::get_record).
+//
+// Version 2 appended HydraRecord::allzero_paths. Version 1 blobs are still
+// read -- they simply have no all-0 path until the chart is re-analyzed -- so
+// an existing library does not go stale.
+constexpr uint32_t kBlobFormatVersion = 2;
 
 class SerializeError : public std::runtime_error {
 public:

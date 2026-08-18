@@ -11,7 +11,7 @@ namespace hydra::store {
 
 namespace {
 
-constexpr const char* kHydraVersion = "1.3.1";
+constexpr const char* kHydraVersion = "1.4.1";
 
 // RAII wrapper so every query site finalizes even on an early throw.
 struct Stmt {
@@ -258,7 +258,8 @@ RecordStore::RecordStore(const std::string& dbpath, bool uncapped) : uncapped_(u
         "  artist TEXT,"
         "  charter TEXT,"
         "  path   TEXT,"
-        "  folder TEXT"
+        "  folder TEXT,"
+        "  sig    TEXT"
         ");");
 
     add_missing_columns();
@@ -530,10 +531,10 @@ void RecordStore::rebuild_chart_library(const std::vector<ChartLibraryEntry>& it
 
     exec("DROP TABLE IF EXISTS charts");
     exec("CREATE TABLE charts (md5 TEXT, name TEXT, artist TEXT, charter TEXT, "
-        "path TEXT, folder TEXT)");
+        "path TEXT, folder TEXT, sig TEXT)");
 
     exec("BEGIN");
-    Stmt s = prepare(db_, "INSERT INTO charts VALUES (?,?,?,?,?,?)");
+    Stmt s = prepare(db_, "INSERT INTO charts VALUES (?,?,?,?,?,?,?)");
     for (const ChartLibraryEntry& item : items) {
         sqlite3_reset(s);
         bind_text(s, 1, item.md5);
@@ -542,6 +543,7 @@ void RecordStore::rebuild_chart_library(const std::vector<ChartLibraryEntry>& it
         bind_text(s, 4, item.charter);
         bind_text(s, 5, item.notespath);
         bind_text(s, 6, item.rootfolder);
+        bind_text(s, 7, item.sig);
         if (sqlite3_step(s) != SQLITE_DONE) {
             exec("ROLLBACK");
             throw std::runtime_error(std::string("rebuild_chart_library failed: ") +
@@ -551,16 +553,38 @@ void RecordStore::rebuild_chart_library(const std::vector<ChartLibraryEntry>& it
     exec("COMMIT");
 }
 
+ChartLibraryCache RecordStore::chart_library_cache() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+    ChartLibraryCache cache;
+    // A db written before the sig column existed has no usable fingerprints;
+    // treat it as no cache rather than failing the scan.
+    Stmt probe = prepare(db_, "SELECT COUNT(*) FROM pragma_table_info('charts') "
+                              "WHERE name='sig'");
+    if (sqlite3_step(probe) != SQLITE_ROW || sqlite3_column_int(probe, 0) == 0)
+        return cache;
+
+    Stmt s = prepare(db_, "SELECT path, sig, md5, name, artist, charter FROM charts");
+    while (sqlite3_step(s) == SQLITE_ROW) {
+        std::string sig = column_text(s, 1);
+        if (sig.empty()) continue;
+        cache[column_text(s, 0)] = {std::move(sig), column_text(s, 2), column_text(s, 3),
+                                    column_text(s, 4), column_text(s, 5)};
+    }
+    return cache;
+}
+
 int64_t RecordStore::chart_library_count(const std::optional<std::string>& search) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     std::string sql = "SELECT COUNT(*) FROM charts";
-    if (search) sql += " WHERE name LIKE ? OR artist LIKE ?";
+    if (search) sql += " WHERE name LIKE ? OR artist LIKE ? OR charter LIKE ?";
     Stmt s = prepare(db_, sql.c_str());
     if (search) {
         std::string param = "%" + *search + "%";
         bind_text(s, 1, param);
         bind_text(s, 2, param);
+        bind_text(s, 3, param);
     }
     if (sqlite3_step(s) != SQLITE_ROW) return 0;
     return sqlite3_column_int64(s, 0);
@@ -571,7 +595,7 @@ std::vector<ChartLibraryEntry> RecordStore::list_chart_library(
     std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     std::string sql = "SELECT md5, name, artist, charter, path, folder FROM charts";
-    if (search) sql += " WHERE name LIKE ? OR artist LIKE ?";
+    if (search) sql += " WHERE name LIKE ? OR artist LIKE ? OR charter LIKE ?";
     sql += " ORDER BY name LIMIT ? OFFSET ?";
 
     Stmt s = prepare(db_, sql.c_str());
@@ -579,6 +603,7 @@ std::vector<ChartLibraryEntry> RecordStore::list_chart_library(
     std::string param;
     if (search) {
         param = "%" + *search + "%";
+        bind_text(s, idx++, param);
         bind_text(s, idx++, param);
         bind_text(s, idx++, param);
     }

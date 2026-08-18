@@ -55,8 +55,18 @@ struct Settings {
     bool sp_cap_enabled = false;
     int sp_cap_value = 8;
 
+    // Open the HTML path report in the browser as soon as a batch run builds
+    // it; off by default (the finished modal offers an "Open report" button).
+    bool auto_open_report = false;
+
+    // The dmleaderboards user (Discord ID) last compared against, so the
+    // "Compare dmleaderboards user" picker can pre-select it. Empty = none yet.
+    std::string dm_last_user;
+
     static Settings load(bool uncapped);
-    void save() const;
+    // False when the INI can't be written (the GUI surfaces this; the CLIs
+    // never call save()).
+    bool save() const;
 
     // "Expert Pro Drums, 2x Bass" — mirrors HyAppUserSettings.chartmode_key.
     std::string chartmode_key() const;

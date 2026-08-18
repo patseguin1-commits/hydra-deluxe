@@ -14,9 +14,13 @@
 #include <chrono>
 #include <cstdio>
 #include <exception>
+#include <fstream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
+
+#include "json.hpp"
 
 #include "app/analysis.h"
 #include "golden_util.h"
@@ -91,6 +95,91 @@ static void folder_breakdown(const std::string& folder) {
     }
 }
 
+// Scan mode: times the library scan (discovery + hashing) the way ScanJob
+// runs it, without any chart analysis. Optionally writes the discovered rows
+// into a store (--db, timing the library rebuild and exercising the rescan
+// cache on a second run) and/or dumps the items as JSON for equivalence
+// diffs (--dump; --dump-rel makes paths relative to the given root, forward
+// slashes, so dumps compare across machines).
+static void scan_mode(const std::string& folder, const std::string& dbpath,
+                      const std::string& dumppath, const std::string& dumprel) {
+    std::printf("Scanning %s\n", folder.c_str());
+
+    std::unique_ptr<store::RecordStore> store;
+    if (!dbpath.empty()) store = std::make_unique<store::RecordStore>(dbpath, false);
+
+    // With --db, a prior scan's rows become the rescan cache — running the
+    // same command twice measures cold full scan then warm rescan.
+    store::ChartLibraryCache cache;
+    if (store) cache = store->chart_library_cache();
+    if (!cache.empty()) std::printf("  (rescan cache: %zu rows)\n", cache.size());
+
+    int folders_seen = 0, cached = 0;
+    double enumerate_s = 0.0;
+    auto t0 = clk::now();
+    app::ScanCallbacks callbacks;
+    callbacks.on_folders = [&](int n) { folders_seen = n; };
+    callbacks.on_charts = [&](int done, int, int cached_now) {
+        if (done == 0) enumerate_s = secs_since(t0);  // walk finished, reads start
+        cached = cached_now;
+    };
+    auto [items, errors] =
+        app::discover_charts({folder}, callbacks, cache.empty() ? nullptr : &cache);
+    double scan_s = secs_since(t0);
+
+    std::printf("  folders %d | charts %zu | cached %d | errors %zu\n", folders_seen,
+                items.size(), cached, errors.size());
+    std::printf("  enumerate     : %7.2fs\n", enumerate_s);
+    std::printf("  read+hash     : %7.2fs\n", scan_s - enumerate_s);
+    std::printf("  discover total: %7.2fs\n", scan_s);
+    for (size_t i = 0; i < errors.size() && i < 10; ++i)
+        std::printf("  ! %s\n", errors[i].c_str());
+    if (errors.size() > 10) std::printf("  ! ...and %zu more\n", errors.size() - 10);
+
+    if (store) {
+        std::vector<store::ChartLibraryEntry> entries;
+        entries.reserve(items.size());
+        for (const app::ScanItem& it : items)
+            entries.push_back({it.md5, it.title, it.artist, it.charter, it.notespath,
+                               it.rootfolder, it.sig});
+        t0 = clk::now();
+        store->rebuild_chart_library(entries);
+        std::printf("  library write : %7.2fs (%lld rows)\n", secs_since(t0),
+                    static_cast<long long>(store->chart_library_count()));
+    }
+
+    if (!dumppath.empty()) {
+        auto relify = [&](std::string p) {
+            if (!dumprel.empty() && p.size() > dumprel.size() &&
+                p.compare(0, dumprel.size(), dumprel) == 0)
+                p = p.substr(dumprel.size() + 1);
+            for (char& c : p)
+                if (c == '\\') c = '/';
+            return p;
+        };
+        nlohmann::json arr = nlohmann::json::array();
+        std::vector<const app::ScanItem*> sorted;
+        for (const app::ScanItem& it : items) sorted.push_back(&it);
+        std::sort(sorted.begin(), sorted.end(),
+                  [](const app::ScanItem* a, const app::ScanItem* b) {
+                      return a->notespath < b->notespath;
+                  });
+        for (const app::ScanItem* it : sorted)
+            arr.push_back({{"path", relify(it->notespath)},
+                           {"folder", relify(it->rootfolder)},
+                           {"md5", it->md5},
+                           {"title", it->title},
+                           {"artist", it->artist},
+                           {"charter", it->charter}});
+        // Real libraries carry ANSI-encoded song.ini metadata; replace
+        // invalid UTF-8 instead of throwing (both sides of a diff replace
+        // identically, so equivalence still holds).
+        std::ofstream f(dumppath, std::ios::binary | std::ios::trunc);
+        f << arr.dump(1, ' ', false, nlohmann::json::error_handler_t::replace) << "\n";
+        std::printf("  dumped %zu items to %s\n", sorted.size(), dumppath.c_str());
+    }
+}
+
 static void golden_corpus() {
     std::vector<Song> songs;
     for (const auto& entry : golden::index()) {
@@ -120,10 +209,47 @@ static void golden_corpus() {
     bench("uncapped d4", false, 4);
 }
 
+// Dump a store's charts table as the same JSON shape --dump writes, so two
+// scans' results can be diffed even when one came from another build.
+static void dump_db(const std::string& dbpath, const std::string& outpath) {
+    store::RecordStore db(dbpath, false);
+    std::vector<store::ChartLibraryEntry> rows =
+        db.list_chart_library(std::nullopt, 0, INT_MAX);
+    std::sort(rows.begin(), rows.end(),
+              [](const store::ChartLibraryEntry& a, const store::ChartLibraryEntry& b) {
+                  return a.notespath < b.notespath;
+              });
+    nlohmann::json arr = nlohmann::json::array();
+    for (const store::ChartLibraryEntry& e : rows)
+        arr.push_back({{"path", e.notespath},
+                       {"folder", e.rootfolder},
+                       {"md5", e.md5},
+                       {"title", e.title},
+                       {"artist", e.artist},
+                       {"charter", e.charter}});
+    std::ofstream f(outpath, std::ios::binary | std::ios::trunc);
+    f << arr.dump(1, ' ', false, nlohmann::json::error_handler_t::replace) << "\n";
+    std::printf("dumped %zu rows from %s\n", rows.size(), dbpath.c_str());
+}
+
 int main(int argc, char** argv) {
-    if (argc > 1)
+    if (argc > 3 && std::string(argv[1]) == "--dump-db") {
+        dump_db(argv[2], argv[3]);
+        return 0;
+    }
+    if (argc > 2 && std::string(argv[1]) == "--scan") {
+        std::string folder = argv[2], db, dump, dumprel;
+        for (int i = 3; i < argc; ++i) {
+            std::string arg = argv[i];
+            if (arg == "--db" && i + 1 < argc) db = argv[++i];
+            else if (arg == "--dump" && i + 1 < argc) dump = argv[++i];
+            else if (arg == "--dump-rel" && i + 1 < argc) dumprel = argv[++i];
+        }
+        scan_mode(folder, db, dump, dumprel);
+    } else if (argc > 1) {
         folder_breakdown(argv[1]);
-    else
+    } else {
         golden_corpus();
+    }
     return 0;
 }

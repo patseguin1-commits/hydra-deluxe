@@ -13,8 +13,10 @@ namespace hydra::ui {
 
 // The modern folder-picker (IFileOpenDialog + FOS_PICKFOLDERS), mirroring
 // DearPyGui's directory_selector file dialog. Returns nullopt if the user
-// cancels. UTF-8 in, UTF-8 out.
-std::optional<std::string> browse_for_folder(HWND owner);
+// cancels — and also on COM/dialog failure, which additionally sets *failed
+// so the caller can tell the user (a cancel must stay silent, but a dialog
+// that never appeared shouldn't). UTF-8 in, UTF-8 out.
+std::optional<std::string> browse_for_folder(HWND owner, bool* failed = nullptr);
 
 }  // namespace hydra::ui
 

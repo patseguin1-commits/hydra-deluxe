@@ -1,0 +1,7 @@
+// Embeds the app icon into the exe's PE resources. The taskbar (pinned
+// shortcuts), Explorer, and Alt-Tab read the icon from here — the runtime
+// WM_SETICON in main.cpp only covers the live window's title bar/taskbar
+// button.
+#include "resource.h"
+
+IDI_APPICON ICON "../../resource/icon_app.ico"

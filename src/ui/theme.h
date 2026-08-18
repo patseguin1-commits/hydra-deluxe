@@ -18,7 +18,10 @@ namespace hydra::ui {
 
 inline const ImVec4 kBestPathColor{250 / 255.0f, 210 / 255.0f, 0 / 255.0f, 1.0f};
 inline const ImVec4 kWarningColor{255 / 255.0f, 127 / 255.0f, 0 / 255.0f, 1.0f};
-inline const ImVec4 kNewSongColor{100 / 255.0f, 100 / 255.0f, 100 / 255.0f, 1.0f};
+// Deliberately lighter than the Python app's (100,100,100): that gray sat at
+// ~2.9:1 against the window background, under the 4.5:1 WCAG AA minimum for
+// text. (145,145,145) reads as ~4.8:1 while still clearly "dimmed".
+inline const ImVec4 kNewSongColor{145 / 255.0f, 145 / 255.0f, 145 / 255.0f, 1.0f};
 inline const ImVec4 kDefaultTextColor{250 / 255.0f, 250 / 255.0f, 250 / 255.0f, 1.0f};
 inline const ImVec4 kDeleteButtonColor{180 / 255.0f, 5 / 255.0f, 5 / 255.0f, 1.0f};
 inline const ImVec4 kDeleteButtonHoveredColor{250 / 255.0f, 50 / 255.0f, 50 / 255.0f, 1.0f};
@@ -32,7 +35,10 @@ inline const ImVec4 kFolderListBg{50 / 255.0f, 50 / 255.0f, 50 / 255.0f, 1.0f};
 // DisabledAlpha fade -- so apply_theme() sets style.DisabledAlpha = 1 and
 // begin_disabled_button()/begin_disabled_input() push these explicitly.
 inline const ImVec4 kDisabledTextColor{50 / 255.0f, 50 / 255.0f, 50 / 255.0f, 1.0f};
-inline const ImVec4 kDisabledButtonTextColor{200 / 255.0f, 200 / 255.0f, 200 / 255.0f, 1.0f};
+// Lighter than the Python app's (200,200,200): that pairing against the
+// (100,100,100) disabled button was ~3.5:1, under WCAG AA; (235,235,235)
+// reaches ~4.9:1 and the gray button face still reads as disabled.
+inline const ImVec4 kDisabledButtonTextColor{235 / 255.0f, 235 / 255.0f, 235 / 255.0f, 1.0f};
 inline const ImVec4 kDisabledButtonColor{100 / 255.0f, 100 / 255.0f, 100 / 255.0f, 1.0f};
 inline const ImVec4 kDisabledInputTextColor{50 / 255.0f, 50 / 255.0f, 50 / 255.0f, 1.0f};
 inline const ImVec4 kDisabledInputBgColor{40 / 255.0f, 40 / 255.0f, 40 / 255.0f, 1.0f};

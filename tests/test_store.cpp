@@ -15,6 +15,7 @@
 #include "parse/song.h"
 #include "search/pather.h"
 #include "store/record_store.h"
+#include "store/serialize.h"
 
 using namespace hydra;
 using namespace hydra::store;
@@ -184,6 +185,25 @@ TEST_CASE("records round-trip through RecordStore across the corpus and config m
                               summary_row->second != gs["bestpath"].get<std::string>()))
                 d = "get_summary bestpath";
 
+            // The all-0 path rides in the same blob and is restored the same
+            // way, but must stay out of the summary (pathcount above is
+            // unchanged by it).
+            if (d.empty()) {
+                std::vector<const Path*> want = record.all_allzero_paths();
+                std::vector<const Path*> got = reloaded->all_allzero_paths();
+                if (want.size() != got.size()) {
+                    d = "allzero count";
+                } else {
+                    for (size_t i = 0; i < want.size(); ++i) {
+                        if (want[i]->pathstring() != got[i]->pathstring() ||
+                            want[i]->totalscore() != got[i]->totalscore()) {
+                            d = "allzero path " + std::to_string(i);
+                            break;
+                        }
+                    }
+                }
+            }
+
             if (!d.empty() && ++mismatches <= 8)
                 CHECK_MESSAGE(false, relpath << " [" << cfg.key << "] " << d);
         }
@@ -191,6 +211,55 @@ TEST_CASE("records round-trip through RecordStore across the corpus and config m
 
     CHECK(mismatches == 0);
     MESSAGE("checked " << checks << " round trips");
+}
+
+// The blob grew allzero_paths in format version 2. Version 1 blobs must still
+// read, or bumping the format would silently strand every stored record.
+TEST_CASE("record blob: version 2 carries all-0 paths and version 1 still reads") {
+    const golden::json idx = golden::index();
+    std::optional<HydraRecord> record;
+    for (const auto& entry : idx) {
+        const std::string path =
+            std::string(HYDRA_INPUT_DIR) + "/" + entry["relpath"].get<std::string>();
+        Song song = load_songpath(path, "Expert", true, true);
+        if (song.is_empty()) continue;
+        HydraRecord r = analyze_chart(song, /*capped=*/true, 0, 4, 10.0);
+        if (!r.allzero_paths.empty()) {
+            record = std::move(r);
+            break;
+        }
+    }
+    REQUIRE_MESSAGE(record.has_value(), "no corpus chart produced an all-0 path");
+
+    HydraRecord again = read_record(write_record(*record));
+    CHECK(again.allzero_paths.size() == record->allzero_paths.size());
+    CHECK(again.all_allzero_paths().size() == record->all_allzero_paths().size());
+    CHECK(again.allzero_paths.front().pathstring() ==
+          record->allzero_paths.front().pathstring());
+    CHECK(again.allzero_paths.front().totalscore() ==
+          record->allzero_paths.front().totalscore());
+
+    // A version 1 blob is a version 2 blob without the trailing all-0 path
+    // list. Build one from a record that has none, then relabel the header.
+    HydraRecord bare = *record;
+    bare.allzero_paths.clear();
+    std::vector<uint8_t> blob = write_record(bare);
+    REQUIRE(blob.size() > 8);
+    std::vector<uint8_t> v1(blob.begin(), blob.end() - 4);  // drop the count 0
+    v1[0] = 1;
+    v1[1] = 0;
+    v1[2] = 0;
+    v1[3] = 0;
+
+    HydraRecord old = read_record(v1);
+    CHECK(old.allzero_paths.empty());
+    CHECK(old.paths.size() == record->paths.size());
+    CHECK(old.best_path().pathstring() == record->best_path().pathstring());
+
+    // A blob from a future format is still refused.
+    std::vector<uint8_t> future = write_record(*record);
+    future[0] = kBlobFormatVersion + 1;
+    CHECK_THROWS_AS(read_record(future), SerializeError);
 }
 
 TEST_CASE("RecordStore maintenance: has_record, list_records, reindex, drop_stale_records") {

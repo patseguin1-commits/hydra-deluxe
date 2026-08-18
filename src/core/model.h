@@ -209,7 +209,7 @@ struct Activation {
 
     std::string notationstr() const;
     std::string notationstr_verbose() const;
-    bool is_e_critical() const;  // e_offset < 70
+    bool is_e_critical() const;  // e_offset < kCalibrationFillWindowMs
     bool is_E0() const;
     std::optional<double> e_difficulty(bool verbose = false) const;
     std::optional<double> difficulty() const;
@@ -226,9 +226,31 @@ struct Activation {
     std::vector<BackendSqueeze> display_backends() const;
 };
 
+// How frontend (activation-hit) timing error transfers to the SP end. SP
+// length is measure-based, so hitting the frontend d ms off moves the SP end
+// by r*d ms, where r = ms-per-measure at the SP end / ms-per-measure at the
+// frontend. The two directions differ when the activation or SP end sits
+// exactly on a meter/tempo change: an early (-) hit moves into the section
+// before the tick, a late (+) hit into the section at/after it.
+struct TransferScale {
+    double early = 1.0;  // r- : early (-) frontend hits (SqOut direction)
+    double late = 1.0;   // r+ : late (+) frontend hits (backend squeezes)
+};
+
+// The activation's transfer scale, from its timecode, SP meter, and (for the
+// SqIn +2-measure extension) its sqinouts. Display-only; nullopt when the
+// activation has no timecode or sp_meter (stale record).
+std::optional<TransferScale> frontend_transfer_scale(const Activation& act,
+                                                     const SongTiming& timing);
+
 // hymisc.BACKEND_DISPLAY_WINDOW_MS: backends within this window of the
 // deactivation are worth showing/storing.
 constexpr double kBackendDisplayWindowMs = 140.0;
+
+// Calibration-fill (E) timing window, applied to e_offset in both directions:
+// an activation with e_offset < -window is illegal (the fill can't be
+// summoned), and one with e_offset < +window is E-critical.
+constexpr double kCalibrationFillWindowMs = 70.0;
 
 // ---- Path ---------------------------------------------------------------
 
@@ -266,6 +288,11 @@ struct Path {
 
     std::optional<double> difficulty() const;
 
+    // An "all-0" path: it has activations and every one of them records
+    // skips == 0. False for a path with no activations, and for a stale record
+    // whose activations carry no skip count.
+    bool is_allzero() const;
+
     // Points-per-note-scored average, matching hydata.Path.avg_mult. 0.0 for a
     // path with no scoring notes (avoids the ZeroDivisionError guard).
     double avg_mult() const;
@@ -279,6 +306,15 @@ struct HydraRecord {
     bool sp_cap_converged = true;
     std::vector<Path> paths;
 
+    // The best all-0 path: the highest-scoring path whose activations all
+    // record skips == 0, found under a 0 ms timing limit, plus the tied
+    // variations a calibration fill or a squeeze in/out produces. The main
+    // search keeps paths by score band, not by shape, so this path is usually
+    // below the band and absent from `paths`. Empty when the search did not run
+    // or found nothing. Deliberately NOT part of all_paths(): the reports and
+    // the summary columns must keep counting generated paths only.
+    std::vector<Path> allzero_paths;
+
     const Path& best_path() const { return paths.at(0); }
     Path& best_path() { return paths.at(0); }
 
@@ -286,6 +322,9 @@ struct HydraRecord {
     // variants), mirroring hydata.HydraRecord.all_paths(). Pointers into
     // `paths`; valid until the record is modified or moved.
     std::vector<const Path*> all_paths() const;
+
+    // The same traversal over allzero_paths.
+    std::vector<const Path*> all_allzero_paths() const;
 };
 
 // Format an integer with thousands separators, matching Python's `{:,}`.

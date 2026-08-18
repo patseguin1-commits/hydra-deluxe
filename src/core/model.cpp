@@ -410,7 +410,9 @@ std::string MultSqueeze::howto() const {
 
 // ---- Activation ---------------------------------------------------------
 
-bool Activation::is_e_critical() const { return *e_offset < 70; }
+bool Activation::is_e_critical() const {
+    return *e_offset < kCalibrationFillWindowMs;
+}
 
 bool Activation::is_E0() const { return is_e_critical() && *skips == 0; }
 
@@ -458,6 +460,33 @@ std::string Activation::notationstr_verbose() const {
         joined += timings[i];
     }
     return notationstr() + " (" + joined + ")";
+}
+
+std::optional<TransferScale> frontend_transfer_scale(const Activation& act,
+                                                     const SongTiming& timing) {
+    if (!act.timecode || !act.sp_meter) return std::nullopt;
+
+    // 2 measures per SP bar; a SqIn extends the end by one +2-measure step no
+    // matter how many SqIns the activation carries (graph.cpp applies the
+    // extension once, on the first SP backend).
+    int64_t end_measures = 2 * static_cast<int64_t>(*act.sp_meter);
+    for (const SPSqueeze& sq : act.sqinouts) {
+        if (sq.kind == SqueezeKind::SqIn) {
+            end_measures += 2;
+            break;
+        }
+    }
+
+    int64_t act_tick = act.timecode->ticks();
+    int64_t end_tick = timing.plusmeasure(*act.timecode, end_measures).ticks();
+
+    TransferScale scale;
+    double front_late = timing.ms_per_measure_at(act_tick);
+    double front_early = timing.ms_per_measure_at(act_tick - 1);
+    if (front_late <= 0.0 || front_early <= 0.0) return std::nullopt;
+    scale.late = timing.ms_per_measure_at(end_tick) / front_late;
+    scale.early = timing.ms_per_measure_at(end_tick - 1) / front_early;
+    return scale;
 }
 
 // ---- Path ---------------------------------------------------------------
@@ -581,6 +610,14 @@ std::vector<BackendSqueeze> Activation::display_backends() const {
     return out;
 }
 
+bool Path::is_allzero() const {
+    std::vector<Activation> acts = all_activations();
+    if (acts.empty()) return false;
+    for (const Activation& act : acts)
+        if (act.skips.value_or(-1) != 0) return false;
+    return true;
+}
+
 double Path::avg_mult() const {
     int64_t multscore = totalscore() - score_solo;
     int64_t basescore = score_base + score_ghosts + score_accents;
@@ -590,10 +627,15 @@ double Path::avg_mult() const {
 
 // ---- HydraRecord ---------------------------------------------------------
 
-std::vector<const Path*> HydraRecord::all_paths() const {
+namespace {
+
+// Depth-first walk over a root list and its nested variants, mirroring
+// hydata.HydraRecord.all_paths(). Shared by all_paths() and all_allzero_paths()
+// so both traversals stay identical.
+std::vector<const Path*> flatten_paths(const std::vector<Path>& roots) {
     std::vector<const Path*> out;
-    std::vector<const Path*> queue(paths.size());
-    for (size_t i = 0; i < paths.size(); ++i) queue[i] = &paths[i];
+    std::vector<const Path*> queue(roots.size());
+    for (size_t i = 0; i < roots.size(); ++i) queue[i] = &roots[i];
 
     while (!queue.empty()) {
         const Path* p = queue.front();
@@ -604,6 +646,16 @@ std::vector<const Path*> HydraRecord::all_paths() const {
         out.push_back(p);
     }
     return out;
+}
+
+}  // namespace
+
+std::vector<const Path*> HydraRecord::all_paths() const {
+    return flatten_paths(paths);
+}
+
+std::vector<const Path*> HydraRecord::all_allzero_paths() const {
+    return flatten_paths(allzero_paths);
 }
 
 // ---- helpers ------------------------------------------------------------

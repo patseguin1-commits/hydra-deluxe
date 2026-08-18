@@ -14,6 +14,7 @@
 #include <functional>
 #include <mutex>
 #include <optional>
+#include <unordered_map>
 #include <utility>
 #include <string>
 #include <vector>
@@ -84,6 +85,8 @@ enum class SortColumn {
 // `charts` table hydra_app.py's scan_library()/hyutil.ScanItem builds — that
 // table lives in the GUI layer in Python (not hystore.py), so it wasn't part
 // of the Phase 4 port; it's added here since it belongs in the same db file.
+// `sig` is the chart files' size+mtime fingerprint that powers the rescan
+// cache (see chart_library_cache); the UI ignores it.
 struct ChartLibraryEntry {
     std::string md5;
     std::string title;
@@ -91,7 +94,19 @@ struct ChartLibraryEntry {
     std::string charter;
     std::string notespath;
     std::string rootfolder;
+    std::string sig;
 };
+
+// What a rescan can reuse for a chart whose files are unchanged: keyed by
+// notespath, valid while `sig` still matches what the walk sees on disk.
+struct ChartCacheEntry {
+    std::string sig;
+    std::string md5;
+    std::string title;
+    std::string artist;
+    std::string charter;
+};
+using ChartLibraryCache = std::unordered_map<std::string, ChartCacheEntry>;
 
 class RecordStore {
 public:
@@ -182,8 +197,14 @@ public:
     // scan_library(): a scan always fully supersedes the previous one.
     void rebuild_chart_library(const std::vector<ChartLibraryEntry>& items);
 
-    // Case-insensitive substring match against title/artist, or the whole
-    // library if search is unset.
+    // The previous scan's rows as a rescan cache (empty on a fresh db, or a
+    // db from before the sig column existed). Read this BEFORE
+    // rebuild_chart_library replaces the table.
+    ChartLibraryCache chart_library_cache();
+
+    // Case-insensitive substring match against title/artist/charter, or the
+    // whole library if search is unset. A negative limit means no limit
+    // (SQLite's LIMIT convention).
     int64_t chart_library_count(const std::optional<std::string>& search = std::nullopt);
     std::vector<ChartLibraryEntry> list_chart_library(
         const std::optional<std::string>& search, int offset, int limit);

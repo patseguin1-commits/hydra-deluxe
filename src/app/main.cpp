@@ -1,9 +1,8 @@
 // Hydra (C++ port) — application entry point.
 //
-// Phase 0 of the port: this stands up the real window, DirectX 11 device, and
-// Dear ImGui context (docking + multi-viewport enabled) that the rest of the
-// GUI (Phase 5) will be built into. For now it renders a single docked
-// placeholder window — the Phase 0 "blank window" gate. The Win32/DX11
+// Stands up the Win32 window, DirectX 11 device, and Dear ImGui context
+// (single primary window; docking/multi-viewport deliberately off) and runs
+// the frame loop over the library view + details modal. The Win32/DX11
 // plumbing is the upstream example_win32_directx11 boilerplate, unchanged
 // except for the window identity and the frame contents.
 
@@ -11,9 +10,14 @@
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
 #include <d3d11.h>
+#include <shobjidl.h>
 #include <tchar.h>
 
+#include <string>
+
+#include "app/config.h"
 #include "app/edition.h"
+#include "app/resource.h"
 #include "ui/app_state.h"
 #include "ui/details_view.h"
 #include "ui/fonts.h"
@@ -42,10 +46,25 @@ int main(int, char**)
     float main_scale = ImGui_ImplWin32_GetDpiScaleForMonitor(
         ::MonitorFromPoint(POINT{ 0, 0 }, MONITOR_DEFAULTTOPRIMARY));
 
+    // Give each edition its own taskbar identity so Hydra and HydraUncapped
+    // windows/pins never group together.
+    ::SetCurrentProcessExplicitAppUserModelID(hydra::kAppUserModelIDW);
+
+    // App icon, embedded in the exe by src/app/hydra.rc. The pinned-taskbar /
+    // Explorer icon comes straight from that PE resource; these runtime loads
+    // cover the window class and the live window (WM_SETICON below), and
+    // unlike the old cwd-relative resource/icon_app.ico file load they work
+    // from any working directory.
+    HINSTANCE hInstance = ::GetModuleHandleW(nullptr);
+    HICON hIconLarge = (HICON)::LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APPICON),
+                                           IMAGE_ICON, 32, 32, 0);
+    HICON hIconSmall = (HICON)::LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APPICON),
+                                           IMAGE_ICON, 16, 16, 0);
+
     // Create the application window.
     WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L,
-                       GetModuleHandle(nullptr), nullptr, nullptr, nullptr,
-                       nullptr, L"Hydra", nullptr };
+                       hInstance, hIconLarge, nullptr, nullptr,
+                       nullptr, L"Hydra", hIconSmall };
     ::RegisterClassExW(&wc);
     // hymisc.HYDRA_VERSION as of this port; matches the "{EDITION_NAME} v..."
     // title dpg.create_viewport builds. Bump alongside HYDRA_VERSION.
@@ -65,13 +84,8 @@ int main(int, char**)
     // dpg.add_static_texture loads. Best-effort: see icons.h.
     hydra::ui::load_icons(g_pd3dDevice);
 
-    // App icon (resource/ is copied beside the exe by the build), matching
-    // dpg.create_viewport's small_icon/large_icon. Best-effort: a missing
-    // file just leaves the default window icon.
-    HICON hIconSmall = (HICON)::LoadImageW(nullptr, L"resource/icon_app.ico", IMAGE_ICON,
-                                           16, 16, LR_LOADFROMFILE);
-    HICON hIconLarge = (HICON)::LoadImageW(nullptr, L"resource/icon_app.ico", IMAGE_ICON,
-                                           32, 32, LR_LOADFROMFILE);
+    // Window icon, matching dpg.create_viewport's small_icon/large_icon
+    // (loaded from the embedded resource above).
     if (hIconSmall) ::SendMessageW(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hIconSmall);
     if (hIconLarge) ::SendMessageW(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hIconLarge);
 
@@ -87,6 +101,14 @@ int main(int, char**)
     // window, like hydra_app.py's dpg.set_primary_window -- not a docking
     // workspace with panels that can be torn into their own OS windows.
 
+    // Persist ImGui state (library table column widths) next to the exe,
+    // edition-suffixed so both editions can run at once without clobbering
+    // each other. The default cwd-relative "imgui.ini" landed wherever the
+    // app happened to be launched from.
+    static std::string ini_file =
+        hydra::app::exe_dir() + "\\hydra" + (hydra::kUncapped ? "_uncapped" : "") + "_ui.ini";
+    io.IniFilename = ini_file.c_str();
+
     ImGui::StyleColorsDark();
     hydra::ui::apply_theme();
 
@@ -95,18 +117,35 @@ int main(int, char**)
     style.FontScaleDpi = main_scale;
     io.ConfigDpiScaleFonts = true;
     io.ConfigDpiScaleViewports = true;
+    hydra::ui::g_ui_scale = main_scale;  // for the views' explicit pixel sizes
 
     // Fonts, matching hydra_app.py's MainFont/MonoFont (resource/ is copied
     // beside the exe by the build; see CMakeLists.txt). Falls back to
     // ImGui's built-in font if the files aren't found, rather than asserting.
-    // The Japanese glyph range hint Python's font used is not loaded here --
-    // full CJK coverage needs a much larger atlas; Latin/extended-Latin only
-    // for now (a Phase 5 gap, not a parity requirement).
     ImFont* main_font = io.Fonts->AddFontFromFileTTF(
         "resource/ShipporiAntiqueB1-Regular.ttf", 18.0f);
     hydra::ui::g_mono_font = io.Fonts->AddFontFromFileTTF(
         "resource/CourierPrime-Regular.ttf", 18.0f);
     if (main_font) io.FontDefault = main_font;
+
+    // CJK fallback: Clone Hero libraries are full of Japanese (and other
+    // non-Latin) titles, which rendered as ?/boxes with the Latin-only fonts.
+    // Merge the first available system font into the main font; ImGui's
+    // dynamic font loader rasterizes glyphs on demand, so this costs nothing
+    // until a non-Latin title is actually drawn.
+    if (main_font) {
+        const char* cjk_candidates[] = {
+            "C:\\Windows\\Fonts\\YuGothM.ttc",   // Yu Gothic Medium (Win 8.1+)
+            "C:\\Windows\\Fonts\\meiryo.ttc",    // Meiryo
+            "C:\\Windows\\Fonts\\msgothic.ttc",  // MS Gothic (bitmap-ish, last resort)
+        };
+        for (const char* path : cjk_candidates) {
+            if (::GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) continue;
+            ImFontConfig merge;
+            merge.MergeMode = true;
+            if (io.Fonts->AddFontFromFileTTF(path, 18.0f, &merge)) break;
+        }
+    }
 
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);

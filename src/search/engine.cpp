@@ -317,7 +317,7 @@ class Engine {
 public:
     Engine(const Enum& en, bool has_sp_cap, int32_t sp_cap, int32_t depth_mode,
            int32_t depth_value, bool has_ms_filter, double ms_filter,
-           bool flag_skipped_dynamics)
+           bool flag_skipped_dynamics, bool no_skips, bool hard_ms_filter)
         : en_(en),
           has_sp_cap_(has_sp_cap),
           sp_cap_(sp_cap),
@@ -325,7 +325,9 @@ public:
           depth_value_(depth_value),
           has_ms_filter_(has_ms_filter),
           ms_filter_(ms_filter),
-          flag_skipped_dynamics_(flag_skipped_dynamics) {}
+          flag_skipped_dynamics_(flag_skipped_dynamics),
+          no_skips_(no_skips),
+          hard_ms_filter_(hard_ms_filter) {}
 
     bool run();
     bool dp_run();
@@ -456,6 +458,13 @@ private:
     bool has_ms_filter_;
     double ms_filter_;
     bool flag_skipped_dynamics_;
+    // Every activation must record skips == 0: the declining parent is dropped
+    // whenever branch_activate produced a real child. BFS only.
+    bool no_skips_;
+    // Treat ms_filter_ as a requirement rather than a preference: a path over
+    // the limit is dropped outright instead of surviving while nothing
+    // outscores it. BFS only. See reduce_iteration_paths for why this is exact.
+    bool hard_ms_filter_;
 
     std::vector<Act> acts_;
     std::vector<SqNode> sqs_;
@@ -582,7 +591,7 @@ bool Engine::branch_activate(Path& p, Path* child) {
     const ScoreGraphEdge* eo = eobj(n.branch_edge);
 
     const double e_offset = e.activation_fill_deadline_ms - p.sp_ready_ms;
-    if (e_offset < -70) return false;
+    if (e_offset < -kCalibrationFillWindowMs) return false;
 
     // activation_initial_end_times, keyed by SP meter. The flat form was a list
     // with NO_TIME gaps in range [0, top]; here the map has meters 2..max.
@@ -753,7 +762,7 @@ double Engine::act_difficulty(int32_t act) const {
                              : -sqs_[(size_t)s].offset + 0.0;
         if (!has_value(best) || d > best) best = d;
     }
-    if (a.e_offset < 70 && a.skips == 0) {
+    if (a.e_offset < kCalibrationFillWindowMs && a.skips == 0) {
         const double d = -a.e_offset + 0.0;
         if (!has_value(best) || d > best) best = d;
     }
@@ -992,6 +1001,18 @@ void Engine::reduce_iteration_paths() {
         const Path& p = cur_[(size_t)i];
         const bool is_complete = p.node < 0;
 
+        // Hard mode kills an over-limit path here instead of handing it to
+        // reduce_group, which keeps one while nothing outscores it -- a
+        // preference, not a requirement. Dropping it now is exact:
+        // search_difficulty is a running max (diff_prefix only ever rises in
+        // close_last_activation, and a tail's squeeze list only grows), so a
+        // path already over the limit can never come back under it. It also
+        // prunes, since the whole subtree below it is over the limit too.
+        if (hard_ms_filter_ && filtered_[(size_t)i]) {
+            removed_[(size_t)i] = 1;
+            continue;
+        }
+
         if (is_complete && (!has_optimal_ || p.score > optimal_score_)) {
             has_optimal_ = true;
             optimal_score_ = p.score;
@@ -1191,7 +1212,15 @@ bool Engine::run() {
             } else {
                 has_child = branch_activate(p, &child);
                 if (p.node == NODE_BROKEN) return false;
-                next_.push_back(p);
+                // The parent is the path that declined this opportunity, and
+                // branch_activate has just charged it a skip. Under no_skips_
+                // that parent can no longer reach an all-0 path, so drop it and
+                // keep only the activating child. branch_activate charges the
+                // skip solely on the branch that produced a child -- a refused
+                // opportunity (no branch edge, SP under 2 bars, blown fill
+                // deadline) leaves currentskips alone, so the surviving path is
+                // still free to activate later and still read as 0 skips.
+                if (!(no_skips_ && has_child)) next_.push_back(p);
             }
             if (has_child) next_.push_back(child);
         }
@@ -1272,7 +1301,8 @@ std::vector<DpEntry> Engine::dp_best_from_node(int32_t node_index, int32_t sp,
 
     if (n.branch_edge >= 0 && sp >= 2 && has_value(sp_ready_ms)) {
         const EdgeView be = edge(n.branch_edge);
-        if (be.activation_fill_deadline_ms - sp_ready_ms >= -70) {
+        if (be.activation_fill_deadline_ms - sp_ready_ms >=
+            -kCalibrationFillWindowMs) {
             const std::vector<DpOutcome>& outs =
                 dp_activation_outcomes(node_index, sp);
             if (dp_failed_) return {};
@@ -1663,16 +1693,22 @@ std::vector<MPath> rebuild(const Enum& en, const std::vector<OutPath>& out_paths
 
 std::vector<MPath> run_search(const ScoreGraph& graph, int depth_mode,
                               int depth_value, std::optional<double> ms_filter,
-                              bool use_dp,
+                              bool use_dp, bool no_skips, bool hard_ms_filter,
                               const std::function<void(float)>& on_progress) {
     Enum en = enumerate(graph);
 
     const bool has_cap = graph.sp_meter_cap().has_value();
     const int32_t cap = static_cast<int32_t>(graph.sp_meter_cap().value_or(0));
 
+    // The DP enumerates activation sets directly and never walks the BFS
+    // decline branch or reduce_iteration_paths, so it has nowhere to apply
+    // either constraint.
+    if ((no_skips || hard_ms_filter) && use_dp)
+        throw std::runtime_error("no_skips/hard_ms_filter are BFS-only constraints");
+
     Engine engine(en, has_cap, cap, depth_mode, depth_value,
                   ms_filter.has_value(), ms_filter.value_or(0.0),
-                  /*flag_skipped_dynamics=*/false);
+                  /*flag_skipped_dynamics=*/false, no_skips, hard_ms_filter);
     if (on_progress) engine.set_progress_cb(on_progress);
 
     bool ok;

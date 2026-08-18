@@ -11,6 +11,7 @@
 #include <unordered_map>
 
 #include "parse/midi.h"
+#include "parse/srb.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -1021,6 +1022,41 @@ Song load_songpath_sng(const std::string& path, const std::string& difficulty,
     return load_songbytes_chart(notebytes, difficulty, pro, bass2x);
 }
 
+Song load_songpath_srb(const std::string& path, const std::string& difficulty,
+                       bool pro, bool bass2x) {
+    std::vector<uint8_t> buf = read_file_bytes(path);
+    if (buf.size() <= kSrbHeaderSize)
+        throw std::runtime_error("Truncated SRB file.");
+
+    // Stream 1 (metadata) names the notes file; stream 2 is its bytes.
+    size_t notes_offset = 0;
+    std::vector<uint8_t> meta = srb_inflate_stream(
+        buf.data(), buf.size(), kSrbHeaderSize, kSrbMaxMetadata, &notes_offset);
+    SrbMetadata md;
+    srb_parse_metadata(meta, md);
+
+    // The notes file inflates to well under a hundred MB even for mega-charts;
+    // a 1 GB ceiling only exists to bound hostile input.
+    std::vector<uint8_t> notebytes = srb_inflate_stream(
+        buf.data(), buf.size(), notes_offset, size_t{1} << 30, nullptr);
+
+    std::string fn = ascii_casefold(md.notes_filename);
+    auto fn_ends_with = [&fn](const char* suf) {
+        size_t n = std::strlen(suf);
+        return fn.size() >= n && fn.compare(fn.size() - n, n, suf) == 0;
+    };
+    bool is_mid;
+    if (fn_ends_with(".mid"))
+        is_mid = true;
+    else if (fn_ends_with(".chart"))
+        is_mid = false;
+    else  // Unexpected filename: sniff the payload instead.
+        is_mid = notebytes.size() >= 4 && std::memcmp(notebytes.data(), "MThd", 4) == 0;
+
+    if (is_mid) return load_songbytes_mid(notebytes, difficulty, pro, bass2x);
+    return load_songbytes_chart(notebytes, difficulty, pro, bass2x);
+}
+
 Song load_songpath(const std::string& path, const std::string& difficulty,
                    bool pro, bool bass2x) {
     std::string low = ascii_casefold(path);
@@ -1032,6 +1068,7 @@ Song load_songpath(const std::string& path, const std::string& difficulty,
     if (ends_with(".chart"))
         return load_songpath_chart(path, difficulty, pro, bass2x);
     if (ends_with(".sng")) return load_songpath_sng(path, difficulty, pro, bass2x);
+    if (ends_with(".srb")) return load_songpath_srb(path, difficulty, pro, bass2x);
     throw std::runtime_error("unexpected chart type: " + path);
 }
 

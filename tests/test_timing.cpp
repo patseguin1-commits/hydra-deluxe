@@ -136,3 +136,26 @@ TEST_CASE("timing: a meter change off a barline carries a partial measure") {
     CHECK(mi.measures_at(1) == 1);     // one whole measure counted by tick 2880
     CHECK(mi.starts_at(1) == 1920);    // last barline at or before tick 2880
 }
+
+TEST_CASE("timing: ms_per_measure_at reads local measure durations") {
+    // The Tom Sawyer (Onyxite) shape: ten 7/8 measures at 87.35 BPM, then
+    // 7/16 at 85.1. 7/8 = 1680 ticks at res 480; 7/16 = 840.
+    std::map<int64_t, int64_t> tpm{{0, 1680}, {16800, 840}};
+    std::map<int64_t, double> bpm{{0, 87.35}, {16800, 85.1}};
+    hydra::SongTiming st(480, tpm, bpm);
+
+    // 3.5 quarters * 60000/87.35 and 1.75 quarters * 60000/85.1.
+    CHECK(st.ms_per_measure_at(0) == doctest::Approx(2404.1214).epsilon(1e-6));
+    CHECK(st.ms_per_measure_at(16800) == doctest::Approx(1233.8425).epsilon(1e-6));
+
+    // A tick exactly on the change reads the new section; tick-1 the old one.
+    CHECK(st.ms_per_measure_at(16799) == doctest::Approx(2404.1214).epsilon(1e-6));
+    CHECK(st.ms_per_measure_at(16801) == doctest::Approx(1233.8425).epsilon(1e-6));
+
+    // Uniform map: the same value everywhere.
+    std::map<int64_t, int64_t> tpm44{{0, 1920}};
+    std::map<int64_t, double> bpm120{{0, 120.0}};
+    hydra::SongTiming flat(480, tpm44, bpm120);
+    CHECK(flat.ms_per_measure_at(0) == doctest::Approx(2000.0));
+    CHECK(flat.ms_per_measure_at(12345) == doctest::Approx(2000.0));
+}

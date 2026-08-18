@@ -48,6 +48,13 @@ double MsIndex::at(int64_t ticks) const {
         static_cast<double>(ticks - keys_[i]) / tps_[i] * 1000.0;
 }
 
+double MsIndex::tps_at(int64_t ticks) const {
+    auto it = std::upper_bound(keys_.begin(), keys_.end(), ticks);
+    int i = static_cast<int>(it - keys_.begin()) - 1;
+    if (i < 0) i = 0;
+    return tps_[i];
+}
+
 // ---- MeasureIndex -------------------------------------------------------
 
 MeasureIndex::MeasureIndex(const std::map<int64_t, int64_t>& tpm_map,
@@ -161,6 +168,15 @@ Timecode SongTiming::plusmeasure(const Timecode& tc, int64_t add_measures) const
     int64_t partial =
         static_cast<int64_t>(targetpartial * static_cast<double>(current_tpm));
     return timecode(handled_ticks + partial);
+}
+
+double SongTiming::ms_per_measure_at(int64_t ticks) const {
+    // section_at puts a tick exactly on a meter change with the section
+    // BEFORE it (lower_bound); querying ticks+1 flips that to the section
+    // starting AT the tick, matching tps_at's upper_bound rule. Both reads
+    // then describe time just after `ticks`.
+    int64_t tpm = mbt_.tpm_at(mbt_.section_at(ticks + 1));
+    return static_cast<double>(tpm) / ms_.tps_at(ticks) * 1000.0;
 }
 
 }  // namespace hydra

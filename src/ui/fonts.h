@@ -13,6 +13,13 @@ namespace hydra::ui {
 
 inline ImFont* g_mono_font = nullptr;
 
+// The monitor's DPI scale, set once by main.cpp. style.ScaleAllSizes() covers
+// ImGui's own paddings and ConfigDpiScaleFonts covers text, but neither
+// touches explicit pixel values (SetNextItemWidth, ImVec2 sizes, SameLine
+// offsets) — wrap those in px() so widths/heights scale with the display.
+inline float g_ui_scale = 1.0f;
+inline float px(float v) { return v * g_ui_scale; }
+
 }  // namespace hydra::ui
 
 #endif  // HYDRA_UI_FONTS_H

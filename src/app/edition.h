@@ -11,7 +11,7 @@
 
 namespace hydra {
 
-inline constexpr const char* kHydraVersion = "1.3.1";
+inline constexpr const char* kHydraVersion = "1.4.1";
 
 // Per-edition user file names (hydra{_uncapped}.db / .ini) are built at
 // runtime by app/config.h from the uncapped flag, since the CLI tools select
@@ -19,11 +19,13 @@ inline constexpr const char* kHydraVersion = "1.3.1";
 #ifdef HYDRA_UNCAPPED
 inline constexpr bool kUncapped = true;
 inline constexpr const char* kEditionName = "Hydra Uncapped";
-inline constexpr const wchar_t* kWindowTitleW = L"Hydra Uncapped v1.3.1";
+inline constexpr const wchar_t* kWindowTitleW = L"Hydra Uncapped v1.4.1";
+inline constexpr const wchar_t* kAppUserModelIDW = L"Hydra.Uncapped";
 #else
 inline constexpr bool kUncapped = false;
 inline constexpr const char* kEditionName = "Hydra";
-inline constexpr const wchar_t* kWindowTitleW = L"Hydra v1.3.1";
+inline constexpr const wchar_t* kWindowTitleW = L"Hydra v1.4.1";
+inline constexpr const wchar_t* kAppUserModelIDW = L"Hydra.Hydra";
 #endif
 
 }  // namespace hydra

@@ -93,7 +93,7 @@ hydra_report --uncapped
 It keeps its own library, settings and records (`hydra_uncapped.db`,
 `hydra_uncapped_settings.ini`), so it runs alongside the normal app without
 either one disturbing the other. Charts have to be scanned and analyzed in it
-once: capped records aren't reusable, and it marks them `(Update...)`.
+once: capped records aren't reusable, and it marks them `(Stale)`.
 
 ### How "no ceiling" is actually reached
 

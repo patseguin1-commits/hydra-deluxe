@@ -32,6 +32,10 @@ public:
     // read back at the opening tempo, as the original walk did).
     double at(int64_t ticks) const;
 
+    // Ticks-per-second of the tempo section containing `ticks` (a tick exactly
+    // on a tempo change reads the new tempo, same rule as at()).
+    double tps_at(int64_t ticks) const;
+
 private:
     std::vector<int64_t> keys_;
     std::vector<double> tps_;
@@ -125,6 +129,14 @@ public:
     // auto-fill placement and, later, the score graph. Not cached here —
     // the caller caches if the call volume warrants it.
     Timecode plusmeasure(const Timecode& tc, int64_t add_measures) const;
+
+    // Local measure duration in ms for time just AFTER `ticks`: the meter
+    // section's ticks-per-measure over the tempo section's ticks-per-second.
+    // A tick exactly on a meter or tempo change reads the NEW section; pass
+    // `ticks - 1` for the duration just before the tick. Display-layer helper
+    // (frontend->SP-end squeeze scaling); not part of the golden parity
+    // surface.
+    double ms_per_measure_at(int64_t ticks) const;
 
 private:
     int64_t tick_r_;

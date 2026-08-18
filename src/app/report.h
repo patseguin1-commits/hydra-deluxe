@@ -32,6 +32,12 @@ struct ReportRow {
     std::optional<double> ms;
     std::string tier;
     std::string tok;
+    // Hardest calibration fill among the path's E0 activations, in the same
+    // difficulty convention as `ms` (e_difficulty = -e_offset: positive means
+    // you must hit that much early, negative is slack). Skipped E activations
+    // don't count — their fill is irrelevant to the path. Unset when the path
+    // has no E0 fill (distinct from a real 0.0ms fill).
+    std::optional<double> efill;
     double mult = 0.0;  // already round(x, 3)'d, like the Python row
     int sqin = 0;
     int sqout = 0;

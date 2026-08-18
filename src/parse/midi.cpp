@@ -199,7 +199,8 @@ MidiTrack MidiFile::parse_track(const uint8_t* data, size_t pos, size_t end) {
     // Ticks accumulated since the last emitted message. Skipped events hand
     // their delta to whatever comes next, so absolute time is preserved.
     int64_t pending = 0;
-    int status = 0;
+    int running = 0;
+    bool named = false;
 
     while (pos < end) {
         // Delta time.
@@ -214,10 +215,17 @@ MidiTrack MidiFile::parse_track(const uint8_t* data, size_t pos, size_t end) {
         if (pos >= end) break;
 
         uint8_t b = data[pos];
+        int status;
         if (b & 0x80) {
             status = b;
             ++pos;
-        } else if (!status) {
+            // A meta event must not become the running status (mido excludes
+            // only 0xFF). Rock Band rips use running status for the channel
+            // event right after a meta event, so 0xFF must not clobber it.
+            if (b != 0xFF) running = b;
+        } else if (running) {
+            status = running;
+        } else {
             // Running status with nothing to run from: malformed past here.
             break;
         }
@@ -233,7 +241,13 @@ MidiTrack MidiFile::parse_track(const uint8_t* data, size_t pos, size_t end) {
 
             Message msg;
             if (meta_message(meta_type, payload, plen, pending, &msg)) {
-                if (meta_type == 0x03) track.name = msg.str;
+                // mido's MidiTrack.name is the FIRST track_name meta; some
+                // charts carry extra 0x03 metas mid-track (e.g. "Drums" after
+                // "PART DRUMS"), and the last one must not win.
+                if (meta_type == 0x03 && !named) {
+                    track.name = msg.str;
+                    named = true;
+                }
                 track.messages.push_back(std::move(msg));
                 pending = 0;
             }

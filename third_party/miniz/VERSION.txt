@@ -1,0 +1,2 @@
+miniz 3.0.2 (amalgamated release)
+https://github.com/richgel999/miniz/releases/tag/3.0.2
