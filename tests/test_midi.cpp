@@ -1,9 +1,8 @@
-// Parity + unit tests for parse/midi (the hymidi port).
+// Smoke + unit tests for parse/midi.
 //
-// Parity: for every .mid in the golden, re-read the file and build the same
-// absolute-tick event view Python's test_midi_parity builds, then diff it
-// against the golden midi block (ticks_per_beat, track names, event stream).
-// Unit: the edge cases the corpus may not contain but a user's library might.
+// Smoke: every .mid in the corpus must read without throwing and produce a
+// sane track/event structure. Unit: the edge cases the corpus may not contain
+// but a user's library might.
 
 #include "doctest.h"
 
@@ -12,18 +11,14 @@
 #include <vector>
 
 #include "parse/midi.h"
-#include "golden_util.h"
-
-#ifndef HYDRA_INPUT_DIR
-#error "HYDRA_INPUT_DIR must be defined (see CMakeLists.txt)"
-#endif
+#include "corpus_util.h"
 
 namespace {
 
-using golden::json;
+using corpus::json;
 
-// The same absolute-tick view as tools/gen_golden.py:event_view / the Python
-// test_midi_parity, built as JSON so it diffs directly against the golden.
+// Absolute-tick event view, built as JSON so a unit case can diff a parsed
+// file against a literal expected stream in one CHECK.
 json event_view(const hydra::MidiFile& mid) {
     json view = json::array();
     for (const auto& track : mid.tracks) {
@@ -67,31 +62,32 @@ std::vector<uint8_t> smf(const std::vector<uint8_t>& track) {
 
 }  // namespace
 
-TEST_CASE("midi: event streams match golden across the corpus") {
-    const json idx = golden::index();
+TEST_CASE("midi: every corpus .mid reads with a sane structure") {
     size_t mids = 0;
-    for (const auto& entry : idx) {
-        if (!entry["has_midi"].get<bool>()) continue;
-        const std::string slug = entry["slug"].get<std::string>();
-        const std::string relpath = entry["relpath"].get<std::string>();
-        const json doc = golden::chart(slug);
-        const json& gm = doc["midi"];
+    for (const std::string& path : corpus::chart_paths()) {
+        if (path.size() < 4 || path.compare(path.size() - 4, 4, ".mid") != 0)
+            continue;
 
-        hydra::MidiFile mid =
-            hydra::MidiFile::from_file(std::string(HYDRA_INPUT_DIR) + "/" + relpath);
+        hydra::MidiFile mid = hydra::MidiFile::from_file(path);
         ++mids;
 
-        CHECK_MESSAGE(mid.ticks_per_beat == gm["ticks_per_beat"].get<int>(),
-                      relpath << ": ticks_per_beat");
+        CHECK_MESSAGE(mid.ticks_per_beat > 0, path << ": ticks_per_beat");
+        CHECK_MESSAGE(!mid.tracks.empty(), path << ": no tracks");
 
-        json names = json::array();
-        for (const auto& t : mid.tracks) names.push_back(t.name);
-        CHECK_MESSAGE(names == gm["track_names"], relpath << ": track names");
-
-        CHECK_MESSAGE(event_view(mid) == gm["events"], relpath << ": events");
+        // Delta times never run backwards, and the drum track exists by name
+        // (this corpus is all drum charts).
+        bool has_drums = false;
+        bool deltas_ok = true;
+        for (const auto& t : mid.tracks) {
+            if (t.name == "PART DRUMS") has_drums = true;
+            for (const auto& m : t.messages)
+                if (m.time < 0) deltas_ok = false;
+        }
+        CHECK_MESSAGE(deltas_ok, path << ": negative delta");
+        CHECK_MESSAGE(has_drums, path << ": no PART DRUMS track");
     }
     REQUIRE(mids > 0);
-    MESSAGE("midi parity: " << mids << " files");
+    MESSAGE("midi smoke: " << mids << " files");
 }
 
 TEST_CASE("midi: running status and zero-velocity note_on") {

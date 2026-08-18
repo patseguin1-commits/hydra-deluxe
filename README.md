@@ -60,11 +60,9 @@ SQLite, doctest) is vendored under `third_party/`.
 .\build-cpp\Release\hydra_tests.exe    # run the test suite
 ```
 
-The parity tests read a generated `golden/` corpus that is not checked in;
-regenerate it from the frozen Python oracle preserved on the `python-oracle`
-git tag (check out the tag, create its venv, and run `tools/gen_golden.py`
-and `tools/gen_golden_report.py`). Everyday development of the app itself
-does not need it — only `hydra_tests` does.
+The tests run against the checked-in chart corpus under `testdata/input/`;
+nothing else is needed. `hydra_tests` asserts structural invariants and
+lossless round-trips over that corpus.
 
 ## Hydra Uncapped
 

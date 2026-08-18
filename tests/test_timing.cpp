@@ -1,9 +1,8 @@
-// Parity + unit tests for core/timing (the hymisc port).
+// Invariant + unit tests for core/timing.
 //
-// The parity half rebuilds each chart's tempo/meter maps from the golden and
-// asserts every sampled tick converts to the exact same ms / measure-beat-tick
-// / decimal-measure values Python produced. The unit half pins the edge cases
-// the corpus may not contain.
+// The corpus half converts every chart timestamp through the chart's real
+// tempo/meter maps and asserts the conversions are monotone and consistent.
+// The unit half pins the edge cases the corpus may not contain.
 
 #include "doctest.h"
 
@@ -12,85 +11,44 @@
 #include <string>
 
 #include "core/timing.h"
-#include "golden_util.h"
+#include "corpus_util.h"
+#include "parse/song.h"
 
-namespace {
-
-hydra::SongTiming build_timing(const golden::json& timing) {
-    int64_t res = timing["res"].get<int64_t>();
-
-    std::map<int64_t, int64_t> tpm;
-    for (auto it = timing["tpm"].begin(); it != timing["tpm"].end(); ++it)
-        tpm[std::stoll(it.key())] = it.value().get<int64_t>();
-
-    std::map<int64_t, double> bpm;
-    for (auto it = timing["bpm"].begin(); it != timing["bpm"].end(); ++it)
-        bpm[std::stoll(it.key())] = golden::as_double(it.value());
-
-    return hydra::SongTiming(res, tpm, bpm);
-}
-
-}  // namespace
-
-TEST_CASE("timing: ms and measures match golden across the corpus") {
-    const golden::json idx = golden::index();
-    REQUIRE(idx.size() > 0);
-
+TEST_CASE("timing: corpus conversions are monotone and consistent") {
     size_t charts = 0, samples = 0;
-    for (const auto& entry : idx) {
-        const std::string slug = entry["slug"].get<std::string>();
-        const golden::json doc = golden::chart(slug);
-        const golden::json& timing = doc["timing"];
-
-        hydra::SongTiming st = build_timing(timing);
+    for (const std::string& path : corpus::chart_paths()) {
+        hydra::Song song = hydra::load_songpath(path, "Expert", true, true);
+        if (song.is_empty()) continue;
         ++charts;
 
-        std::string first_ms_diff, first_mbt_diff, first_md_diff;
-        int ms_bad = 0, mbt_bad = 0, md_bad = 0;
-
-        for (const auto& s : timing["samples"]) {
-            int64_t tick = s["tick"].get<int64_t>();
-            hydra::Timecode tc = st.timecode(tick);
+        bool ms_ok = true, mbt_ok = true;
+        double prev_ms = -1e18;
+        for (const hydra::SongTimestamp& ts : song.sequence) {
+            const hydra::Timecode& tc = ts.timecode;
             ++samples;
 
-            double want_ms = golden::as_double(s["ms"]);
-            if (tc.ms() != want_ms) {
-                if (ms_bad++ == 0) {
-                    first_ms_diff = "tick " + std::to_string(tick) +
-                        " ms " + std::to_string(tc.ms()) + " != " +
-                        s["ms"].get<std::string>();
-                }
-            }
+            // Later ticks never map to earlier times. (measures_decimal is
+            // NOT monotone: a mid-measure meter change legitimately resets
+            // the fractional part below the previous value.)
+            if (tc.ms() < prev_ms) ms_ok = false;
+            prev_ms = tc.ms();
 
-            if (s.contains("mbt")) {
-                const auto& m = s["mbt"];
-                const int64_t* got = tc.measure_beats_ticks();
-                if (got[0] != m[0].get<int64_t>() ||
-                    got[1] != m[1].get<int64_t>() ||
-                    got[2] != m[2].get<int64_t>()) {
-                    if (mbt_bad++ == 0)
-                        first_mbt_diff = "tick " + std::to_string(tick);
-                }
-                double want_md = golden::as_double(s["measures_decimal"]);
-                if (tc.measures_decimal() != want_md) {
-                    if (md_bad++ == 0) {
-                        first_md_diff = "tick " + std::to_string(tick) +
-                            " md " + std::to_string(tc.measures_decimal()) +
-                            " != " + s["measures_decimal"].get<std::string>();
-                    }
-                }
-            }
+            // measure-beats-ticks agrees with the decimal measure count
+            // (measures_decimal = whole measures + fraction, all 0-based).
+            const int64_t* mbt = tc.measure_beats_ticks();
+            const double md = tc.measures_decimal();
+            if (mbt[0] < 0 || mbt[1] < 0 || mbt[2] < 0 ||
+                static_cast<double>(mbt[0]) > md ||
+                md > static_cast<double>(mbt[0] + 1))
+                mbt_ok = false;
         }
-
-        CHECK_MESSAGE(ms_bad == 0, slug << ": " << ms_bad
-                      << " ms diffs, first: " << first_ms_diff);
-        CHECK_MESSAGE(mbt_bad == 0, slug << ": " << mbt_bad
-                      << " mbt diffs, first: " << first_mbt_diff);
-        CHECK_MESSAGE(md_bad == 0, slug << ": " << md_bad
-                      << " measures_decimal diffs, first: " << first_md_diff);
+        CHECK_MESSAGE(ms_ok, path << ": ms not monotone");
+        CHECK_MESSAGE(mbt_ok, path << ": measure_beats_ticks inconsistent");
     }
 
-    MESSAGE("timing parity: " << charts << " charts, " << samples << " samples");
+    REQUIRE(charts > 0);
+    MESSAGE("timing invariants: " << charts << " charts, " << samples
+                                  << " samples");
 }
 
 TEST_CASE("timing: to_multiplier thresholds") {

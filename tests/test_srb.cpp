@@ -23,14 +23,10 @@
 #include <vector>
 
 #include "app/analysis.h"
-#include "golden_util.h"
+#include "corpus_util.h"
 #include "miniz.h"
 #include "parse/song.h"
 #include "parse/srb.h"
-
-#ifndef HYDRA_INPUT_DIR
-#error "HYDRA_INPUT_DIR must be defined (see CMakeLists.txt)"
-#endif
 
 using namespace hydra;
 
@@ -158,14 +154,7 @@ bool songs_equal(const Song& a, const Song& b) {
 
 // First corpus chart with the given extension.
 std::string corpus_chart_path(const std::string& ext) {
-    for (const auto& entry : golden::index()) {
-        const std::string relpath = entry["relpath"].get<std::string>();
-        if (relpath.size() > ext.size() &&
-            relpath.compare(relpath.size() - ext.size(), ext.size(), ext) == 0)
-            return std::string(HYDRA_INPUT_DIR) + "/" + relpath;
-    }
-    REQUIRE_MESSAGE(false, "no ." << ext << " chart in corpus");
-    return "";
+    return corpus::first_chart_with_suffix(ext);
 }
 
 }  // namespace

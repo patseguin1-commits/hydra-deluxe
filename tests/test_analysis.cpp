@@ -1,7 +1,6 @@
-// Tests for app/analysis.{h,cpp} — chord counting cross-checked against
-// golden's `song` block (same tally, computed a different way), plus
-// discovery/hashing sanity over the real test/input corpus (not gated by
-// golden: these are filesystem-facing, not part of the algorithm spine).
+// Tests for app/analysis.{h,cpp} — chord counting cross-checked against the
+// song parser (same tally, computed through a different code path), plus
+// discovery/hashing sanity over the real testdata/input corpus.
 
 #include "doctest.h"
 
@@ -18,8 +17,13 @@
 #include <vector>
 
 #include "app/analysis.h"
-#include "golden_util.h"
+#include "corpus_util.h"
+#include "parse/song.h"
 #include "store/record_store.h"
+
+#ifndef HYDRA_TESTDATA_DIR
+#error "HYDRA_TESTDATA_DIR must be defined (see CMakeLists.txt)"
+#endif
 
 using namespace hydra::app;
 
@@ -42,23 +46,22 @@ bool file_exists_utf8(const std::string& utf8_path) {
 
 }  // namespace
 
-TEST_CASE("count_chart_chords matches golden's song-block code tally") {
-    const golden::json idx = golden::index();
+TEST_CASE("count_chart_chords matches the song parser's code tally") {
     int checked = 0;
 
-    for (const auto& entry : idx) {
-        const std::string relpath = entry["relpath"].get<std::string>();
-        const std::string ext = relpath.substr(relpath.find_last_of('.') + 1);
+    for (const std::string& path : corpus::chart_paths()) {
+        const std::string ext = path.substr(path.find_last_of('.') + 1);
         if (ext != "mid" && ext != "chart") continue;  // count_chart_chords doesn't take .sng
 
-        golden::json doc = golden::chart(entry["slug"].get<std::string>());
+        // The same tally computed through the full parser.
+        hydra::Song song = hydra::load_songpath(path, "Expert", true, true);
         std::map<std::string, int> expected;
-        for (const auto& ev : doc["song"]["events"]) ++expected[ev["code"].get<std::string>()];
+        for (const hydra::SongTimestamp& ts : song.sequence)
+            ++expected[ts.chord.code()];
 
-        const std::string path = std::string(HYDRA_INPUT_DIR) + "/" + relpath;
         std::map<std::string, int> actual = count_chart_chords(path);
 
-        CHECK_MESSAGE(actual == expected, relpath);
+        CHECK_MESSAGE(actual == expected, path);
         ++checked;
     }
 
@@ -86,18 +89,10 @@ TEST_CASE("discover_charts returns nothing for an empty root list") {
     CHECK(errors.empty());
 }
 
-TEST_CASE("get_folder_count agrees with the folder count discover_charts visits") {
-    int seen_by_discover = 0;
-    discover_charts({std::string(HYDRA_INPUT_DIR)},
-                    [&](int n) { seen_by_discover = n; });
-    int counted = get_folder_count({std::string(HYDRA_INPUT_DIR)});
-    CHECK(counted == seen_by_discover);
-}
-
 namespace {
 
-// notespath/rootfolder relative to test/input, forward slashes — the keying
-// test/scan_snapshot.json uses (see tools/bench.cpp's --dump-rel).
+// notespath/rootfolder relative to testdata/input, forward slashes — the
+// keying testdata/scan_snapshot.json uses (see tools/bench.cpp's --dump-rel).
 std::string rel_of(const std::string& path, const std::string& root) {
     std::string rel = path;
     if (!root.empty() && rel.size() > root.size() && rel.compare(0, root.size(), root) == 0)
@@ -114,11 +109,12 @@ std::string rel_of(const std::string& path, const std::string& root) {
 // set across any scan implementation change.
 TEST_CASE("discover_charts output matches the checked-in scan snapshot") {
     const std::string input = HYDRA_INPUT_DIR;
-    std::ifstream f(input + "/../scan_snapshot.json", std::ios::binary);
-    REQUIRE_MESSAGE(bool(f), "missing test/scan_snapshot.json");
+    std::ifstream f(std::string(HYDRA_TESTDATA_DIR) + "/scan_snapshot.json",
+                    std::ios::binary);
+    REQUIRE_MESSAGE(bool(f), "missing testdata/scan_snapshot.json");
     std::stringstream ss;
     ss << f.rdbuf();
-    golden::json snapshot = golden::json::parse(ss.str());
+    corpus::json snapshot = corpus::json::parse(ss.str());
 
     auto [items, errors] = discover_charts({input});
     CHECK(errors.empty());

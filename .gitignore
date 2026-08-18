@@ -15,9 +15,6 @@ imgui.ini
 # Local utility scripts, anything else
 local/*
 
-# Golden parity data (removed in Phase C; ignored until then).
-golden/
-
 # C++ build tree (CMake) and IDE state.
 build-cpp/
 .vs/

@@ -174,11 +174,11 @@ target_compile_options(hydra_tests PRIVATE ${HYDRA_WARNINGS})
 # doctest.h specializes std::tuple, which newer MSVC flags (C5285); harmless.
 target_compile_options(hydra_tests PRIVATE /wd5285)
 
-# Where golden/ and the chart corpus live, so tests find them regardless of
+# Where the chart corpus and fixtures live, so tests find them regardless of
 # the working directory.
 target_compile_definitions(hydra_tests PRIVATE
-    HYDRA_GOLDEN_DIR="${CMAKE_SOURCE_DIR}/golden"
-    HYDRA_INPUT_DIR="${CMAKE_SOURCE_DIR}/test/input"
+    HYDRA_TESTDATA_DIR="${CMAKE_SOURCE_DIR}/testdata"
+    HYDRA_INPUT_DIR="${CMAKE_SOURCE_DIR}/testdata/input"
 )
 
 enable_testing()
@@ -206,6 +206,5 @@ target_link_libraries(hydra_bench PRIVATE hydra_core hydra_native)
 target_include_directories(hydra_bench PRIVATE tests third_party/json)
 target_compile_options(hydra_bench PRIVATE ${HYDRA_WARNINGS})
 target_compile_definitions(hydra_bench PRIVATE
-    HYDRA_GOLDEN_DIR="${CMAKE_SOURCE_DIR}/golden"
-    HYDRA_INPUT_DIR="${CMAKE_SOURCE_DIR}/test/input"
+    HYDRA_INPUT_DIR="${CMAKE_SOURCE_DIR}/testdata/input"
 )

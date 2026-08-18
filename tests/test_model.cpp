@@ -1,9 +1,6 @@
-// Parity + unit tests for core/model (the hydata.py port).
-//
-// The load-bearing check is that Chord::hash() reproduces CPython's tuple hash
-// exactly: every entry in the golden encode table is rebuilt from its code and
-// must hash back to the same key and re-encode to the same string. The unit
-// half pins the string/number forms the golden analysis diff depends on.
+// Unit tests for core/model (chord hashing/encoding, squeezes, transfer
+// scale). The chord-table round-trip lives in test_chord_tables.cpp; the
+// cases here pin the string/number forms and hash shapes directly.
 
 #include "doctest.h"
 
@@ -12,40 +9,8 @@
 #include <string>
 
 #include "core/model.h"
-#include "golden_util.h"
 
 using namespace hydra;
-
-TEST_CASE("Chord hash + code reproduce CPython over the whole encode table") {
-    const golden::json enc = golden::chord_encode();
-
-    int checked = 0, hash_wrong = 0, code_wrong = 0;
-    for (auto it = enc.begin(); it != enc.end(); ++it) {
-        const int64_t want_hash = std::stoll(it.key());
-        const std::string want_code = it.value().get<std::string>();
-
-        Chord chord = Chord::from_code(want_code);
-        ++checked;
-
-        if (chord.hash() != want_hash) {
-            if (++hash_wrong <= 5)
-                CHECK_MESSAGE(chord.hash() == want_hash,
-                              "code '" << want_code << "' hashed to "
-                                       << chord.hash() << " expected "
-                                       << want_hash);
-        }
-        if (chord.code() != want_code) {
-            if (++code_wrong <= 5)
-                CHECK_MESSAGE(chord.code() == want_code,
-                              "hash " << want_hash << " -> '" << chord.code()
-                                      << "' expected '" << want_code << "'");
-        }
-    }
-
-    CHECK(hash_wrong == 0);
-    CHECK(code_wrong == 0);
-    MESSAGE("checked " << checked << " chords against the encode table");
-}
 
 TEST_CASE("ChordNote hash matches ChordNote.__hash__") {
     // 1000*color + 100*dyn + 10*cym + is2x.

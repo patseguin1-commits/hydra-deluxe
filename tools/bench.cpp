@@ -8,7 +8,8 @@
 // limit) -- parse, search, and DB store timed separately, plus the capped
 // number for reference:
 //   hydra_bench.exe "C:\Clone Hero\songs\...\blink-182 - Discography"
-// With no argument it best-of-3 times the golden corpus search across configs.
+// With no argument it best-of-3 times the testdata corpus search across
+// configs.
 
 #include <algorithm>
 #include <chrono>
@@ -23,7 +24,7 @@
 #include "json.hpp"
 
 #include "app/analysis.h"
-#include "golden_util.h"
+#include "corpus_util.h"
 #include "parse/song.h"
 #include "search/pather.h"
 #include "store/record_store.h"
@@ -180,17 +181,15 @@ static void scan_mode(const std::string& folder, const std::string& dbpath,
     }
 }
 
-static void golden_corpus() {
+static void corpus_bench() {
     std::vector<Song> songs;
-    for (const auto& entry : golden::index()) {
+    for (const std::string& path : corpus::chart_paths()) {
         try {
-            songs.push_back(load_songpath(
-                std::string(HYDRA_INPUT_DIR) + "/" + entry["relpath"].get<std::string>(),
-                "Expert", true, true));
+            songs.push_back(load_songpath(path, "Expert", true, true));
         } catch (const std::exception&) {
         }
     }
-    std::printf("Golden corpus: %zu charts. Engine = src/search/engine.cpp.\n\n",
+    std::printf("Test corpus: %zu charts. Engine = src/search/engine.cpp.\n\n",
                 songs.size());
     auto bench = [&](const char* name, bool capped, int dvalue) {
         double best = 1e30;
@@ -249,7 +248,7 @@ int main(int argc, char** argv) {
     } else if (argc > 1) {
         folder_breakdown(argv[1]);
     } else {
-        golden_corpus();
+        corpus_bench();
     }
     return 0;
 }
