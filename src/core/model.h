@@ -240,6 +240,25 @@ struct TransferScale {
 std::optional<TransferScale> frontend_transfer_scale(const Activation& act,
                                                      const SongTiming& timing);
 
+// Which directions of the transfer scale actually matter for this activation:
+// `late` when some positive backend squeeze wants a late (+) frontend hit,
+// `early` when a note is squeezed out of SP (a sqout backend, or any SqOut in
+// sqinouts) and so wants an early (-) one. `backends` is the caller's
+// act.display_backends(), passed in so it isn't rebuilt. Display-only.
+struct TransferRelevance {
+    bool late = false;
+    bool early = false;
+};
+TransferRelevance transfer_scale_relevance(const Activation& act,
+                                           const std::vector<BackendSqueeze>& backends);
+
+// A backend squeeze's raw ms mapped onto the nominal 140ms scale the ratings
+// assume. With frontend timing scaling by r at the SP end, the real combined
+// squeeze budget is squeeze_budget_ms(r) = 70*(1+r) rather than 140, so a raw
+// |offset| counts for |offset| * 2 / (1+r) of the nominal budget.
+double effective_backend_ms(double offset_ms, double transfer_r);
+double squeeze_budget_ms(double transfer_r);
+
 // hymisc.BACKEND_DISPLAY_WINDOW_MS: backends within this window of the
 // deactivation are worth showing/storing.
 constexpr double kBackendDisplayWindowMs = 140.0;

@@ -70,7 +70,7 @@ void AppState::refresh_viewed_record() {
     }
     viewed_record = store->get_record(selected->md5, settings.chartmode_key());
     viewed_timing = store->get_timing(selected->md5);
-    ++record_generation;
+    record_generation.bump();
 }
 
 void AppState::start_scan() {
@@ -96,7 +96,7 @@ void AppState::start_analyze() {
     if (analyze_job && !analyze_job->finished()) return;
     analyze_job = std::make_unique<AnalyzeJob>(*selected, settings.chartmode_key(),
                                                settings.to_analysis_settings());
-    ++analyze_generation;
+    analyze_generation.bump();
     analyze_job->start();
 }
 
@@ -119,7 +119,7 @@ void AppState::start_dm_report(const std::string& discord_id, const std::string&
 
 void AppState::set_status(std::string message) {
     status_message = std::move(message);
-    ++status_generation;
+    status_generation.bump();
 }
 
 void AppState::save_settings() {

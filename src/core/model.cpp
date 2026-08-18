@@ -464,6 +464,27 @@ std::optional<TransferScale> frontend_transfer_scale(const Activation& act,
     return scale;
 }
 
+TransferRelevance transfer_scale_relevance(const Activation& act,
+                                           const std::vector<BackendSqueeze>& backends) {
+    TransferRelevance rel;
+    for (const BackendSqueeze& bsq : backends) {
+        if (!bsq.offset_ms) continue;
+        if (act.is_sqout_backend(bsq)) rel.early = true;
+        else if (*bsq.offset_ms > 2.0) rel.late = true;
+    }
+    for (const SPSqueeze& sq : act.sqinouts)
+        if (sq.kind == SqueezeKind::SqOut) rel.early = true;
+    return rel;
+}
+
+double effective_backend_ms(double offset_ms, double transfer_r) {
+    return std::abs(offset_ms) * 2.0 / (1.0 + transfer_r);
+}
+
+double squeeze_budget_ms(double transfer_r) {
+    return 70.0 * (1.0 + transfer_r);
+}
+
 // ---- Path ---------------------------------------------------------------
 
 std::vector<Activation> Path::all_activations() const {

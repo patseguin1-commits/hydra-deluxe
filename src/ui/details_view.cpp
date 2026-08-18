@@ -9,6 +9,7 @@
 #include "core/winstr.h"
 #include "imgui.h"
 #include "ui/fonts.h"
+#include "ui/generation.h"
 #include "ui/icons.h"
 #include "ui/theme.h"
 #include "ui/widgets.h"
@@ -90,10 +91,9 @@ void render_record_status(AppState& app, float width) {
     if (!app.viewed_record) {
         ImGui::TextDisabled("Not analyzed yet.");
     } else if (app.viewed_record->paths.empty()) {
-        ImGui::PushStyleColor(ImGuiCol_Text, kWarningColor);
+        WarnColor warn;
         ImGui::TextWrapped("Stale: analyzed by an older Hydra version or a different "
                            "edition. Re-analyze to refresh it.");
-        ImGui::PopStyleColor();
     } else {
         const HydraRecord& rec = *app.viewed_record;
         ImGui::Text("Best score:  %s", group_thousands(rec.best_path().totalscore()).c_str());
@@ -208,26 +208,7 @@ void end_section() {
     ImGui::TreePop();
 }
 
-// |r - 1| below this: the frontend transfer scale is not worth a warning.
-constexpr double kTransferWarnBand = 0.05;
-
-void render_path_details(const Path* path, const HydraRecord& record,
-                         const SongTiming* timing) {
-    static double copied_at = -1.0;
-    ImGui::PushFont(nullptr, 0.0f);  // default font for the button, like Python's MainFont
-    if (ImGui::Button("Copy path string", ImVec2(px(180), px(30)))) {
-        ImGui::SetClipboardText(path->pathstring_verbose().c_str());
-        copied_at = ImGui::GetTime();
-    }
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
-        ImGui::SetTooltip("Ctrl+C also copies the selected path");
-    if (copied_at >= 0.0 && ImGui::GetTime() - copied_at < 2.0) {
-        ImGui::SameLine();
-        ImGui::TextDisabled("Copied!");
-    }
-    ImGui::PopFont();
-    ImGui::Spacing();
-
+void render_multsqueeze_section(const Path* path) {
     if (begin_section("Multiplier squeezes")) {
         if (path->multsqueezes.empty()) {
             ImGui::TextDisabled("None.");
@@ -247,7 +228,13 @@ void render_path_details(const Path* path, const HydraRecord& record,
         }
         end_section();
     }
+}
 
+// |r - 1| below this: the frontend transfer scale is not worth a warning.
+constexpr double kTransferWarnBand = 0.05;
+
+void render_activations_section(const Path* path, const HydraRecord& record,
+                                const SongTiming* timing) {
     if (begin_section("Activations")) {
         if (!path->has_activations()) {
             ImGui::TextDisabled("None.");
@@ -299,17 +286,9 @@ void render_path_details(const Path* path, const HydraRecord& record,
                     bool late_warns = scale && std::abs(scale->late - 1.0) > kTransferWarnBand;
                     bool early_warns = scale && std::abs(scale->early - 1.0) > kTransferWarnBand;
                     if (scale) {
-                        bool late_relevant = false, early_relevant = false;
-                        for (const BackendSqueeze& bsq : backends) {
-                            if (!bsq.offset_ms) continue;
-                            if (act.is_sqout_backend(bsq)) early_relevant = true;
-                            else if (*bsq.offset_ms > 2.0) late_relevant = true;
-                        }
-                        for (const SPSqueeze& sq : act.sqinouts)
-                            if (sq.kind == SqueezeKind::SqOut) early_relevant = true;
-
-                        bool show_late = late_warns && late_relevant;
-                        bool show_early = early_warns && early_relevant;
+                        TransferRelevance rel = transfer_scale_relevance(act, backends);
+                        bool show_late = late_warns && rel.late;
+                        bool show_early = early_warns && rel.early;
                         if (show_late || show_early) {
                             char buf[192];
                             if (show_late && show_early &&
@@ -336,19 +315,18 @@ void render_path_details(const Path* path, const HydraRecord& record,
                                              r < 1.0 ? "only " : "",
                                              show_late ? "+" : "-", 10.0 * r);
                             }
-                            ImGui::PushStyleColor(ImGuiCol_Text, kWarningColor);
-                            // Wrap at the panel edge -- the details child can
-                            // be narrower than the line.
-                            ImGui::PushTextWrapPos(0.0f);
-                            ImGui::TextUnformatted(buf);
-                            ImGui::PopTextWrapPos();
-                            ImGui::PopStyleColor();
-                            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
-                                ImGui::SetTooltip(
-                                    "SP length is measured in measures, so frontend timing\n"
-                                    "reaches the SP end scaled by the measure-length ratio.\n"
-                                    "Early and late hits scale differently when the activation\n"
-                                    "or SP end sits exactly on a signature or tempo change.");
+                            {
+                                WarnColor warn;
+                                // Wrap at the panel edge -- the details child
+                                // can be narrower than the line.
+                                ImGui::PushTextWrapPos(0.0f);
+                                ImGui::TextUnformatted(buf);
+                                ImGui::PopTextWrapPos();
+                            }
+                            hint("SP length is measured in measures, so frontend timing\n"
+                                 "reaches the SP end scaled by the measure-length ratio.\n"
+                                 "Early and late hits scale differently when the activation\n"
+                                 "or SP end sits exactly on a signature or tempo change.");
                         }
                     }
 
@@ -395,7 +373,7 @@ void render_path_details(const Path* path, const HydraRecord& record,
                                         applies = late_warns;
                                     }
                                     if (applies)
-                                        eff = std::abs(*bsq.offset_ms) * 2.0 / (1.0 + row_r);
+                                        eff = effective_backend_ms(*bsq.offset_ms, row_r);
                                 }
 
                                 ImGui::TableNextRow();
@@ -406,7 +384,7 @@ void render_path_details(const Path* path, const HydraRecord& record,
                                         "Effectively %.1fms on the normal 140ms scale:\n"
                                         "frontend timing scales x%.2f here, so the combined\n"
                                         "squeeze budget is %.0fms, not 140ms.",
-                                        *eff, row_r, 70.0 * (1.0 + row_r));
+                                        *eff, row_r, squeeze_budget_ms(row_r));
                                 ImGui::TableSetColumnIndex(1);
                                 ImGui::TextUnformatted(bsq.chord.notationstr().c_str());
                                 ImGui::TableSetColumnIndex(2);
@@ -449,29 +427,28 @@ void render_path_details(const Path* path, const HydraRecord& record,
             if (record.sp_cap_converged) {
                 ImGui::Text("SP meter: %d bars.", *record.sp_cap);
             } else {
-                ImGui::PushStyleColor(ImGuiCol_Text, kWarningColor);
+                WarnColor warn;
                 ImGui::Text("SP meter: %d bars. The search ran out of time before the "
                             "score settled, so a higher meter may still score more.",
                             *record.sp_cap);
-                ImGui::PopStyleColor();
             }
         }
 
         if (path->skipped_accents > 0) {
-            ImGui::PushStyleColor(ImGuiCol_Text, kWarningColor);
+            WarnColor warn;
             ImGui::Text("This path has %d skipped (unhittable) accent%s!", path->skipped_accents,
                        path->skipped_accents == 1 ? "" : "s");
-            ImGui::PopStyleColor();
         }
         if (path->skipped_ghosts > 0) {
-            ImGui::PushStyleColor(ImGuiCol_Text, kWarningColor);
+            WarnColor warn;
             ImGui::Text("This path has %d skipped (unhittable) ghost%s!", path->skipped_ghosts,
                        path->skipped_ghosts == 1 ? "" : "s");
-            ImGui::PopStyleColor();
         }
         end_section();
     }
+}
 
+void render_score_breakdown_section(const Path* path) {
     if (begin_section("Score breakdown")) {
         // hydra_app.py:1044 formats the average as (str(avg_mult()) + "000")[:5]
         // -- a string slice, which TRUNCATES to three decimals rather than
@@ -494,8 +471,29 @@ void render_path_details(const Path* path, const HydraRecord& record,
     }
 }
 
+void render_path_details(const Path* path, const HydraRecord& record,
+                         const SongTiming* timing) {
+    static double copied_at = -1.0;
+    ImGui::PushFont(nullptr, 0.0f);  // default font for the button, like Python's MainFont
+    if (ImGui::Button("Copy path string", ImVec2(px(180), px(30)))) {
+        ImGui::SetClipboardText(path->pathstring_verbose().c_str());
+        copied_at = ImGui::GetTime();
+    }
+    hint("Ctrl+C also copies the selected path");
+    if (copied_at >= 0.0 && ImGui::GetTime() - copied_at < 2.0) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("Copied!");
+    }
+    ImGui::PopFont();
+    ImGui::Spacing();
+
+    render_multsqueeze_section(path);
+    render_activations_section(path, record, timing);
+    render_score_breakdown_section(path);
+}
+
 // Path list on the left + details on the right, grouped into score tiers.
-// selected_path/last_generation are the render function's own statics, passed
+// selected_path/record_watcher are the render function's own statics, passed
 // by reference so this stays a free function instead of a lambda closure.
 // One selectable path row: pathstring on the left, difficulty (ms) right-
 // aligned, warning-colored when the path is difficult. Mirrors the two-column
@@ -518,16 +516,11 @@ void render_path_row(const Path* p, const Path*& selected_path) {
         ImGui::TableSetupColumn("diff", ImGuiTableColumnFlags_WidthFixed, px(130.0f));
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
-        float path_avail = ImGui::GetContentRegionAvail().x;
-        bool is_selected = (p == selected_path);
-        if (ImGui::Selectable(p->pathstring().c_str(), is_selected,
-                              ImGuiSelectableFlags_SpanAllColumns))
+        // Long paths clip at the column edge; row_selectable offers the full
+        // string on hover (only over the path column -- the ms column speaks
+        // for itself).
+        if (row_selectable(p->pathstring().c_str(), p == selected_path))
             selected_path = p;
-        // Long paths clip at the column edge; offer the full string on hover
-        // (only over the path column -- the ms column speaks for itself).
-        if (ImGui::TableGetHoveredColumn() == 0 &&
-            ImGui::CalcTextSize(p->pathstring().c_str()).x > path_avail)
-            overflow_tooltip(p->pathstring().c_str());
 
         if (auto diff = p->difficulty()) {
             ImGui::TableSetColumnIndex(1);
@@ -644,14 +637,13 @@ void render_analyze_progress(AppState& app) {
     // compare then carries `stored`/`done_at` over from the previous job --
     // the fresh result is never stored and the stale done_at dismisses the
     // modal on its first finished frame.
-    static int last_generation = -1;
+    static GenerationWatcher generation;
     static double done_at = -1.0;
     static bool stored = false;
     static std::string store_error;
 
     AnalyzeJob* job = app.analyze_job.get();
-    if (app.analyze_generation != last_generation) {
-        last_generation = app.analyze_generation;
+    if (generation.changed(app.analyze_generation)) {
         done_at = -1.0;
         stored = false;
         store_error.clear();
@@ -726,7 +718,7 @@ void render_analyze_progress(AppState& app) {
 void render_details_modal(AppState& app) {
     static bool prev_open = false;
     static const Path* selected_path = nullptr;
-    static int last_generation = -1;
+    static GenerationWatcher record_watcher;
 
     if (app.show_details && !prev_open) ImGui::OpenPopup("SongDetails");
     prev_open = app.show_details;
@@ -791,20 +783,18 @@ void render_details_modal(AppState& app) {
         return;
     }
 
-    if (app.record_generation != last_generation) {
-        last_generation = app.record_generation;
+    if (record_watcher.changed(app.record_generation)) {
         selected_path = app.viewed_record && !app.viewed_record->paths.empty()
                             ? &app.viewed_record->best_path()
                             : nullptr;
     }
 
-    // Ctrl+C copies the selected path (the long-documented shortcut behind
-    // appstate.current_path_copytext, finally wired) -- unless a text input
-    // has focus, which keeps its own copy behavior.
-    app.current_path_copytext = selected_path ? selected_path->pathstring_verbose() : "";
-    if (!app.current_path_copytext.empty() && !ImGui::GetIO().WantTextInput &&
+    // Ctrl+C copies the selected path -- unless a text input has focus, which
+    // keeps its own copy behavior.
+    std::string copytext = selected_path ? selected_path->pathstring_verbose() : "";
+    if (!copytext.empty() && !ImGui::GetIO().WantTextInput &&
         ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_C))
-        ImGui::SetClipboardText(app.current_path_copytext.c_str());
+        ImGui::SetClipboardText(copytext.c_str());
 
     // Song info / record-status panels scale with the popup's width
     // (itself sized off the viewport, see below) instead of a fixed pixel

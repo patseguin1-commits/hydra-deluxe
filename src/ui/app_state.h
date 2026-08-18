@@ -19,6 +19,7 @@
 #include "app/analysis.h"
 #include "app/config.h"
 #include "store/record_store.h"
+#include "ui/generation.h"
 #include "ui/jobs.h"
 
 namespace hydra::ui {
@@ -77,7 +78,7 @@ public:
     // an empty-paths record (see RecordStore::get_record) means "stale
     // version, please re-analyze".
     std::optional<HydraRecord> viewed_record;
-    int record_generation = 0;  // bumped by refresh_viewed_record(); invalidates UI selection caches
+    Generation record_generation;  // bumped by refresh_viewed_record(); invalidates UI selection caches
     void refresh_viewed_record();
 
     // Timing context for `selected`'s song, loaded alongside viewed_record —
@@ -93,7 +94,7 @@ public:
     // state on this, NOT on the AnalyzeJob's address: the heap can hand a new
     // job the previous job's block, and a pointer compare then leaves the
     // "already stored" flag stale, silently discarding the finished analysis.
-    int analyze_generation = 0;
+    Generation analyze_generation;
     std::unique_ptr<ReportJob> report_job;
 
     // Whether this batch run has already kicked off its path report — one
@@ -126,16 +127,12 @@ public:
     // Transient feedback line ("folder already added", save failures, ...).
     // The view times the fade-out off status_generation changing.
     std::string status_message;
-    int status_generation = 0;
+    Generation status_generation;
     void set_status(std::string message);
 
     // settings.save() + a status message when the INI can't be written —
     // save() failing silently made changes look persisted when they weren't.
     void save_settings();
-
-    // Clipboard text set by the details view when a path is picked, copied on
-    // Ctrl+C — mirrors appstate.current_path_copytext.
-    std::string current_path_copytext;
 };
 
 }  // namespace hydra::ui

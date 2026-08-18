@@ -4,6 +4,7 @@
 #include "imgui.h"
 #include "store/record_store.h"
 #include "ui/fonts.h"
+#include "ui/generation.h"
 #include "ui/theme.h"
 #include "ui/widgets.h"
 #include "ui/win32_dialogs.h"
@@ -25,12 +26,11 @@ HWND main_hwnd() {
 // seconds after the message changes. same_line appends it to the current
 // row (the main action bar); the folder manager renders it on its own line.
 void render_status_line(AppState& app, bool same_line) {
-    static int seen_generation = 0;
+    // seen starts at 0 (the counter's initial value), not the watcher's
+    // default -1: app startup must not count as a change and start a fade.
+    static GenerationWatcher generation{/*seen=*/0};
     static double shown_at = -1.0;
-    if (app.status_generation != seen_generation) {
-        seen_generation = app.status_generation;
-        shown_at = ImGui::GetTime();
-    }
+    if (generation.changed(app.status_generation)) shown_at = ImGui::GetTime();
     if (shown_at < 0.0 || app.status_message.empty()) return;
     if (ImGui::GetTime() - shown_at > 6.0) return;
     if (same_line) ImGui::SameLine();
@@ -68,8 +68,7 @@ void render_folder_manager(AppState& app) {
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, kDeleteButtonActiveColor);
             if (ImGui::Button("X")) confirm_remove = i;
             ImGui::PopStyleColor(3);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
-                ImGui::SetTooltip("Remove this folder from the library");
+            hint("Remove this folder from the library");
             ImGui::SameLine();
             text_ellipsized(app.settings.chartfolders[i].c_str());
             ImGui::PopID();
@@ -138,8 +137,7 @@ void render_actions_row(AppState& app) {
     std::snprintf(manage_label, sizeof(manage_label), "Manage folders... (%d)",
                   (int)app.settings.chartfolders.size());
     if (ImGui::Button(manage_label)) ImGui::OpenPopup("Song folders");
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
-        ImGui::SetTooltip("Add or remove the folders Hydra scans for charts");
+    hint("Add or remove the folders Hydra scans for charts");
     ImGui::SameLine();
 
     bool can_scan = !app.settings.chartfolders.empty();
@@ -171,8 +169,7 @@ void render_actions_row(AppState& app) {
     end_disabled_button(analyzable == 0);
     ImGui::SameLine();
     ImGui::Checkbox("redo existing", &app.batch_redo);
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
-        ImGui::SetTooltip("Also re-analyze charts that already have a stored result");
+    hint("Also re-analyze charts that already have a stored result");
 
     ImGui::SameLine();
     if (ImGui::Button("Compare dmleaderboards user...")) {
@@ -184,8 +181,7 @@ void render_actions_row(AppState& app) {
         if (app.dm_users.empty()) app.start_dm_fetch();
         ImGui::OpenPopup("Compare dmleaderboards user");
     }
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
-        ImGui::SetTooltip("Compare a dmleaderboards.com player's scores against your library");
+    hint("Compare a dmleaderboards.com player's scores against your library");
 
     render_status_line(app, /*same_line=*/true);
     render_folder_manager(app);
@@ -199,8 +195,7 @@ void render_view_controls(AppState& app) {
     // working dropdown (DisabledAlpha is 1.0, so a bare BeginDisabled has no
     // visual effect) and silently swallowed clicks.
     ImGui::TextDisabled("Expert");
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
-        ImGui::SetTooltip("Only Expert difficulty is supported right now.");
+    hint("Only Expert difficulty is supported right now.");
 
     ImGui::SameLine();
     if (ImGui::Checkbox("Pro Drums", &app.settings.view_prodrums)) {
@@ -301,15 +296,9 @@ void render_library_table(AppState& app, int visible_rows) {
         // left rows unclickable outside that column, which got worse as
         // "Best Path" narrowed (e.g. after paging changed its content).
         ImGui::TableSetColumnIndex(0);
-        float title_avail = ImGui::GetContentRegionAvail().x;
-        if (ImGui::Selectable(row.title.c_str(), false, ImGuiSelectableFlags_SpanAllColumns))
-            app.select(row);
-        // The selectable hard-clips a long title at its column edge; offer
-        // the full text on hover, but only while actually over the Title
-        // column (the selectable's hover rect spans the whole row).
-        if (ImGui::TableGetHoveredColumn() == 0 &&
-            ImGui::CalcTextSize(row.title.c_str()).x > title_avail)
-            overflow_tooltip(row.title.c_str());
+        // A long title hard-clips at the column edge; row_selectable offers
+        // the full text on hover while actually over the Title column.
+        if (row_selectable(row.title.c_str(), false)) app.select(row);
 
         ImGui::TableSetColumnIndex(1);
         text_ellipsized(row.artist.c_str());
@@ -381,12 +370,8 @@ void render_scan_modal(AppState& app) {
         ImGui::Text("Discovering folders... (%d found)", p.folders_seen);
     } else {
         ImGui::Text("Discovering folders... (%d found)", p.folders_seen);
-        float frac =
-            p.charts_total > 0 ? (float)p.charts_done / (float)p.charts_total : 1.0f;
-        char overlay[48];
-        std::snprintf(overlay, sizeof(overlay), "%d/%d", p.charts_done, p.charts_total);
         ImGui::TextUnformatted("Reading charts...");
-        ImGui::ProgressBar(frac, ImVec2(-1, 0), overlay);
+        progress_bar_counted(p.charts_done, p.charts_total);
         if (p.charts_cached > 0)
             ImGui::Text("%d unchanged since last scan, reused.", p.charts_cached);
     }
@@ -475,10 +460,7 @@ void render_batch_modal(AppState& app) {
                                               : s.finished ? "Finished." : "Analyzing...");
     if (!s.current_title.empty()) ImGui::TextUnformatted(s.current_title.c_str());
 
-    float frac = s.total > 0 ? (float)s.completed / (float)s.total : 1.0f;
-    char overlay[32];
-    std::snprintf(overlay, sizeof(overlay), "%d/%d", s.completed, s.total);
-    ImGui::ProgressBar(frac, ImVec2(-1, 0), overlay);
+    progress_bar_counted(s.completed, s.total);
     ImGui::Text("%d analyzed, %d already stored, %d failed.", s.completed - s.failed, s.skipped,
                s.failed);
 
@@ -503,8 +485,7 @@ void render_batch_modal(AppState& app) {
             ImGui::SameLine();
             if (ImGui::Checkbox("Open automatically", &app.settings.auto_open_report))
                 app.save_settings();
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
-                ImGui::SetTooltip("Open the report in the browser whenever a batch finishes");
+            hint("Open the report in the browser whenever a batch finishes");
         }
 
         if (!s.failures.empty()) {

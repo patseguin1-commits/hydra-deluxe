@@ -92,6 +92,35 @@ bool full_match(const std::string& s, const std::regex& re) {
     return std::regex_match(s, re);
 }
 
+// Activation-fill placement heuristic, shared by both parsers: true when the
+// fill that ended at `fill_end_tick` lands on the chord being emitted at
+// `tick` (so its op must run after the chord emit), false when it belongs to
+// an earlier chord (run it before). "Lands on" means the next chord is within
+// a 1/32-of-a-beat slop of the fill end and no closer to the previous chord.
+bool fill_lands_on_chord(const Song& song, int64_t fill_end_tick, int64_t tick) {
+    std::optional<int64_t> prevchord_dist;
+    if (!song.sequence.empty())
+        prevchord_dist = fill_end_tick - song.sequence.back().timecode.ticks();
+    int64_t nextchord_dist = tick - fill_end_tick;
+    return nextchord_dist <= song.tick_resolution() / 32 &&
+           (!prevchord_dist.has_value() || nextchord_dist <= *prevchord_dist);
+}
+
+// Emit the buffered chord as a sequence timestamp, shared by both parsers.
+// apply_flam is true only on the .mid path: MIDI charts carry a flam marker
+// that converts the chord, while the .chart format has no such marker, so
+// ChartParser always passes false (existing behavior, now explicit).
+void emit_chord_timestamp(Song& song, Chord& chord, int64_t tick,
+                          bool apply_flam, bool apply_disco, bool solo) {
+    if (apply_flam) chord.apply_flam_conversion();
+    if (apply_disco) chord.apply_disco_flip();
+    SongTimestamp ts;
+    ts.chord = chord;
+    ts.timecode = song.timecode(tick);
+    ts.flag_solo = solo;
+    song.sequence.push_back(std::move(ts));
+}
+
 }  // namespace
 
 // ---- Song::check_activations -------------------------------------------
@@ -428,16 +457,10 @@ void MidiParser::push_timestamp(int64_t tick) {
     // Activation fill placement.
     if (chord_.count() && fill_end_tick_.has_value() &&
         tick >= *fill_end_tick_) {
-        std::optional<int64_t> prevchord_dist;
-        if (!song_->sequence.empty())
-            prevchord_dist =
-                *fill_end_tick_ - song_->sequence.back().timecode.ticks();
-        int64_t nextchord_dist = tick - *fill_end_tick_;
         int64_t start = *fill_start_tick_;
         auto fill_op = [this, start] { op_apply_fill(start); };
 
-        if (nextchord_dist <= song_->tick_resolution() / 32 &&
-            (!prevchord_dist.has_value() || nextchord_dist <= *prevchord_dist))
+        if (fill_lands_on_chord(*song_, *fill_end_tick_, tick))
             post.push_back(std::move(fill_op));
         else
             pre_timestamp.push_back(std::move(fill_op));
@@ -447,15 +470,9 @@ void MidiParser::push_timestamp(int64_t tick) {
 
     run_ops(pre_timestamp);
 
-    if (chord_.count()) {
-        if (flag_flam_) chord_.apply_flam_conversion();
-        if (mode_pro_ && flag_disco_) chord_.apply_disco_flip();
-        SongTimestamp ts;
-        ts.chord = chord_;
-        ts.timecode = song_->timecode(tick);
-        ts.flag_solo = flag_solo_;
-        song_->sequence.push_back(std::move(ts));
-    }
+    if (chord_.count())
+        emit_chord_timestamp(*song_, chord_, tick, flag_flam_,
+                             mode_pro_ && flag_disco_, flag_solo_);
 
     run_ops(post);
     run_ops(post_delayed);
@@ -818,14 +835,7 @@ void ChartParser::push_timestamp(int64_t tick,
     // Phrase end: activation fill.
     if (chord_.count() && fill_end_tick_.has_value() &&
         tick >= *fill_end_tick_) {
-        std::optional<int64_t> prevchord_dist;
-        if (!song_->sequence.empty())
-            prevchord_dist =
-                *fill_end_tick_ - song_->sequence.back().timecode.ticks();
-        int64_t nextchord_dist = tick - *fill_end_tick_;
-        CPhase order = (nextchord_dist <= song_->tick_resolution() / 32 &&
-                        (!prevchord_dist.has_value() ||
-                         nextchord_dist <= *prevchord_dist))
+        CPhase order = fill_lands_on_chord(*song_, *fill_end_tick_, tick)
                            ? CPhase::Post
                            : CPhase::Pre;
         int64_t start = *fill_start_tick_;
@@ -836,14 +846,9 @@ void ChartParser::push_timestamp(int64_t tick,
 
     run_phase(CPhase::Pre);
 
-    if (chord_.count()) {
-        if (mode_pro_ && flag_disco_) chord_.apply_disco_flip();
-        SongTimestamp ts;
-        ts.chord = chord_;
-        ts.timecode = song_->timecode(tick);
-        ts.flag_solo = flag_solo_;
-        song_->sequence.push_back(std::move(ts));
-    }
+    if (chord_.count())
+        emit_chord_timestamp(*song_, chord_, tick, /*apply_flam=*/false,
+                             mode_pro_ && flag_disco_, flag_solo_);
 
     run_phase(CPhase::Post);
     run_phase(CPhase::PostDelayed);
