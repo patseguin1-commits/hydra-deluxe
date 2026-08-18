@@ -1,7 +1,12 @@
 # Hydra: Full Port from Python to C++
 
-> Reference plan for the C++ port. Written 2026-08-14. The companion
-> copy-paste execution brief is in [`CPP_PORT_PROMPT.md`](CPP_PORT_PROMPT.md).
+> **Historical document.** The port completed and the Python tree was deleted
+> at commit `95f22b0`; the golden parity corpus this plan describes was
+> removed after the cutover. Kept for provenance only — file paths, phases,
+> and instructions below no longer apply. Python-era sources survive on the
+> frozen `python-oracle` git tag.
+
+> Reference plan for the C++ port. Written 2026-08-14.
 
 ## Context
 

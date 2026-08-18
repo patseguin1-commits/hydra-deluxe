@@ -20,8 +20,8 @@
 
 namespace hydra {
 
-// Reachable-squeeze horizon in ms (hypath.SQUEEZE_WINDOW_MS). Exposed so the
-// batch CLI can print it in its settings header, like hydra_batch.py did.
+// Reachable-squeeze horizon in ms. Exposed so the batch CLI can print it in
+// its settings header.
 constexpr double kSqueezeWindowMs = 500.0;
 
 struct ScoreGraphEdge;
@@ -75,7 +75,7 @@ public:
     std::optional<int> sp_meter_cap() const { return sp_meter_cap_; }
 
 private:
-    // Graph construction, mirroring ScoreGraph.__init__/helpers.
+    // Graph construction.
     void build();
 
     void store_notecount(int64_t count);

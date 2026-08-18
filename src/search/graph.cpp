@@ -9,8 +9,7 @@
 namespace hydra {
 
 // How far apart (ms) a note and a deactivation can be and still be a SqIn/SqOut,
-// and how far back edge.backends must stay complete. Mirrors
-// hypath.SQUEEZE_WINDOW_MS.
+// and how far back edge.backends must stay complete.
 namespace {
 constexpr double SQUEEZE_WINDOW_MS = kSqueezeWindowMs;  // exported in graph.h
 

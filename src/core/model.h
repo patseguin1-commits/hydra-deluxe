@@ -2,14 +2,13 @@
 //
 // The note/chord/path/record types the parser fills and the search produces.
 // The *string* forms here (Chord::code, Path::pathstring/pathstring_verbose,
-// Activation::notationstr) are what the golden parity diff checks, so they must
+// Activation::notationstr) are user-visible and pinned by the tests, so they must
 // match Python byte-for-byte: comma-grouped scores, int() truncation on ms, the
 // exact +/- squeeze symbols and [KRYBG] slot layout.
 //
 // The JSON save/load path from hydata.py is intentionally not ported — Phase 4
 // replaces it with a binary format — but Chord::code / Chord::from_code (which
-// that path used) are ported because the parser and the golden song block need
-// them.
+// that path used) survive because the parser and the chord tables need them.
 
 #ifndef HYDRA_CORE_MODEL_H
 #define HYDRA_CORE_MODEL_H

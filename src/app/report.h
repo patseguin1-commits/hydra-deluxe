@@ -1,7 +1,6 @@
-// Sortable HTML path report — the C++ port of hydra_report.py's row
-// collection and page building. Split from the CLI's main() so the parity
-// test (tests/test_report.cpp) can diff build_html's output byte-for-byte
-// against the Python-generated golden.
+// Sortable HTML path report: row collection and page building. Split from
+// the CLI's main() so the GUI's ReportJob and the tests
+// (tests/test_report.cpp) can build the page without a process spawn.
 
 #ifndef HYDRA_APP_REPORT_H
 #define HYDRA_APP_REPORT_H
@@ -15,9 +14,8 @@
 
 namespace hydra::app::report {
 
-// One table row, the same shape as the dicts hydra_report.collect_rows built.
-// Field order here is the JSON key order json.dumps preserved (dict insertion
-// order), which the byte-diff against golden depends on.
+// One table row. Field order is the JSON key order the page's script reads;
+// keep it stable so old and new report files stay comparable.
 struct ReportRow {
     std::string song;
     std::string artist;

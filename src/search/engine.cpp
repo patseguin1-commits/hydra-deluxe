@@ -724,7 +724,7 @@ void Engine::reduce_group(const int32_t* members, int32_t n) {
     // hard paths, so they all survive and the frontier explodes. The band
     // collapses each group back to the depth setting, as an unfiltered search
     // does, and cannot drop the eventual best path (score dominance keeps the
-    // top band at every step). Mirror of hypath._reduce_group.
+    // top band at every step).
     dominating_.clear();
     for (size_t i = 0; i < survivors_.size(); ++i) {
         dominating_.push_back(cur_[(size_t)survivors_[i]].score);
@@ -1044,8 +1044,8 @@ bool Engine::run() {
 }
 
 // ---- rebuild the decision log into hydata Paths -------------------------
-// Mirrors hynative._rebuild + _graph_multsqueezes, reading the graph objects
-// straight off the enumeration.
+// Inflates the engine's flat decision log back into hydra::Path objects,
+// reading the graph objects straight off the enumeration.
 
 std::vector<MultSqueeze> collect_multsqueezes(const ScoreGraph& graph) {
     std::vector<MultSqueeze> found;

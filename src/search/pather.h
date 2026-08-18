@@ -1,7 +1,6 @@
-// Analysis orchestration — the C++ port of the pieces of hydra/hyutil.py the
-// golden analysis block exercises: one run at a fixed cap, the uncapped SP-cap
-// ladder, and the edition dispatch. The heavier discovery/thread-pool half of
-// hyutil is Phase 4; this is only what produces a record for one chart.
+// Analysis orchestration: one run at a fixed cap, the uncapped SP-cap
+// ladder, and the edition dispatch. Discovery and the batch thread pool live
+// in app/analysis; this is only what produces a record for one chart.
 
 #ifndef HYDRA_SEARCH_PATHER_H
 #define HYDRA_SEARCH_PATHER_H
@@ -35,13 +34,12 @@ HydraRecord analyze_at_cap(const Song& song, int sp_cap, int depth_mode,
                            std::optional<int> build_cap, bool want_allzero = false,
                            const std::function<void(float)>& on_progress = {});
 
-// The uncapped edition: raise the ceiling up SP_CAP_LADDER until the score
-// settles. Mirrors hyutil._analyze_uncapped with SP_CAP_TIME_BUDGET disabled
-// (as the golden generator runs it), so no rung is ever abandoned.
-// time_budget_s, if set, abandons a ladder rung that overruns it (the first rung
-// always finishes), keeping the best rung so far and flagging it unsettled --
-// hyutil's SP_CAP_TIME_BUDGET. nullopt runs every rung to completion (what the
-// golden generator does), so it must stay unset in the parity tests.
+// The uncapped edition: raise the ceiling up the SP-cap ladder until the
+// score settles.
+// time_budget_s, if set, abandons a ladder rung that overruns it (the first
+// rung always finishes), keeping the best rung so far and flagging it
+// unsettled. nullopt runs every rung to completion — what the tests use, so
+// their results stay deterministic.
 // want_allzero runs the all-0 pass once, after the ladder settles, at the
 // settled ceiling -- never per rung.
 HydraRecord analyze_uncapped(const Song& song, int depth_mode, int depth_value,

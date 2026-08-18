@@ -2,7 +2,8 @@
 
 Here's a run-through of the Hydra UI. Screens are presented, then explained from top to bottom.
 
-> Note: screenshots below may lag slightly behind the current build.
+> Note: the screenshots below are from the pre-1.4 UI. The layout is the
+> same, but details and styling have moved on.
 
 ## Main Screen
 
@@ -44,6 +45,13 @@ For example, if you analyzed a song with 2x Bass enabled, but want to see what i
 
 ### Search
 Filter the song library by an input string. Songs whose title, artist, or charter match will be shown. `Ctrl+F` jumps to the search box.
+
+### Compare dmleaderboards user
+Compares a [dmleaderboards.com](https://dmleaderboards.com) player's posted scores against your library's stored optimals. Pick a user from the searchable ladder (the last pick is remembered), and Hydra fetches their scores, joins them to your analyzed charts by chart hash, and opens a sortable HTML comparison page: actual score, Hydra's optimal, the points left, and a status per row.
+
+`above optimal` rows are expected, not errors: Hydra's optimal intentionally excludes several score backends, and many leaderboard scores were set on older Clone Hero versions whose fill spawning allowed totals that are impossible now. Only charts you have analyzed (in the current view options) can be matched — analyze your library first for a full comparison.
+
+The first request after a while can take tens of seconds; the leaderboard's backend has to wake up.
 
 ### Library table
 The list of songs from the latest scan, filtered by the search box. The **Best Path** column shows each song's status for the current view options:

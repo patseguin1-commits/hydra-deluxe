@@ -52,8 +52,8 @@ int16_t be16(const uint8_t* d, size_t at) {
 }
 
 // mido decodes every meta string as latin-1 (its _charset): byte -> codepoint,
-// which never raises and round-trips each byte. We store the result as UTF-8 so
-// it compares equal to the golden JSON (which is UTF-8) regardless of codepage.
+// which never raises and round-trips each byte. The result is stored as UTF-8
+// so string comparisons behave the same regardless of codepage.
 std::string decode_latin1(const uint8_t* p, size_t len) {
     std::string out;
     out.reserve(len);

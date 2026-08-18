@@ -17,7 +17,7 @@ Hungry for more info? Check out [the wiki](https://github.com/DragonDelgar/hydra
 
 1. Download the [latest release](https://github.com/DragonDelgar/hydra/releases).
 2. Extract the Hydra folder to any location and run Hydra.exe.
-3. Click `Add folder...` and then pick your Clone Hero songs folder (or whichever folder contains the songs you want to add).
+3. Click `Add folder...` and then pick your Clone Hero songs folder (or whichever folder contains the songs you want to add). Hydra reads `.mid`, `.chart`, `.sng`, and `.srb` charts.
 4. Click `Scan charts`.
 5. Once it's done, songs should appear in a table. Search for or find the page of the song you want to get the path for, then click on the song.
 6. Click the `Analyze paths!` button.
@@ -41,6 +41,7 @@ hydra_report                   Sortable HTML report of stored paths (top 5 per c
 hydra_report --paths 20        Top 20 per chart
 hydra_report --all-paths       Everything stored
 hydra_report --out report.html
+hydra_report --no-open         Write the file without opening the browser
 ```
 
 Both take `--uncapped` to operate on the uncapped edition's settings/records
@@ -51,7 +52,8 @@ instead.
 Hydra is a native Windows app: C++17, built with CMake and MSVC (Visual
 Studio's "Desktop development with C++" workload is all it needs — the build
 script finds the VS-bundled CMake itself). Third-party code (Dear ImGui,
-SQLite, doctest) is vendored under `third_party/`.
+SQLite, miniz, doctest, nlohmann/json, stb_image) is vendored under
+`third_party/`.
 
 ```
 .\build_cpp.ps1              # configure + build everything (Release)
@@ -111,8 +113,9 @@ Two agreeing runs are strong evidence, not proof. A chart that runs out of
 ladder, or out of time (the 120s ladder budget), says so in the path details
 instead of quietly passing for a finished answer.
 
-Measured on this library with the Python build (Expert Pro Drums 2x, depth 4;
-the C++ build is faster still):
+Measured with the retired 1.3.1 build (Expert Pro Drums 2x, depth 4); the
+current build is faster, so read these as an upper bound and a shape, not
+exact numbers:
 
 | chart | capped | uncapped | settled at |
 |---|---|---|---|

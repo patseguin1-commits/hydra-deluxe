@@ -6,9 +6,9 @@
 // MeasureIndex are the binary-search accelerators the Python side caches on its
 // TempoMaps; here they are built once per song into SongTiming and reused.
 //
-// The arithmetic mirrors hymisc exactly — same operation order, same integer
-// floor semantics — because the golden parity diff compares the resulting ms
-// and measure values bit-for-bit.
+// The arithmetic keeps a fixed operation order and integer floor semantics:
+// stored records and pathstrings depend on these ms/measure values
+// bit-for-bit, so any change here silently invalidates stored results.
 
 #ifndef HYDRA_CORE_TIMING_H
 #define HYDRA_CORE_TIMING_H
@@ -134,8 +134,7 @@ public:
     // section's ticks-per-measure over the tempo section's ticks-per-second.
     // A tick exactly on a meter or tempo change reads the NEW section; pass
     // `ticks - 1` for the duration just before the tick. Display-layer helper
-    // (frontend->SP-end squeeze scaling); not part of the golden parity
-    // surface.
+    // (frontend->SP-end squeeze scaling); not part of the scoring surface.
     double ms_per_measure_at(int64_t ticks) const;
 
 private:
