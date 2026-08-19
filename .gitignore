@@ -15,6 +15,10 @@ imgui.ini
 # Local utility scripts, anything else
 local/*
 
+# Cached VC++ redistributable for the installer (installer/build_installer.ps1
+# downloads it; ~25 MB, never committed). Installer output lands in build-cpp/.
+installer/redist/
+
 # C++ build tree (CMake) and IDE state.
 build-cpp/
 .vs/

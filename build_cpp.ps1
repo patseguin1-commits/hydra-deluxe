@@ -27,8 +27,13 @@ function Find-CMake {
         $vs = & $vswhere -latest -products * `
             -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
             -property installationPath
-        if ($vs) {
-            $candidate = Join-Path $vs "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+        # -latest only reports instances in a "complete" state; a VS with a
+        # pending update reports nothing there but still shows under -all.
+        if (-not $vs) {
+            $vs = & $vswhere -all -prerelease -products * -property installationPath
+        }
+        foreach ($path in @($vs)) {
+            $candidate = Join-Path $path "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
             if (Test-Path $candidate) { return $candidate }
         }
     }

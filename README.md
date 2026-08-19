@@ -15,8 +15,10 @@ Hungry for more info? Check out [the wiki](https://github.com/DragonDelgar/hydra
 
 ## Quick-start guide
 
-1. Download the [latest release](https://github.com/DragonDelgar/hydra/releases).
-2. Extract the Hydra folder to any location and run Hydra.exe.
+1. Download the [latest release](https://github.com/DragonDelgar/hydra/releases) — either the installer (`Hydra-<version>-setup.exe`) or the zip.
+   * **Installer:** run it and follow the prompts. It installs to `C:\Program Files\Hydra`, adds Start Menu shortcuts, and installs the Microsoft VC++ runtime if your PC doesn't have it. The installer isn't code-signed, so Windows SmartScreen may warn — choose "More info" → "Run anyway".
+   * **Zip:** extract the Hydra folder to any location and run Hydra.exe.
+2. Run Hydra (Start Menu shortcut, or Hydra.exe in the folder).
 3. Click `Add folder...` and then pick your Clone Hero songs folder (or whichever folder contains the songs you want to add). Hydra reads `.mid`, `.chart`, `.sng`, and `.srb` charts.
 4. Click `Scan charts`.
 5. Once it's done, songs should appear in a table. Search for or find the page of the song you want to get the path for, then click on the song.
@@ -24,6 +26,16 @@ Hungry for more info? Check out [the wiki](https://github.com/DragonDelgar/hydra
 7. Once it's done, paths should appear. The first path is optimal. There may be other paths tied for optimal, listed under the same score. Below that are some of the next-highest scores and their paths, which could come in handy if the optimal path is too annoying or difficult.
 8. Click a path on the left side to show its details on the right side.
 9. You can return to browsing songs by X-ing out of the Song Details window.
+
+### Where your data lives
+
+Hydra keeps its records database, settings, and generated reports next to
+Hydra.exe — for an installed copy that's `C:\Program Files\Hydra` (the
+installer makes that folder writable for regular users). Uninstalling keeps
+your `hydra*.db` / `hydra*_settings.ini` there; delete the folder manually if
+you really want them gone. Moving from a zip install? Copy your old
+`hydra*.db`, `hydra*_settings.ini`, and `hydra*_ui.ini` into
+`C:\Program Files\Hydra` and your library and records come with you.
 
 ## Command line tools
 
@@ -61,6 +73,17 @@ SQLite, miniz, doctest, nlohmann/json, stb_image) is vendored under
 .\build_cpp.ps1 -Target hydra_tests
 .\build-cpp\Release\hydra_tests.exe    # run the test suite
 ```
+
+To build the Windows installer (needs Inno Setup 6:
+`winget install -e --id JRSoftware.InnoSetup`):
+
+```
+.\installer\build_installer.ps1        # -> build-cpp\installer\Hydra-<ver>-setup.exe
+```
+
+It builds Release, stages the ship list via `cmake --install` (so stray user
+data in the build tree can never leak into a release), downloads and caches
+the VC++ redistributable, and compiles `installer\hydra.iss`.
 
 The tests run against the checked-in chart corpus under `testdata/input/`;
 nothing else is needed. `hydra_tests` asserts structural invariants and
