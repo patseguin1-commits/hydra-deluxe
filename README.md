@@ -15,10 +15,8 @@ Hungry for more info? Check out [the wiki](https://github.com/DragonDelgar/hydra
 
 ## Quick-start guide
 
-1. Download the [latest release](https://github.com/DragonDelgar/hydra/releases) — either the installer (`Hydra-<version>-setup.exe`) or the zip.
-   * **Installer:** run it and follow the prompts. It installs to `C:\Program Files\Hydra`, adds Start Menu shortcuts, and installs the Microsoft VC++ runtime if your PC doesn't have it. The installer isn't code-signed, so Windows SmartScreen may warn — choose "More info" → "Run anyway".
-   * **Zip:** extract the Hydra folder to any location and run Hydra.exe.
-2. Run Hydra (Start Menu shortcut, or Hydra.exe in the folder).
+1. Download the installer (`Hydra-<version>-setup.exe`) from the [latest release](https://github.com/DragonDelgar/hydra/releases) and run it. It installs to `C:\Program Files\Hydra`, adds Start Menu shortcuts, and installs the Microsoft VC++ runtime if your PC doesn't have it. The installer isn't code-signed, so Windows SmartScreen may warn — choose "More info" → "Run anyway".
+2. Run Hydra from the Start Menu.
 3. Click `Add folder...` and then pick your Clone Hero songs folder (or whichever folder contains the songs you want to add). Hydra reads `.mid`, `.chart`, `.sng`, and `.srb` charts.
 4. Click `Scan charts`.
 5. Once it's done, songs should appear in a table. Search for or find the page of the song you want to get the path for, then click on the song.
