@@ -46,8 +46,18 @@ struct Settings {
     int depth_value = 4;
     int depth_mode = 0;  // 0 = scores, 1 = points (search/engine.h convention)
 
+    // "Limit timings", in ms of timing error per hit (INI key
+    // mslimit_perhit_value). Loading an INI that has only the pre-1.5 raw-ms
+    // key (mslimit_value) seeds this with half that value: the old metric
+    // measured the whole gap, the new one measures each hit's share.
     bool mslimit_enabled = true;
-    int mslimit_value = 10;
+    int mslimit_value = 5;
+
+    // The per-side hit window in real ms, and the song speed the squeeze
+    // details are additionally shown at. Display-layer only: neither reaches
+    // the search, so changing them never invalidates stored records.
+    int hit_window_ms = 85;
+    int display_speed_pct = 100;
 
     // Uncapped edition only: a manual SP meter ceiling in bars. Disabled runs
     // the auto-settling ladder (the default); enabled forces the given cap
