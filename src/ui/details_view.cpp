@@ -302,8 +302,9 @@ void render_activations_section(const Path* path, const HydraRecord& record,
                                    kTransferImpactMs ||
                                gap > squeeze_budget_ms(r, W);
                     };
-                    // Backend rows only: the SqIn/SqOut lines print their own
-                    // ratio inline, so they never need this header warning.
+                    // Which directions matter: backend rows read the (possibly
+                    // SqIn-extended) end, the SqIn/SqOut phrase notes the
+                    // pre-extension one.
                     bool late_warns = false;
                     bool early_warns = false;
                     if (scales) {
@@ -316,65 +317,61 @@ void render_activations_section(const Path* path, const HydraRecord& record,
                                 late_warns |= is_material(*bsq.offset_ms,
                                                           scales->post.late);
                         }
+                        for (const SPSqueeze& sq : act.sqinouts) {
+                            if (sq.kind == SqueezeKind::SqOut)
+                                early_warns |= is_material(sq.difficulty(),
+                                                           scales->pre.early);
+                            else
+                                late_warns |= is_material(sq.difficulty(),
+                                                          scales->pre.late);
+                        }
                     }
                     if (scales && (late_warns || early_warns)) {
+                        bool show_late = late_warns;
+                        bool show_early = early_warns;
                         const TransferScale& scale = scales->post;
-                        char buf[96];
-                        if (late_warns && early_warns &&
+                        char buf[192];
+                        if (show_late && show_early &&
                             std::abs(scale.late - scale.early) > 0.005) {
                             std::snprintf(buf, sizeof(buf),
-                                         "Frontend transfer: x%.3f (early) / x%.3f (late)",
-                                         scale.early, scale.late);
-                        } else {
-                            double r = late_warns ? scale.late : scale.early;
-                            const char* dir = (late_warns && early_warns)
-                                                  ? "both directions"
-                                              : late_warns ? "late" : "early";
+                                         "Frontend timing scales x%.2f (late) / x%.2f "
+                                         "(early) at the SP end.",
+                                         scale.late, scale.early);
+                        } else if (show_late && show_early) {
+                            // Both directions apply and are (nearly) equal.
                             std::snprintf(buf, sizeof(buf),
-                                         "Frontend transfer: x%.3f (%s)", r, dir);
+                                         "Frontend timing scales x%.2f to the SP end: "
+                                         "10ms at the frontend moves the SP end %s%.1fms.",
+                                         scale.late,
+                                         scale.late < 1.0 ? "only " : "",
+                                         10.0 * scale.late);
+                        } else {
+                            double r = show_late ? scale.late : scale.early;
+                            std::snprintf(buf, sizeof(buf),
+                                         "Frontend timing scales x%.2f to the SP end: "
+                                         "%s at the frontend moves the SP end %s%s%.1fms.",
+                                         r,
+                                         show_late ? "+10ms (late)" : "-10ms (early)",
+                                         r < 1.0 ? "only " : "",
+                                         show_late ? "+" : "-", 10.0 * r);
                         }
                         {
                             WarnColor warn;
+                            // Wrap at the panel edge -- the details child
+                            // can be narrower than the line.
+                            ImGui::PushTextWrapPos(0.0f);
                             ImGui::TextUnformatted(buf);
+                            ImGui::PopTextWrapPos();
                         }
                         hint("SP length is measured in measures, so frontend timing\n"
                              "reaches the SP end scaled by the measure-length ratio.\n"
-                             "The eff. figures below put each backend's raw ms back\n"
-                             "on the nominal two-hit scale. Early and late hits scale\n"
-                             "differently when the activation or SP end sits exactly\n"
-                             "on a signature or tempo change.");
+                             "Early and late hits scale differently when the activation\n"
+                             "or SP end sits exactly on a signature or tempo change.");
                     }
 
                     for (const SPSqueeze& sq : act.sqinouts) {
-                        double r = 1.0;
-                        if (scales)
-                            r = sq.kind == SqueezeKind::SqIn ? scales->pre.late
-                                                             : scales->pre.early;
-                        std::string desc =
-                            sq.description(r, W, settings.display_speed_pct);
-
-                        // The linearized split samples the transfer ratio at
-                        // one point; when the displacement itself crosses a
-                        // tempo/meter change, the exact piecewise solve lands
-                        // elsewhere. Show it when it moves the target by more
-                        // than half a millisecond.
-                        if (timing && sq.difficulty() > 0.0) {
-                            double lin = sq.difficulty() / (1.0 + r);
-                            double exact = exact_even_split_ms(
-                                sq.difficulty(), sq.kind, act, *timing);
-                            if (std::isfinite(exact) &&
-                                std::abs(exact - lin) > 0.5) {
-                                char xbuf[48];
-                                std::snprintf(xbuf, sizeof(xbuf),
-                                             "; exact: %.1f ms per hit", exact);
-                                desc += xbuf;
-                            }
-                        }
-
                         if (sq.is_difficult()) ImGui::PushStyleColor(ImGuiCol_Text, kWarningColor);
-                        ImGui::PushTextWrapPos(0.0f);
-                        ImGui::TextUnformatted(desc.c_str());
-                        ImGui::PopTextWrapPos();
+                        ImGui::TextUnformatted(sq.description().c_str());
                         if (sq.is_difficult()) ImGui::PopStyleColor();
                     }
 

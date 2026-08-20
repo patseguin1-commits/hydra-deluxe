@@ -43,7 +43,6 @@ TEST_CASE("settings round-trip through an INI file") {
     s.mslimit_enabled = false;
     s.mslimit_value = 42;
     s.hit_window_ms = 79;
-    s.display_speed_pct = 130;
     s.sp_cap_enabled = true;
     s.sp_cap_value = 16;
     s.auto_open_report = true;
@@ -65,7 +64,6 @@ TEST_CASE("settings round-trip through an INI file") {
     CHECK(r.mslimit_enabled == s.mslimit_enabled);
     CHECK(r.mslimit_value == s.mslimit_value);
     CHECK(r.hit_window_ms == s.hit_window_ms);
-    CHECK(r.display_speed_pct == s.display_speed_pct);
     CHECK(r.sp_cap_enabled == s.sp_cap_enabled);
     CHECK(r.sp_cap_value == s.sp_cap_value);
     CHECK(r.auto_open_report == s.auto_open_report);
@@ -83,7 +81,6 @@ TEST_CASE("a missing INI yields defaults") {
     CHECK(r.mslimit_value == d.mslimit_value);
     CHECK(r.mslimit_value == 10);
     CHECK(r.hit_window_ms == 85);
-    CHECK(r.display_speed_pct == 100);
 }
 
 TEST_CASE("malformed INI lines are tolerated") {

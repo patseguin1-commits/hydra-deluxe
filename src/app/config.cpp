@@ -74,10 +74,6 @@ Settings Settings::load_file(const std::string& path, bool uncapped) {
             int v = std::atoi(value.c_str());
             if (v > 0) s.hit_window_ms = v;
         }
-        else if (key == "display_speed_pct") {
-            int v = std::atoi(value.c_str());
-            if (v > 0) s.display_speed_pct = v;
-        }
         else if (key == "sp_cap_enabled") s.sp_cap_enabled = (value == "1");
         else if (key == "sp_cap_value") s.sp_cap_value = std::atoi(value.c_str());
         else if (key == "auto_open_report") s.auto_open_report = (value == "1");
@@ -101,7 +97,6 @@ bool Settings::save_file(const std::string& path) const {
     f << "mslimit_enabled=" << (mslimit_enabled ? 1 : 0) << "\n";
     f << "mslimit_value=" << mslimit_value << "\n";
     f << "hit_window_ms=" << hit_window_ms << "\n";
-    f << "display_speed_pct=" << display_speed_pct << "\n";
     f << "sp_cap_enabled=" << (sp_cap_enabled ? 1 : 0) << "\n";
     f << "sp_cap_value=" << sp_cap_value << "\n";
     f << "auto_open_report=" << (auto_open_report ? 1 : 0) << "\n";

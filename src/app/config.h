@@ -49,11 +49,10 @@ struct Settings {
     bool mslimit_enabled = true;
     int mslimit_value = 10;
 
-    // The per-side hit window in real ms, and the song speed the squeeze
-    // details are additionally shown at. Display-layer only: neither reaches
-    // the search, so changing them never invalidates stored records.
+    // The per-side hit window in real ms; feeds the squeeze budgets, the
+    // backend ratings, and the report tiers. Display-layer only: it never
+    // reaches the search, so changing it never invalidates stored records.
     int hit_window_ms = 85;
-    int display_speed_pct = 100;
 
     // Uncapped edition only: a manual SP meter ceiling in bars. Disabled runs
     // the auto-settling ladder (the default); enabled forces the given cap

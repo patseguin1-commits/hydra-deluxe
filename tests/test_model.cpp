@@ -294,15 +294,8 @@ TEST_CASE("field fixture: What's My Age Again? (Sync Chart) SqOut") {
     CHECK(failed == doctest::Approx(190.76).epsilon(1e-3));
     CHECK(landed > gap);
 
-    // The description pins the joint-constraint text (W = 85, 130% speed).
-    CHECK(sqout.description(r, 85.0, 130) ==
-          "SqOut: 96.2 ms per hit (x0.987 front + note > 191.1 ms)"
-          "; needs >=115% speed; at 130%: 74.0 ms real");
-    // At the outdated 70 ms window the artifact's numbers reproduce.
-    CHECK(sqout.description(r, 70.0, 100) ==
-          "SqOut: 96.2 ms per hit (x0.987 front + note > 191.1 ms)"
-          "; needs >=140% speed");
-    // Leeway squeezes keep the legacy single-hit line.
+    // The description keeps the legacy single-hit line.
+    CHECK(sqout.description() == "SqOut: Note timing must be later than 191.1ms.");
     SPSqueeze easy{SqueezeKind::SqOut, 5.0};
     CHECK(easy.description() == "SqOut: Note timing must be later than -5.0ms.");
 

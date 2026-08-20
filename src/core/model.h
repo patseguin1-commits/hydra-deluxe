@@ -138,16 +138,7 @@ struct SPSqueeze {
     const char* type_name() const {
         return kind == SqueezeKind::SqIn ? "SqIn" : "SqOut";
     }
-    // The squeeze as the joint two-hit constraint it really is:
-    // r*frontend + note > gap, with the even split, the combined budget at
-    // the given hit window, the minimum song speed when the gap exceeds the
-    // budget, and (at speed_pct != 100) the per-hit requirement in real ms.
-    // `transfer_r` is the frontend transfer scale in this squeeze's direction
-    // (early for SqOut, late for SqIn), from the *pre-extension* SP end.
-    std::string description(double transfer_r, double hit_window_ms,
-                            int speed_pct) const;
-    // Fallback when no timing/scales are available: r = 1, W = 85, 100%.
-    std::string description() const { return description(1.0, 85.0, 100); }
+    std::string description() const;
 
     bool operator==(const SPSqueeze& o) const { return offset_ms == o.offset_ms; }
     bool operator!=(const SPSqueeze& o) const { return !(*this == o); }

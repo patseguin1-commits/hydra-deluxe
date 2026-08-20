@@ -287,51 +287,15 @@ const ChordNote& Chord::activation_note() const {
 
 // ---- SPSqueeze ----------------------------------------------------------
 
-std::string SPSqueeze::description(double transfer_r, double hit_window_ms,
-                                   int speed_pct) const {
-    char buf[192];
-    const double gap = difficulty();
-
-    // No gap to cover: the note has leeway. Keep the legacy single-hit line.
-    if (gap <= 0.0) {
-        if (kind == SqueezeKind::SqIn)
-            std::snprintf(buf, sizeof(buf),
-                          "SqIn: Note timing must be earlier than %.1fms.",
-                          timing());
-        else
-            std::snprintf(buf, sizeof(buf),
-                          "SqOut: Note timing must be later than %.1fms.",
-                          timing());
-        return buf;
-    }
-
-    // The joint constraint r*frontend + note > gap, boiled down to what the
-    // player acts on: the even per-hit split, the minimum song speed when the
-    // gap exceeds the hit-window budget, and the per-hit real ms at the
-    // display speed.
-    const double per_hit = gap / (1.0 + transfer_r);
-    const double budget = squeeze_budget_ms(transfer_r, hit_window_ms);
-
-    std::string out;
-    std::snprintf(buf, sizeof(buf), "%s: %.1f ms per hit (x%.3f front + note > %.1f ms)",
-                  kind == SqueezeKind::SqIn ? "SqIn" : "SqOut", per_hit,
-                  transfer_r, gap);
-    out += buf;
-
-    if (gap > budget) {
-        // Clone Hero song speeds move in 5% steps; round the exact minimum up.
-        double pct = gap / budget * 100.0;
-        int need = static_cast<int>(std::ceil(pct / 5.0)) * 5;
-        std::snprintf(buf, sizeof(buf), "; needs >=%d%% speed", need);
-        out += buf;
-    }
-
-    if (speed_pct != 100 && speed_pct > 0) {
-        std::snprintf(buf, sizeof(buf), "; at %d%%: %.1f ms real",
-                      speed_pct, per_hit / (speed_pct / 100.0));
-        out += buf;
-    }
-    return out;
+std::string SPSqueeze::description() const {
+    char buf[96];
+    if (kind == SqueezeKind::SqIn)
+        std::snprintf(buf, sizeof(buf),
+                      "SqIn: Note timing must be earlier than %.1fms.", timing());
+    else
+        std::snprintf(buf, sizeof(buf),
+                      "SqOut: Note timing must be later than %.1fms.", timing());
+    return buf;
 }
 
 // ---- BackendSqueeze -----------------------------------------------------
