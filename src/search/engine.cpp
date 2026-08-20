@@ -1066,7 +1066,8 @@ struct BuildNode {
 std::vector<MPath> rebuild(const Enum& en, const std::vector<OutPath>& out_paths,
                            const std::vector<OutAct>& out_acts,
                            const std::vector<OutSq>& out_sqs,
-                           const std::vector<MultSqueeze>& multsqueezes) {
+                           const std::vector<MultSqueeze>& multsqueezes,
+                           const SongTiming& timing) {
     std::vector<BuildNode> pool;
     pool.reserve(out_paths.size());
     std::vector<int> top_level;
@@ -1099,30 +1100,25 @@ std::vector<MPath> rebuild(const Enum& en, const std::vector<OutPath>& out_paths
             act.e_offset = oa.e_offset;
             if (oa.deact_edge >= 0)
                 act.backends = en.edges[(size_t)oa.deact_edge]->backends;
-            bool has_sqin = false;
             for (int k = oa.sq_begin; k < oa.sq_end; ++k) {
                 const OutSq& os = out_sqs[(size_t)k];
                 SPSqueeze sq;
                 sq.kind = (os.kind == SQ_IN) ? SqueezeKind::SqIn
                                              : SqueezeKind::SqOut;
                 sq.offset_ms = os.offset;
-                if (sq.kind == SqueezeKind::SqIn) has_sqin = true;
                 act.sqinouts.push_back(sq);
             }
 
-            // Stamp the frontend transfer scales from the activation edge so
-            // the details display keeps its ratios without a SongTiming. A
-            // missing map entry keeps the 1.0 defaults. The post end only
-            // differs when a SqIn extended SP.
-            const ScoreGraphEdge* act_edge = node->branch_edge;
-            if (auto it = act_edge->act_transfer.find(oa.sp_meter);
-                it != act_edge->act_transfer.end())
-                act.transfer_pre = it->second;
-            act.transfer_post = act.transfer_pre;
-            if (has_sqin) {
-                if (auto it = act_edge->act_transfer_post.find(oa.sp_meter);
-                    it != act_edge->act_transfer_post.end())
-                    act.transfer_post = it->second;
+            // Stamp the frontend transfer scales through the same function
+            // the details display uses to recompute them, on the same inputs
+            // (timecode, sp_meter, backends, sqinouts), so the stored ratios
+            // can't drift from a live recomputation. The backend rows carry
+            // the search's actual deact end; an activation with none (never
+            // deactivated) keeps the measure-count reconstruction fallback.
+            // A nullopt keeps the 1.0 defaults.
+            if (auto scales = frontend_transfer_scales(act, timing)) {
+                act.transfer_pre = scales->pre;
+                act.transfer_post = scales->post;
             }
             path.activations.push_back(std::move(act));
         }
@@ -1184,7 +1180,7 @@ std::vector<MPath> run_search(const ScoreGraph& graph, int depth_mode,
         throw std::runtime_error("search reached a broken state");
 
     return rebuild(en, engine.out_paths(), engine.out_acts(), engine.out_sqs(),
-                   collect_multsqueezes(graph));
+                   collect_multsqueezes(graph), graph.timing());
 }
 
 }  // namespace hydra

@@ -221,10 +221,12 @@ struct Activation {
     // record (blob v3; older blobs default to 1.0 = the flat-tempo identity)
     // so the details display keeps its ratios when no SongTiming is at hand.
     // Display-only: difficulty() and everything the search/filter/report
-    // derive stay raw gap ms. `pre` is measured at the plain 2*B-measure SP
-    // end and governs the SqIn/SqOut lines; `post` at the SqIn-extended
-    // (+2 measures) end governs the backend rows, and equals `pre` when the
-    // activation has no SqIn.
+    // derive stay raw gap ms. Both scales anchor on the search's actual
+    // deactivation node D — which sits +2 measures past the plain
+    // 2*B-measure end for every SP phrase collected mid-activation. `post`
+    // is measured at D and governs the backend rows; `pre` steps one
+    // 2-measure SqIn extension down from D and governs the SqIn/SqOut lines,
+    // equalling `post` when the activation has no SqIn.
     TransferScale transfer_pre;
     TransferScale transfer_post;
 
@@ -248,11 +250,13 @@ struct Activation {
 };
 
 // Two SP ends coexist in one activation, so two transfer scales do too:
-// `pre` is measured at the plain 2*B-measure end and governs the SqIn/SqOut
-// feasibility (the phrase note must land inside SP as it stands *before* the
-// phrase is collected); `post` is measured at the +2-measure-extended end a
-// SqIn produces and governs the backend rows, which live at the extended end.
-// Without a SqIn the two are identical.
+// `post` is measured at the deactivation node D (the end the backend rows'
+// offsets are measured against, mid-SP phrase extensions included); `pre`
+// is measured one 2-measure step before D and governs the SqIn feasibility
+// (the phrase note must land inside SP as it stands *before* the phrase is
+// collected). Without a SqIn the two are identical. With several SqIns, or
+// a plain collection after the last one, `pre` is exact only for the last
+// extension — one pair per activation is all this carries.
 struct ActTransferScales {
     TransferScale pre;
     TransferScale post;
@@ -266,8 +270,12 @@ std::optional<TransferScale> transfer_scale_between(int64_t act_tick,
                                                     int64_t end_tick,
                                                     const SongTiming& timing);
 
-// The activation's transfer scales, from its timecode, SP meter, and (for the
-// SqIn +2-measure extension) its sqinouts. Display-only; nullopt when the
+// The activation's transfer scales. The SP end is recovered from the backend
+// rows (their offsets encode the deactivation node exactly), so mid-SP phrase
+// collections are priced in; an activation with no offset-bearing backend row
+// falls back to the plain act + 2*B-measure reconstruction. The engine stamps
+// the stored transfer_pre/post through this same function at copy-out, so a
+// live recompute can't drift from the record. Display-only; nullopt when the
 // activation has no timecode or sp_meter (stale record).
 std::optional<ActTransferScales> frontend_transfer_scales(const Activation& act,
                                                           const SongTiming& timing);

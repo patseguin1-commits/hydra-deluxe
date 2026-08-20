@@ -39,7 +39,10 @@ public:
     // Continuous (sub-tick) variants for the display-layer exact squeeze
     // solver: piecewise-linear, monotone, mutually inverse, and agreeing with
     // at() on integer ticks. NOT part of the bit-for-bit scoring surface (see
-    // the header comment) -- never use them in the graph or the engine.
+    // the header comment) -- never use them in the graph or the engine's
+    // scoring path. (The engine's rebuild step does call tick_at_ms through
+    // frontend_transfer_scales, but only to fill the display-only transfer
+    // fields after all scoring is done.)
     double ms_at_tick_f(double ticks) const;
     double tick_at_ms(double ms) const;
 

@@ -285,9 +285,10 @@ void render_activations_section(const Path* path, const HydraRecord& record,
                     // durations -- warn when that ratio materially changes a
                     // listed squeeze. Late (+) and early (-) hits can scale
                     // differently when the activation or SP end sits exactly
-                    // on a meter/tempo change; the phrase-note squeezes use
-                    // the pre-extension end, the backend rows the extended
-                    // one (they differ only when a SqIn is present).
+                    // on a meter/tempo change; the backend rows use the
+                    // deactivation end, the phrase-note squeezes the end
+                    // before the final SqIn extension (they differ only when
+                    // a SqIn is present).
                     const double W = static_cast<double>(settings.hit_window_ms);
                     std::optional<ActTransferScales> scales;
                     if (timing) scales = frontend_transfer_scales(act, *timing);

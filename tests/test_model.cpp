@@ -116,6 +116,9 @@ TEST_CASE("Chord rowstr / notationstr / disco flip") {
 TEST_CASE("frontend_transfer_scales: measure-rate ratio, both directions") {
     // The Tom Sawyer (Onyxite) shape: ten 7/8 measures at 87.35 BPM, then
     // 7/16 at 85.1 -- no boundary at the query points, so early == late.
+    // The activations here carry no backend rows, so this case pins the
+    // measure-count fallback path (the deact-node derivation is covered by
+    // the Dumpweed regression case below).
     std::map<int64_t, int64_t> tpm{{0, 1680}, {16800, 840}};
     std::map<int64_t, double> bpm{{0, 87.35}, {16800, 85.1}};
     SongTiming st(480, tpm, bpm);
@@ -182,6 +185,20 @@ TEST_CASE("frontend_transfer_scales: a SqIn splits the two ends") {
     CHECK(scales->pre.early == doctest::Approx(1.0).epsilon(1e-12));
     CHECK(scales->post.late == doctest::Approx(0.8).epsilon(1e-9));
     CHECK(scales->post.early == doctest::Approx(0.8).epsilon(1e-9));
+
+    // With a 0.0-offset backend row marking the deact node at tick 11520,
+    // the D-anchored build-down (pre = D - 2 measures = 7680) reproduces
+    // exactly the same split.
+    BackendSqueeze d0;
+    d0.timecode = st.timecode(11520);
+    d0.offset_ms = 0.0;
+    act.backends.push_back(d0);
+    auto anchored = frontend_transfer_scales(act, st);
+    REQUIRE(anchored.has_value());
+    CHECK(anchored->pre.late == doctest::Approx(1.0).epsilon(1e-12));
+    CHECK(anchored->pre.early == doctest::Approx(1.0).epsilon(1e-12));
+    CHECK(anchored->post.late == doctest::Approx(0.8).epsilon(1e-9));
+    CHECK(anchored->post.early == doctest::Approx(0.8).epsilon(1e-9));
 }
 
 TEST_CASE("frontend_transfer_scales: direction-dependent at boundaries") {
@@ -208,7 +225,10 @@ TEST_CASE("frontend_transfer_scales: direction-dependent at boundaries") {
     CHECK(scale->pre.late == doctest::Approx(1.2956811).epsilon(1e-6));
 
     // The Dumpweed shape: constant 4/4, tempo changes exactly on both the
-    // activation tick and the SP end tick.
+    // activation tick and the SP end tick. No backend rows here, so this is
+    // the plain act + 2*B-measure fallback; the REAL Dumpweed activation
+    // collects a phrase mid-SP and lands its deact node 2 measures later --
+    // that shape is pinned by the regression case below.
     std::map<int64_t, int64_t> tpm44{{0, 1920}};
     std::map<int64_t, double> bpm2{{0, 98.0},   {1920, 97.5},
                                    {8640, 110.0}, {9600, 102.0}};
@@ -274,6 +294,19 @@ TEST_CASE("field fixture: What's My Age Again? (Sync Chart) SqOut") {
     CHECK(scales->pre.early == doctest::Approx(0.987263).epsilon(1e-6));
     CHECK(scales->pre.late == doctest::Approx(1.0).epsilon(1e-12));
 
+    // This activation collects no phrase mid-SP (its deact node IS the plain
+    // 6-measure end), so the D-anchored derivation from a 0.0-offset backend
+    // row agrees with the fallback exactly -- field-verified cross-check.
+    Activation with_backend = act;
+    BackendSqueeze d0;
+    d0.timecode = st.timecode(69120);
+    d0.offset_ms = 0.0;
+    with_backend.backends.push_back(d0);
+    auto anchored = frontend_transfer_scales(with_backend, st);
+    REQUIRE(anchored.has_value());
+    CHECK(anchored->pre.early == doctest::Approx(scales->pre.early).epsilon(1e-12));
+    CHECK(anchored->pre.late == doctest::Approx(scales->pre.late).epsilon(1e-12));
+
     // The gap: 240 ticks at 157 BPM.
     double gap = st.timecode(69120).ms() - st.timecode(68880).ms();
     CHECK(gap == doctest::Approx(191.0825).epsilon(1e-5));
@@ -309,6 +342,80 @@ TEST_CASE("field fixture: What's My Age Again? (Sync Chart) SqOut") {
     REQUIRE(stamped.difficulty().has_value());
     CHECK(*stamped.difficulty() == doctest::Approx(191.0825).epsilon(1e-5));
     CHECK(stamped.is_difficult());
+}
+
+TEST_CASE("field fixture: Dumpweed SqOut end anchored on the deact node") {
+    // Field-verified: blink-182 - Dumpweed (Hoph2o), Expert Pro Drums 2x,
+    // activation "1-" at m19.1.0 (tick 34560), sp_meter 2. The player
+    // collects ONE SP phrase mid-SP, so the search's deact node sits at tick
+    // 46080 (act + 6 measures), not the plain act + 4 (42240) -- and a tempo
+    // change on each tick makes the difference visible: the old short-end
+    // reconstruction said early x0.890911, the true end gives x0.935114.
+    // An FC video shows frontend -74.1 ms + SqOut backend +75.1 ms landing
+    // the squeeze on the 143.129 ms gap: 74.1*0.935114 + 75.1 = 144.4 >=
+    // 143.129, while the old scale predicts a miss (141.1). DragonDelgar's
+    // published even split of +-74 = 143.129 / (1 + 0.935114) matches the
+    // true end too.
+    std::map<int64_t, int64_t> tpm{{0, 1920}};
+    std::map<int64_t, double> bpm{{0, 98.0003},
+                                  {34560, 97.4999},
+                                  {45120, 104.8004},
+                                  {46080, 101.0002}};
+    SongTiming st(480, tpm, bpm);
+
+    Activation act;
+    act.timecode = st.timecode(34560);
+    act.sp_meter = 2;
+    BackendSqueeze d0;  // the 0.0-offset row at the deact node
+    d0.timecode = st.timecode(46080);
+    d0.offset_ms = 0.0;
+    act.backends.push_back(d0);
+
+    auto scales = frontend_transfer_scales(act, st);
+    REQUIRE(scales.has_value());
+    CHECK(scales->post.early ==
+          doctest::Approx(98.0003 / 104.8004).epsilon(1e-9));  // 0.935114
+    CHECK(scales->post.late ==
+          doctest::Approx(97.4999 / 101.0002).epsilon(1e-9));  // 0.965344
+    // No SqIn: the two ends coincide.
+    CHECK(scales->pre.early == doctest::Approx(scales->post.early));
+    CHECK(scales->pre.late == doctest::Approx(scales->post.late));
+
+    // The SqOut gap and its displayed numbers.
+    double gap = st.timecode(46080).ms() - st.timecode(45960).ms();
+    CHECK(gap == doctest::Approx(143.129).epsilon(1e-4));
+    const double r = scales->post.early;
+    CHECK(effective_backend_ms(gap, r) ==
+          doctest::Approx(2.0 * gap / (1.0 + r)).epsilon(1e-12));  // ~147.9
+    CHECK(effective_backend_ms(gap, r) == doctest::Approx(147.94).epsilon(1e-3));
+    CHECK(gap / (1.0 + r) == doctest::Approx(73.96).epsilon(1e-3));
+    CHECK(74.1 * r + 75.1 > gap);         // the video's successful split
+    CHECK(74.1 * 0.890911 + 75.1 < gap);  // the old scale called it a miss
+
+    // The same D recovered through a nonzero-offset row (the ms -> tick
+    // rounding path): the SqOut phrase note itself, 143.129 ms before D.
+    Activation act2 = act;
+    act2.backends.clear();
+    BackendSqueeze dq;
+    dq.timecode = st.timecode(45960);
+    dq.offset_ms = st.timecode(45960).ms() - st.timecode(46080).ms();
+    dq.is_sp = true;
+    act2.backends.push_back(dq);
+    auto scales2 = frontend_transfer_scales(act2, st);
+    REQUIRE(scales2.has_value());
+    CHECK(scales2->post.early == doctest::Approx(scales->post.early).epsilon(1e-12));
+    CHECK(scales2->post.late == doctest::Approx(scales->post.late).epsilon(1e-12));
+
+    // A SqIn builds pre DOWN from D: 46080 - 2 measures = 42240, inside the
+    // 97.4999 section -> pre = {early 98.0003/97.4999, late 1.0}.
+    Activation act3 = act;
+    act3.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, 5.0});
+    auto scales3 = frontend_transfer_scales(act3, st);
+    REQUIRE(scales3.has_value());
+    CHECK(scales3->post.early == doctest::Approx(scales->post.early));
+    CHECK(scales3->post.late == doctest::Approx(scales->post.late));
+    CHECK(scales3->pre.early == doctest::Approx(98.0003 / 97.4999).epsilon(1e-9));
+    CHECK(scales3->pre.late == doctest::Approx(1.0).epsilon(1e-12));
 }
 
 TEST_CASE("exact solver prices displacements across a tempo boundary") {
