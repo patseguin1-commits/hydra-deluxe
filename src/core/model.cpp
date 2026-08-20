@@ -305,35 +305,29 @@ std::string SPSqueeze::description(double transfer_r, double hit_window_ms,
         return buf;
     }
 
-    // The joint constraint: r*frontend + note > gap. The even split is the
-    // smallest per-hit displacement that satisfies it; the budget is the
-    // largest coverable gap at 100% speed with the given hit window.
-    const bool sqin = kind == SqueezeKind::SqIn;
+    // The joint constraint r*frontend + note > gap, boiled down to what the
+    // player acts on: the even per-hit split, the minimum song speed when the
+    // gap exceeds the hit-window budget, and the per-hit real ms at the
+    // display speed.
     const double per_hit = gap / (1.0 + transfer_r);
     const double budget = squeeze_budget_ms(transfer_r, hit_window_ms);
 
     std::string out;
-    std::snprintf(buf, sizeof(buf),
-                  "%s: needs frontend(%s)x%.3f + note(%s) > %.1f ms\n",
-                  sqin ? "SqIn" : "SqOut", sqin ? "late" : "early", transfer_r,
-                  sqin ? "early" : "late", gap);
-    out += buf;
-
-    std::snprintf(buf, sizeof(buf),
-                  "  even split: %.1f ms each; budget %.1f ms @1x (W=%.0f)",
-                  per_hit, budget, hit_window_ms);
+    std::snprintf(buf, sizeof(buf), "%s: %.1f ms per hit (x%.3f front + note > %.1f ms)",
+                  kind == SqueezeKind::SqIn ? "SqIn" : "SqOut", per_hit,
+                  transfer_r, gap);
     out += buf;
 
     if (gap > budget) {
         // Clone Hero song speeds move in 5% steps; round the exact minimum up.
         double pct = gap / budget * 100.0;
         int need = static_cast<int>(std::ceil(pct / 5.0)) * 5;
-        std::snprintf(buf, sizeof(buf), " -> needs >=%d%% speed", need);
+        std::snprintf(buf, sizeof(buf), "; needs >=%d%% speed", need);
         out += buf;
     }
 
     if (speed_pct != 100 && speed_pct > 0) {
-        std::snprintf(buf, sizeof(buf), "\n  at %d%%: %.1f ms real per hit",
+        std::snprintf(buf, sizeof(buf), "; at %d%%: %.1f ms real",
                       speed_pct, per_hit / (speed_pct / 100.0));
         out += buf;
     }
@@ -440,18 +434,9 @@ std::optional<double> Activation::e_difficulty(bool verbose) const {
     return std::nullopt;
 }
 
-double Activation::squeeze_difficulty(const SPSqueeze& sq) const {
-    const double r = sq.kind == SqueezeKind::SqIn ? transfer_pre.late
-                                                  : transfer_pre.early;
-    return sq.difficulty() / (1.0 + r);
-}
-
 std::optional<double> Activation::difficulty() const {
-    // Per-hit ms across the board: squeezes are joint two-hit constraints
-    // split evenly; the E fill is a single hit, so its raw offset already is
-    // per-hit.
     std::vector<double> diffs;
-    for (const SPSqueeze& sq : sqinouts) diffs.push_back(squeeze_difficulty(sq));
+    for (const SPSqueeze& sq : sqinouts) diffs.push_back(sq.difficulty());
     if (auto e = e_difficulty()) diffs.push_back(*e);
     if (diffs.empty()) return std::nullopt;
     return *std::max_element(diffs.begin(), diffs.end());
@@ -460,7 +445,7 @@ std::optional<double> Activation::difficulty() const {
 bool Activation::is_difficult() const {
     if (auto e = e_difficulty(); e && *e > 2.0) return true;
     for (const SPSqueeze& sq : sqinouts)
-        if (squeeze_difficulty(sq) > 2.0) return true;
+        if (sq.is_difficult()) return true;
     return false;
 }
 
@@ -478,8 +463,7 @@ std::string Activation::notationstr_verbose() const {
             std::to_string(static_cast<long long>(*e_difficulty(true))) + " ms");
     for (const SPSqueeze& sq : sqinouts)
         timings.push_back(
-            std::to_string(static_cast<long long>(squeeze_difficulty(sq))) +
-            " ms");
+            std::to_string(static_cast<long long>(sq.difficulty())) + " ms");
 
     if (timings.empty()) return notationstr();
 

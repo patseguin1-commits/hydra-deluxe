@@ -77,9 +77,9 @@ int main(int argc, char** argv) {
                            hydra::group_thousands(songs) + " songs — " + shown;
     std::string dbname = std::filesystem::u8path(db).filename().u8string();
     std::string footer = "Generated from " + dbname +
-                         ". Squeeze timings are ms of error per hit, after "
-                         "frontend transfer scaling; 'Beyond' is past the " +
-                         std::to_string(hit_window_ms) + " ms hit window.";
+                         ". Timing tiers match Hydra's squeeze ratings; "
+                         "'Beyond' is past the " +
+                         std::to_string(2 * hit_window_ms) + " ms window.";
 
     // Make the folder rather than throwing away the work: collecting the rows
     // means inflating every stored record, which is the slow part.

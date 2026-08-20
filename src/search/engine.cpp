@@ -131,11 +131,6 @@ struct Act {
     int32_t sq_tail;
     int32_t depth;
     double e_offset;
-    // Pre-extension frontend transfer scales (graph act_transfer at this
-    // meter), fixed at creation so search_difficulty stays a monotone
-    // running max. act_difficulty divides each squeeze by (1 + r).
-    double r_early;
-    double r_late;
 };
 struct SqNode {
     int32_t prev;
@@ -299,8 +294,7 @@ private:
     const ScoreGraphEdge* eobj(int32_t i) const { return en_.edges[(size_t)i]; }
 
     int32_t new_act(int32_t parent, int32_t act_node, int32_t skips,
-                    int32_t sp_meter, double e_offset, double r_early,
-                    double r_late) {
+                    int32_t sp_meter, double e_offset) {
         Act a;
         a.parent = parent;
         a.act_node = act_node;
@@ -310,8 +304,6 @@ private:
         a.sq_tail = -1;
         a.depth = (parent < 0 ? 0 : acts_[(size_t)parent].depth) + 1;
         a.e_offset = e_offset;
-        a.r_early = r_early;
-        a.r_late = r_late;
         acts_.push_back(a);
         return (int32_t)acts_.size() - 1;
     }
@@ -503,16 +495,9 @@ bool Engine::branch_activate(Path& p, Path* child) {
 
     close_last_activation(c);
 
-    double r_early = 1.0;
-    double r_late = 1.0;
-    if (auto tit = eo->act_transfer.find(p.sp); tit != eo->act_transfer.end()) {
-        r_early = tit->second.early;
-        r_late = tit->second.late;
-    }
     c.act_tail = new_act(p.act_tail, p.node, p.currentskips, p.sp,
                          has_value(p.skipped_e_offset) ? p.skipped_e_offset
-                                                       : e_offset,
-                         r_early, r_late);
+                                                       : e_offset);
     c.sc[2] += e.frontend_points;
     c.score += e.frontend_points;
     c.skipped_e_offset = NO_DOUBLE;
@@ -635,13 +620,9 @@ double Engine::act_difficulty(int32_t act) const {
 
     double best = NO_DOUBLE;
     for (int32_t s = a.sq_tail; s >= 0; s = sqs_[(size_t)s].prev) {
-        // Per-hit ms: the raw gap split by the joint constraint's (1 + r),
-        // mirroring Activation::squeeze_difficulty. SqIns want a late (+)
-        // frontend, SqOuts an early (-) one.
         const double d = sqs_[(size_t)s].kind == SQ_IN
-                             ? sqs_[(size_t)s].offset / (1.0 + a.r_late)
-                             : (-sqs_[(size_t)s].offset + 0.0) /
-                                   (1.0 + a.r_early);
+                             ? sqs_[(size_t)s].offset
+                             : -sqs_[(size_t)s].offset + 0.0;
         if (!has_value(best) || d > best) best = d;
     }
     if (a.e_offset < kCalibrationFillWindowMs && a.skips == 0) {
@@ -1130,9 +1111,9 @@ std::vector<MPath> rebuild(const Enum& en, const std::vector<OutPath>& out_paths
             }
 
             // Stamp the frontend transfer scales from the activation edge so
-            // difficulty (per-hit ms) survives serialization without a
-            // SongTiming. A missing map entry keeps the 1.0 defaults. The
-            // post end only differs when a SqIn extended SP.
+            // the details display keeps its ratios without a SongTiming. A
+            // missing map entry keeps the 1.0 defaults. The post end only
+            // differs when a SqIn extended SP.
             const ScoreGraphEdge* act_edge = node->branch_edge;
             if (auto it = act_edge->act_transfer.find(oa.sp_meter);
                 it != act_edge->act_transfer.end())

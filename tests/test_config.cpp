@@ -81,31 +81,9 @@ TEST_CASE("a missing INI yields defaults") {
     CHECK(r.depth_value == d.depth_value);
     CHECK(r.mslimit_enabled == d.mslimit_enabled);
     CHECK(r.mslimit_value == d.mslimit_value);
-    CHECK(r.mslimit_value == 5);
+    CHECK(r.mslimit_value == 10);
     CHECK(r.hit_window_ms == 85);
     CHECK(r.display_speed_pct == 100);
-}
-
-TEST_CASE("a legacy raw-ms limit migrates to per-hit") {
-    const std::string path = temp_ini("legacy_mslimit");
-
-    // Legacy key only: per-hit seeds at half the raw value.
-    {
-        std::ofstream f(path, std::ios::trunc);
-        f << "mslimit_value=10\n";
-    }
-    Settings r = Settings::load_file(path, false);
-    CHECK(r.mslimit_value == 5);
-
-    // Both keys present: the per-hit key wins regardless of order.
-    {
-        std::ofstream f(path, std::ios::trunc);
-        f << "mslimit_perhit_value=7\n"
-          << "mslimit_value=40\n";
-    }
-    r = Settings::load_file(path, false);
-    std::remove(path.c_str());
-    CHECK(r.mslimit_value == 7);
 }
 
 TEST_CASE("malformed INI lines are tolerated") {
@@ -118,7 +96,7 @@ TEST_CASE("malformed INI lines are tolerated") {
           << "no_equals_sign_here\n"
           << "unknown_key=whatever\n"
           << "depth_value=not_a_number\n"
-          << "  mslimit_perhit_value =  25  \n"
+          << "  mslimit_value =  25  \n"
           << "view_prodrums=0\n";
     }
     Settings r = Settings::load_file(path, false);

@@ -321,9 +321,9 @@ ScoreGraphEdge* ScoreGraph::add_act_edge(const Chord& frontend_chord,
         Timecode pre_end = plusmeasure(act_edge->dest->timecode, 2 * sp);
         act_edge->activation_initial_end_times[sp] = pre_end;
 
-        // The transfer scales the difficulty metric divides by (see
-        // Activation::squeeze_difficulty). Same probe logic as the display's
-        // frontend_transfer_scales, via the shared core helper.
+        // The transfer scales the details display shows. Same probe logic as
+        // frontend_transfer_scales, via the shared core helper, so the
+        // stored ratios can't drift from a live recomputation.
         if (auto pre = transfer_scale_between(act_tick, pre_end.ticks(),
                                               song_.timing()))
             act_edge->act_transfer[sp] = *pre;

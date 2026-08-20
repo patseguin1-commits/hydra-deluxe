@@ -46,16 +46,16 @@ struct ReportRow {
 // trims whitespace. Mirrors hydra_report.plain.
 std::string plain(const std::string& text);
 
-// (label, token) for a hardest per-hit squeeze value, e.g. (Extreme, t2).
-// nullopt -> (None, tn). Bands derive from the hit window W: <1 Normal (an
-// absolute floor -- sub-ms is free at any window), then quarters of W up to
-// Beyond at >= W.
+// (label, token) for a hardest-squeeze value (raw ms), e.g. (Extreme, t2).
+// nullopt -> (None, tn). Bands derive from the two-hit budget 2*W: <2 Normal
+// (an absolute floor), then quarters of 2*W up to Beyond at >= 2*W. At the
+// historical W = 70 this is the original 2/35/70/105/140 ladder.
 std::pair<std::string, std::string> tier_for(const std::optional<double>& ms,
                                              double hit_window_ms = 85.0);
 
 // Reads every stored record (skipping ones stamped by another version or
 // edition) and produces up to max_paths rows per chart, best score first.
-// hit_window_ms feeds the tier labels only; `ms` itself is W-free.
+// hit_window_ms feeds the tier labels only.
 std::vector<ReportRow> collect_rows(store::RecordStore& store, int64_t max_paths,
                                     bool uncapped, double hit_window_ms = 85.0);
 

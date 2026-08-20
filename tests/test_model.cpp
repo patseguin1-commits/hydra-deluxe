@@ -296,29 +296,25 @@ TEST_CASE("field fixture: What's My Age Again? (Sync Chart) SqOut") {
 
     // The description pins the joint-constraint text (W = 85, 130% speed).
     CHECK(sqout.description(r, 85.0, 130) ==
-          "SqOut: needs frontend(early)x0.987 + note(late) > 191.1 ms\n"
-          "  even split: 96.2 ms each; budget 168.9 ms @1x (W=85)"
-          " -> needs >=115% speed\n"
-          "  at 130%: 74.0 ms real per hit");
+          "SqOut: 96.2 ms per hit (x0.987 front + note > 191.1 ms)"
+          "; needs >=115% speed; at 130%: 74.0 ms real");
     // At the outdated 70 ms window the artifact's numbers reproduce.
     CHECK(sqout.description(r, 70.0, 100) ==
-          "SqOut: needs frontend(early)x0.987 + note(late) > 191.1 ms\n"
-          "  even split: 96.2 ms each; budget 139.1 ms @1x (W=70)"
-          " -> needs >=140% speed");
+          "SqOut: 96.2 ms per hit (x0.987 front + note > 191.1 ms)"
+          "; needs >=140% speed");
     // Leeway squeezes keep the legacy single-hit line.
     SPSqueeze easy{SqueezeKind::SqOut, 5.0};
     CHECK(easy.description() == "SqOut: Note timing must be later than -5.0ms.");
 
-    // An activation stamped with these scales reports per-hit difficulty.
+    // Stored transfer scales are display-only: difficulty stays the raw gap.
     Activation stamped = act;
     stamped.skips = 1;
     stamped.e_offset = 300.0;  // not e-critical
     stamped.transfer_pre = TransferScale{r, 1.0};
     stamped.transfer_post = stamped.transfer_pre;
     stamped.sqinouts.push_back(sqout);
-    CHECK(stamped.squeeze_difficulty(sqout) == doctest::Approx(96.15).epsilon(1e-3));
     REQUIRE(stamped.difficulty().has_value());
-    CHECK(*stamped.difficulty() == doctest::Approx(96.15).epsilon(1e-3));
+    CHECK(*stamped.difficulty() == doctest::Approx(191.0825).epsilon(1e-5));
     CHECK(stamped.is_difficult());
 }
 
@@ -366,22 +362,18 @@ TEST_CASE("exact solver prices displacements across a tempo boundary") {
     CHECK(sp_end_shift_ms(100.0, SqueezeKind::SqOut, bare, st) == 0.0);
 }
 
-TEST_CASE("per-hit difficulty: default scales halve the raw offset") {
-    // r = 1 (flat tempo, the default for stale/old records): the joint
-    // constraint splits evenly, so per-hit is exactly half the raw gap.
+TEST_CASE("difficulty is the raw gap, untouched by stored transfer scales") {
     Activation act;
     act.skips = 0;
     act.e_offset = 300.0;  // not e-critical
     act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -12.0});
     act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, 7.0});
 
-    CHECK(act.squeeze_difficulty(act.sqinouts[0]) == doctest::Approx(6.0));
-    CHECK(act.squeeze_difficulty(act.sqinouts[1]) == doctest::Approx(3.5));
     REQUIRE(act.difficulty().has_value());
-    CHECK(*act.difficulty() == doctest::Approx(6.0));
+    CHECK(*act.difficulty() == doctest::Approx(12.0));
 
-    // SqIns divide by the late scale, SqOuts by the early one.
+    // The scales are display-only; the metric must not move with them.
     act.transfer_pre = TransferScale{0.5, 3.0};
-    CHECK(act.squeeze_difficulty(act.sqinouts[0]) == doctest::Approx(8.0));
-    CHECK(act.squeeze_difficulty(act.sqinouts[1]) == doctest::Approx(1.75));
+    act.transfer_post = act.transfer_pre;
+    CHECK(*act.difficulty() == doctest::Approx(12.0));
 }

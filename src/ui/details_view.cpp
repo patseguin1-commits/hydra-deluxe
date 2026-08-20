@@ -99,7 +99,7 @@ void render_record_status(AppState& app, float width) {
         ImGui::Text("Best score:  %s", group_thousands(rec.best_path().totalscore()).c_str());
         ImGui::Text("Paths kept:  %d", (int)rec.all_paths().size());
         if (rec.ms_limit)
-            ImGui::Text("Limit timings:  %d ms/hit", (int)*rec.ms_limit);
+            ImGui::Text("Limit timings:  %d ms", (int)*rec.ms_limit);
         else
             ImGui::TextUnformatted("Limit timings:  off");
         if (kUncapped && rec.sp_cap) ImGui::Text("SP meter:  %d bars", *rec.sp_cap);
@@ -147,12 +147,8 @@ void render_controls(AppState& app) {
     ImGui::SameLine();
     // "mslimit_mstext" binds disabled_text ((50,50,50), same gray as the
     // InputInt's own disabled Text color) whenever mslimit is unchecked.
-    ImGui::TextUnformatted("ms/hit");
+    ImGui::TextUnformatted("ms");
     end_disabled_input(mslimit_disabled);
-    hint("Extra paths are only kept when their hardest squeeze needs at\n"
-         "most this many milliseconds of timing error per hit. Both hits\n"
-         "of a squeeze share the load, and frontend timing is scaled by\n"
-         "the transfer ratio before it counts.");
 
     // Uncapped edition only: a manual SP meter ceiling in bars. Unchecked runs
     // the auto-settling ladder (default); checked forces the given cap, and the
@@ -295,12 +291,19 @@ void render_activations_section(const Path* path, const HydraRecord& record,
                     const double W = static_cast<double>(settings.hit_window_ms);
                     std::optional<ActTransferScales> scales;
                     if (timing) scales = frontend_transfer_scales(act, *timing);
+                    // No timing at hand (no songmeta row): the record stores
+                    // the scales the search computed (1.0 on old blobs).
+                    if (!scales)
+                        scales = ActTransferScales{act.transfer_pre,
+                                                   act.transfer_post};
                     auto is_material = [&](double gap_ms, double r) {
                         double gap = std::abs(gap_ms);
                         return std::abs(effective_backend_ms(gap, r) - gap) >
                                    kTransferImpactMs ||
                                gap > squeeze_budget_ms(r, W);
                     };
+                    // Backend rows only: the SqIn/SqOut lines print their own
+                    // ratio inline, so they never need this header warning.
                     bool late_warns = false;
                     bool early_warns = false;
                     if (scales) {
@@ -313,56 +316,33 @@ void render_activations_section(const Path* path, const HydraRecord& record,
                                 late_warns |= is_material(*bsq.offset_ms,
                                                           scales->post.late);
                         }
-                        for (const SPSqueeze& sq : act.sqinouts) {
-                            if (sq.kind == SqueezeKind::SqOut)
-                                early_warns |= is_material(sq.difficulty(),
-                                                           scales->pre.early);
-                            else
-                                late_warns |= is_material(sq.difficulty(),
-                                                          scales->pre.late);
-                        }
                     }
                     if (scales && (late_warns || early_warns)) {
-                        bool show_late = late_warns;
-                        bool show_early = early_warns;
                         const TransferScale& scale = scales->post;
-                        char buf[192];
-                        if (show_late && show_early &&
+                        char buf[96];
+                        if (late_warns && early_warns &&
                             std::abs(scale.late - scale.early) > 0.005) {
                             std::snprintf(buf, sizeof(buf),
-                                         "Frontend timing scales x%.2f (late) / x%.2f "
-                                         "(early) at the SP end.",
-                                         scale.late, scale.early);
-                        } else if (show_late && show_early) {
-                            // Both directions apply and are (nearly) equal.
-                            std::snprintf(buf, sizeof(buf),
-                                         "Frontend timing scales x%.2f to the SP end: "
-                                         "10ms at the frontend moves the SP end %s%.1fms.",
-                                         scale.late,
-                                         scale.late < 1.0 ? "only " : "",
-                                         10.0 * scale.late);
+                                         "Frontend transfer: x%.3f (early) / x%.3f (late)",
+                                         scale.early, scale.late);
                         } else {
-                            double r = show_late ? scale.late : scale.early;
+                            double r = late_warns ? scale.late : scale.early;
+                            const char* dir = (late_warns && early_warns)
+                                                  ? "both directions"
+                                              : late_warns ? "late" : "early";
                             std::snprintf(buf, sizeof(buf),
-                                         "Frontend timing scales x%.2f to the SP end: "
-                                         "%s at the frontend moves the SP end %s%s%.1fms.",
-                                         r,
-                                         show_late ? "+10ms (late)" : "-10ms (early)",
-                                         r < 1.0 ? "only " : "",
-                                         show_late ? "+" : "-", 10.0 * r);
+                                         "Frontend transfer: x%.3f (%s)", r, dir);
                         }
                         {
                             WarnColor warn;
-                            // Wrap at the panel edge -- the details child
-                            // can be narrower than the line.
-                            ImGui::PushTextWrapPos(0.0f);
                             ImGui::TextUnformatted(buf);
-                            ImGui::PopTextWrapPos();
                         }
                         hint("SP length is measured in measures, so frontend timing\n"
                              "reaches the SP end scaled by the measure-length ratio.\n"
-                             "Early and late hits scale differently when the activation\n"
-                             "or SP end sits exactly on a signature or tempo change.");
+                             "The eff. figures below put each backend's raw ms back\n"
+                             "on the nominal two-hit scale. Early and late hits scale\n"
+                             "differently when the activation or SP end sits exactly\n"
+                             "on a signature or tempo change.");
                     }
 
                     for (const SPSqueeze& sq : act.sqinouts) {
@@ -384,11 +364,9 @@ void render_activations_section(const Path* path, const HydraRecord& record,
                                 sq.difficulty(), sq.kind, act, *timing);
                             if (std::isfinite(exact) &&
                                 std::abs(exact - lin) > 0.5) {
-                                char xbuf[96];
+                                char xbuf[48];
                                 std::snprintf(xbuf, sizeof(xbuf),
-                                             "\n  exact split: %.1f ms each "
-                                             "(a tempo change is within reach)",
-                                             exact);
+                                             "; exact: %.1f ms per hit", exact);
                                 desc += xbuf;
                             }
                         }
@@ -670,7 +648,7 @@ void render_path_panel(AppState& app, const Path*& selected_path) {
                 if (app.viewed_record->ms_limit)
                     label += " (Limit timings: " +
                              std::to_string((int)*app.viewed_record->ms_limit) +
-                             " ms/hit)";
+                             " ms)";
                 ImGui::SeparatorText(label.c_str());
             }
             current_score = p->totalscore();

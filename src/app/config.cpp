@@ -7,7 +7,6 @@
 
 #include <cstdlib>
 #include <fstream>
-#include <optional>
 
 #include "core/winstr.h"
 
@@ -54,11 +53,6 @@ Settings Settings::load_file(const std::string& path, bool uncapped) {
     if (!f) return s;  // defaults
 
     std::string line;
-    // The pre-1.5 "mslimit_value" key held raw gap ms; the per-hit key
-    // replaces it. Remember both so a legacy-only INI can be migrated after
-    // the scan (per-hit = raw / 2 at transfer scale 1).
-    std::optional<int> legacy_mslimit;
-    bool saw_perhit = false;
     while (std::getline(f, line)) {
         line = trim(line);
         if (line.empty() || line[0] == '#') continue;
@@ -75,11 +69,7 @@ Settings Settings::load_file(const std::string& path, bool uncapped) {
         else if (key == "depth_value") s.depth_value = std::atoi(value.c_str());
         else if (key == "depth_mode") s.depth_mode = std::atoi(value.c_str());
         else if (key == "mslimit_enabled") s.mslimit_enabled = (value == "1");
-        else if (key == "mslimit_perhit_value") {
-            s.mslimit_value = std::atoi(value.c_str());
-            saw_perhit = true;
-        }
-        else if (key == "mslimit_value") legacy_mslimit = std::atoi(value.c_str());
+        else if (key == "mslimit_value") s.mslimit_value = std::atoi(value.c_str());
         else if (key == "hit_window_ms") {
             int v = std::atoi(value.c_str());
             if (v > 0) s.hit_window_ms = v;
@@ -93,7 +83,6 @@ Settings Settings::load_file(const std::string& path, bool uncapped) {
         else if (key == "auto_open_report") s.auto_open_report = (value == "1");
         else if (key == "dm_last_user") s.dm_last_user = value;
     }
-    if (!saw_perhit && legacy_mslimit) s.mslimit_value = *legacy_mslimit / 2;
     return s;
 }
 
@@ -110,7 +99,7 @@ bool Settings::save_file(const std::string& path) const {
     f << "depth_value=" << depth_value << "\n";
     f << "depth_mode=" << depth_mode << "\n";
     f << "mslimit_enabled=" << (mslimit_enabled ? 1 : 0) << "\n";
-    f << "mslimit_perhit_value=" << mslimit_value << "\n";
+    f << "mslimit_value=" << mslimit_value << "\n";
     f << "hit_window_ms=" << hit_window_ms << "\n";
     f << "display_speed_pct=" << display_speed_pct << "\n";
     f << "sp_cap_enabled=" << (sp_cap_enabled ? 1 : 0) << "\n";

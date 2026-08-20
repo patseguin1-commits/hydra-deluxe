@@ -218,7 +218,7 @@ const HIT_WINDOW = DATA.hit_window;
   for (const t of DATA.tiers) {
     const o = document.createElement('option');
     o.value = t.name;
-    o.textContent = t.name === 'Beyond' ? 'Beyond ' + HIT_WINDOW + ' ms/hit'
+    o.textContent = t.name === 'Beyond' ? 'Beyond ' + (HIT_WINDOW * 2) + ' ms'
                   : t.name === 'None' ? 'No squeezes'
                   : t.name;
     sel.appendChild(o);
@@ -233,7 +233,7 @@ const COLS = [
   {k:'score',   t:'Score',    num:true},
   {k:'acts',    t:'Acts',     num:true},
   {k:'skip',    t:'Max skip', num:true},
-  {k:'ms',      t:'ms/hit',   num:true},
+  {k:'ms',      t:'Hardest ms', num:true},
   {k:'tier',    t:'Timing',   num:false},
   {k:'efill',   t:'Cal fill', num:true},
   {k:'mult',    t:'Avg mult', num:true},
@@ -390,13 +390,13 @@ function renderStats(rows) {
   const withMs = rows.filter(r => r.ms !== null && r.ms !== undefined);
   const tightest = withMs.length ? Math.max(...withMs.map(r => r.ms)) : null;
   const maxSkip = rows.length ? Math.max(...rows.map(r => r.skip)) : 0;
-  const beyond = rows.filter(r => r.ms !== null && r.ms >= HIT_WINDOW).length;
+  const beyond = rows.filter(r => r.ms !== null && r.ms >= HIT_WINDOW * 2).length;
 
   const stats = [
     ['Charts', new Set(best.map(r => r.song + r.artist)).size.toLocaleString()],
     ['Paths shown', rows.length.toLocaleString()],
-    ['Tightest squeeze', tightest === null ? '—' : tightest.toFixed(1) + ' ms/hit'],
-    ['Past ' + HIT_WINDOW + ' ms/hit', beyond.toLocaleString()],
+    ['Tightest squeeze', tightest === null ? '—' : tightest.toFixed(1) + ' ms'],
+    ['Past ' + (HIT_WINDOW * 2) + ' ms', beyond.toLocaleString()],
     ['Highest skip', maxSkip],
   ];
 
@@ -489,13 +489,16 @@ std::string plain(const std::string& text) {
 
 std::pair<std::string, std::string> tier_for(const std::optional<double>& ms,
                                              double hit_window_ms) {
+    // Raw squeeze ms, banded against the two-hit budget 2*W: quarters of the
+    // budget after the 2 ms "Normal" floor. At the historical W = 70 this is
+    // the original 2/35/70/105/140 ladder.
     const double w = hit_window_ms;
     if (!ms) return {"None", "tn"};
-    if (*ms < 1) return {"Normal", "t0"};
-    if (*ms < w / 4) return {"Hard", "t1"};
-    if (*ms < w / 2) return {"Extreme", "t2"};
-    if (*ms < 3 * w / 4) return {"Insane", "t3"};
-    if (*ms < w) return {"Insane+", "t4"};
+    if (*ms < 2) return {"Normal", "t0"};
+    if (*ms < w / 2) return {"Hard", "t1"};
+    if (*ms < w) return {"Extreme", "t2"};
+    if (*ms < 3 * w / 2) return {"Insane", "t3"};
+    if (*ms < 2 * w) return {"Insane+", "t4"};
     return {"Beyond", "t5"};
 }
 
@@ -563,9 +566,9 @@ std::string build_html(const std::vector<ReportRow>& rows, const std::string& su
         const double w = hit_window_ms;
         const struct { const char* name; const char* tok;
                        std::optional<double> cutoff; } tiers[] = {
-            {"Normal", "t0", 1.0},          {"Hard", "t1", w / 4},
-            {"Extreme", "t2", w / 2},       {"Insane", "t3", 3 * w / 4},
-            {"Insane+", "t4", w},           {"Beyond", "t5", std::nullopt},
+            {"Normal", "t0", 2.0},          {"Hard", "t1", w / 2},
+            {"Extreme", "t2", w},           {"Insane", "t3", 3 * w / 2},
+            {"Insane+", "t4", 2 * w},       {"Beyond", "t5", std::nullopt},
             {"None", "tn", std::nullopt},
         };
         bool first_tier = true;

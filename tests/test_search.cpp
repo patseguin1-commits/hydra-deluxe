@@ -86,8 +86,8 @@ TEST_CASE("search invariants hold across the corpus and config knobs") {
 // The graph stamps each activation with frontend transfer scales at build
 // time; the details view recomputes them from the song timing on demand. The
 // two code paths share transfer_scale_between but walk to the SP end
-// separately, so this pins them together -- and with them the per-hit
-// difficulty the ms filter, hardest_ms, and the report all derive.
+// separately, so this pins them together -- and with them the ratios the
+// squeeze detail lines and eff. figures show.
 TEST_CASE("stored transfer scales match the display-layer recomputation") {
     int charts = 0, acts = 0, nonflat = 0, mismatches = 0;
 

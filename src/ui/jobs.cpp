@@ -234,9 +234,9 @@ void ReportJob::run() {
                                " songs — top 5 paths per chart";
         std::filesystem::path dbp = std::filesystem::u8path(app::db_path(uncapped_));
         std::string footer = "Generated from " + dbp.filename().u8string() +
-                             ". Squeeze timings are ms of error per hit, after "
-                             "frontend transfer scaling; 'Beyond' is past the " +
-                             std::to_string(hit_window_ms_) + " ms hit window.";
+                             ". Timing tiers match Hydra's squeeze ratings; "
+                             "'Beyond' is past the " +
+                             std::to_string(2 * hit_window_ms_) + " ms window.";
 
         write_and_open(report_html_path(uncapped_),
                        app::report::build_html(rows, subtitle, footer, w),

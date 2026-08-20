@@ -1,13 +1,10 @@
 // Domain model — the C++ port of hydra/hydata.py.
 //
 // The note/chord/path/record types the parser fills and the search produces.
-// The *string* forms here (Chord::code, Path::pathstring,
-// Activation::notationstr) are user-visible and pinned by the tests: comma-
-// grouped scores, int() truncation on ms, the exact +/- squeeze symbols and
-// [KRYBG] slot layout. Python byte-parity is deliberately broken for the
-// *verbose* forms since 1.5.0: notationstr_verbose/pathstring_verbose print
-// per-hit (transfer-scaled) squeeze ms, which hydata.py never computed. Do
-// not "fix" them back to raw offsets.
+// The *string* forms here (Chord::code, Path::pathstring/pathstring_verbose,
+// Activation::notationstr) are user-visible and pinned by the tests, so they must
+// match Python byte-for-byte: comma-grouped scores, int() truncation on ms, the
+// exact +/- squeeze symbols and [KRYBG] slot layout.
 //
 // The JSON save/load path from hydata.py is intentionally not ported — Phase 4
 // replaces it with a binary format — but Chord::code / Chord::from_code (which
@@ -231,10 +228,12 @@ struct Activation {
 
     // Frontend transfer scales, computed by the search and stored with the
     // record (blob v3; older blobs default to 1.0 = the flat-tempo identity)
-    // so difficulty stays computable without a SongTiming in hand. `pre` is
-    // measured at the plain 2*B-measure SP end and governs SqIn/SqOut
-    // feasibility; `post` at the SqIn-extended (+2 measures) end governs the
-    // backend rows, and equals `pre` when the activation has no SqIn.
+    // so the details display keeps its ratios when no SongTiming is at hand.
+    // Display-only: difficulty() and everything the search/filter/report
+    // derive stay raw gap ms. `pre` is measured at the plain 2*B-measure SP
+    // end and governs the SqIn/SqOut lines; `post` at the SqIn-extended
+    // (+2 measures) end governs the backend rows, and equals `pre` when the
+    // activation has no SqIn.
     TransferScale transfer_pre;
     TransferScale transfer_post;
 
@@ -243,12 +242,6 @@ struct Activation {
     bool is_e_critical() const;  // e_offset < kCalibrationFillWindowMs
     bool is_E0() const;
     std::optional<double> e_difficulty(bool verbose = false) const;
-
-    // One squeeze's difficulty as ms of timing error per hit: the squeeze is
-    // the joint constraint r*frontend + note > gap, so the even split
-    // gap/(1+r) is the smallest per-hit displacement that satisfies it. r is
-    // read from transfer_pre in the squeeze's direction. A W-free quantity.
-    double squeeze_difficulty(const SPSqueeze& sq) const;
     std::optional<double> difficulty() const;
     bool is_difficult() const;
 

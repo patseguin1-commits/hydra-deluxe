@@ -241,8 +241,8 @@ TEST_CASE("record blob: v3 carries transfer scales, v1/v2 still read") {
     CHECK(a2.transfer_pre.late == 1.0);
     CHECK(a2.transfer_post.early == 1.0);
     CHECK(a2.transfer_post.late == 1.0);
-    // ...so the per-hit difficulty of the 12 ms SqOut reads 6.
-    CHECK(*old2.best_path().difficulty() == doctest::Approx(6.0));
+    // ...and difficulty stays the raw 12 ms gap (scales are display-only).
+    CHECK(*old2.best_path().difficulty() == doctest::Approx(12.0));
 
     // A version 1 blob is the same layout without the trailing all-0 list.
     std::vector<uint8_t> v1(w.bytes.begin(), w.bytes.end() - 4);
