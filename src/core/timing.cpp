@@ -55,6 +55,27 @@ double MsIndex::tps_at(int64_t ticks) const {
     return tps_[i];
 }
 
+double MsIndex::ms_at_tick_f(double ticks) const {
+    // Same right-continuous section rule as at(): a tick exactly on a tempo
+    // change reads the new tempo. floor() keeps fractional ticks just below a
+    // boundary in the earlier section.
+    auto it = std::upper_bound(keys_.begin(), keys_.end(),
+                               static_cast<int64_t>(std::floor(ticks)));
+    int i = static_cast<int>(it - keys_.begin()) - 1;
+    if (i < 0) i = 0;
+    return elapsed_[i] +
+           (ticks - static_cast<double>(keys_[i])) / tps_[i] * 1000.0;
+}
+
+double MsIndex::tick_at_ms(double ms) const {
+    // Inverse of ms_at_tick_f: last section whose elapsed start <= ms, then
+    // the same slope inverted.
+    auto it = std::upper_bound(elapsed_.begin(), elapsed_.end(), ms);
+    int i = static_cast<int>(it - elapsed_.begin()) - 1;
+    if (i < 0) i = 0;
+    return static_cast<double>(keys_[i]) + (ms - elapsed_[i]) * tps_[i] / 1000.0;
+}
+
 // ---- MeasureIndex -------------------------------------------------------
 
 MeasureIndex::MeasureIndex(const std::map<int64_t, int64_t>& tpm_map,
@@ -177,6 +198,43 @@ double SongTiming::ms_per_measure_at(int64_t ticks) const {
     // then describe time just after `ticks`.
     int64_t tpm = mbt_.tpm_at(mbt_.section_at(ticks + 1));
     return static_cast<double>(tpm) / ms_.tps_at(ticks) * 1000.0;
+}
+
+double SongTiming::measures_at_tick_f(double ticks) const {
+    // Right-continuous: a tick exactly on a meter change reads the new
+    // section (section_at(ticks + 1) for integer ticks).
+    const MeasureIndex& idx = mbt_;
+    int i = idx.count() - 1;
+    while (i > 0 && static_cast<double>(idx.keys_at(i)) > ticks) --i;
+    return static_cast<double>(idx.measures_at(i)) +
+           (ticks - static_cast<double>(idx.starts_at(i))) /
+               static_cast<double>(idx.tpm_at(i));
+}
+
+double SongTiming::tick_at_measures_f(double measures) const {
+    // Inverse of measures_at_tick_f: last section whose first tick sits at or
+    // before `measures` (each section's entry position measured in its own
+    // meter), then the same slope inverted.
+    const MeasureIndex& idx = mbt_;
+    int i = idx.count() - 1;
+    auto entry = [&](int s) {
+        return static_cast<double>(idx.measures_at(s)) +
+               static_cast<double>(idx.keys_at(s) - idx.starts_at(s)) /
+                   static_cast<double>(idx.tpm_at(s));
+    };
+    while (i > 0 && entry(i) > measures) --i;
+    return static_cast<double>(idx.starts_at(i)) +
+           (measures - static_cast<double>(idx.measures_at(i))) *
+               static_cast<double>(idx.tpm_at(i));
+}
+
+double SongTiming::sp_end_ms(double act_hit_ms, int64_t end_measures) const {
+    // ms -> tick -> measure position, + the SP length in measures, and back.
+    // Every step is continuous piecewise-linear, so the composition is the
+    // exact E(h) map the transfer-scale ratio linearizes.
+    double t = ms_.tick_at_ms(act_hit_ms);
+    double m = measures_at_tick_f(t) + static_cast<double>(end_measures);
+    return ms_.ms_at_tick_f(tick_at_measures_f(m));
 }
 
 }  // namespace hydra

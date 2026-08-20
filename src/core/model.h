@@ -300,6 +300,33 @@ struct TransferRelevance {
 TransferRelevance transfer_scale_relevance(const Activation& act,
                                            const std::vector<BackendSqueeze>& backends);
 
+// ---- exact squeeze solver (display-layer) ---------------------------------
+// The transfer scale linearizes the SP-end map E(h) at one point; these
+// evaluate it exactly through SongTiming::sp_end_ms, so a displacement that
+// crosses a tempo/meter section boundary is priced correctly. All three
+// return quantities in chart ms and are display-only. They read the
+// activation's timecode ms, so call them only on restored records.
+
+// How far the SP end moves when the frontend is displaced `displaced_ms` (a
+// positive magnitude) in the squeeze's direction: early for SqOut, late for
+// SqIn. Judged at the pre-extension (2*B measures) end, like the feasibility
+// itself. Returns 0 when the activation lacks a timecode or SP meter.
+double sp_end_shift_ms(double displaced_ms, SqueezeKind kind,
+                       const Activation& act, const SongTiming& timing);
+
+// The smallest frontend displacement whose exact SP-end shift, plus the
+// note's own displacement `backend_ms`, covers `gap_ms`. Monotone, solved by
+// bisection to ~1e-3 ms over [0, 8000]; +infinity when even 8000 ms cannot
+// cover it (fall back to the linearized figure).
+double required_frontend_ms(double gap_ms, double backend_ms, SqueezeKind kind,
+                            const Activation& act, const SongTiming& timing);
+
+// The exact even split: the smallest x with x + sp_end_shift_ms(x) >= gap_ms
+// -- the solved counterpart of the linearized gap/(1+r). Same bisection and
+// +infinity convention as required_frontend_ms.
+double exact_even_split_ms(double gap_ms, SqueezeKind kind,
+                           const Activation& act, const SongTiming& timing);
+
 // A backend squeeze's raw ms mapped onto the nominal 2*W scale the ratings
 // assume. With frontend timing scaling by r at the SP end, the real combined
 // squeeze budget is squeeze_budget_ms(r, W) = W*(1+r) rather than 2*W, so a

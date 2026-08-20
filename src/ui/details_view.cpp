@@ -372,6 +372,27 @@ void render_activations_section(const Path* path, const HydraRecord& record,
                                                              : scales->pre.early;
                         std::string desc =
                             sq.description(r, W, settings.display_speed_pct);
+
+                        // The linearized split samples the transfer ratio at
+                        // one point; when the displacement itself crosses a
+                        // tempo/meter change, the exact piecewise solve lands
+                        // elsewhere. Show it when it moves the target by more
+                        // than half a millisecond.
+                        if (timing && sq.difficulty() > 0.0) {
+                            double lin = sq.difficulty() / (1.0 + r);
+                            double exact = exact_even_split_ms(
+                                sq.difficulty(), sq.kind, act, *timing);
+                            if (std::isfinite(exact) &&
+                                std::abs(exact - lin) > 0.5) {
+                                char xbuf[96];
+                                std::snprintf(xbuf, sizeof(xbuf),
+                                             "\n  exact split: %.1f ms each "
+                                             "(a tempo change is within reach)",
+                                             exact);
+                                desc += xbuf;
+                            }
+                        }
+
                         if (sq.is_difficult()) ImGui::PushStyleColor(ImGuiCol_Text, kWarningColor);
                         ImGui::PushTextWrapPos(0.0f);
                         ImGui::TextUnformatted(desc.c_str());

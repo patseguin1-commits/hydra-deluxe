@@ -4,6 +4,7 @@
 
 #include "doctest.h"
 
+#include <cmath>
 #include <cstdint>
 #include <map>
 #include <string>
@@ -319,6 +320,50 @@ TEST_CASE("field fixture: What's My Age Again? (Sync Chart) SqOut") {
     REQUIRE(stamped.difficulty().has_value());
     CHECK(*stamped.difficulty() == doctest::Approx(96.15).epsilon(1e-3));
     CHECK(stamped.is_difficult());
+}
+
+TEST_CASE("exact solver prices displacements across a tempo boundary") {
+    // 4/4 throughout; 60 BPM until tick 960, then 120. The activation at tick
+    // 1920 (ms 3000) holds 2 bars = 4 measures, ending at tick 9600 (ms
+    // 11000). An early hit up to 1000 ms stays in the 120 section (shift ==
+    // displacement); past that it crosses into 60 BPM, where a chart ms is
+    // worth half a measure-fraction -- the exact solve diverges from the
+    // boundary-sampled linearization (r == 1 here).
+    std::map<int64_t, int64_t> tpm{{0, 1920}};
+    std::map<int64_t, double> bpm{{0, 60.0}, {960, 120.0}};
+    SongTiming st(480, tpm, bpm);
+
+    Activation act;
+    act.timecode = st.timecode(1920);
+    act.sp_meter = 2;
+
+    // Inside the section: exact == linear.
+    CHECK(sp_end_shift_ms(500.0, SqueezeKind::SqOut, act, st) ==
+          doctest::Approx(500.0).epsilon(1e-9));
+    CHECK(required_frontend_ms(400.0, 100.0, SqueezeKind::SqOut, act, st) ==
+          doctest::Approx(300.0).epsilon(1e-4));
+
+    // Across the boundary: covering a 1250 ms gap takes 1500 ms of early
+    // displacement (1000 at 1:1, then 500 at 1:0.5), not the 1250 the
+    // linearized ratio predicts.
+    CHECK(sp_end_shift_ms(1500.0, SqueezeKind::SqOut, act, st) ==
+          doctest::Approx(1250.0).epsilon(1e-9));
+    CHECK(required_frontend_ms(1250.0, 0.0, SqueezeKind::SqOut, act, st) ==
+          doctest::Approx(1500.0).epsilon(1e-4));
+
+    // Exact even split of a 2400 ms gap: x + shift(x) = 2400 with the second
+    // arm kinked at 1000 -> x = 1266.67, not the linearized 1200.
+    CHECK(exact_even_split_ms(2400.0, SqueezeKind::SqOut, act, st) ==
+          doctest::Approx(2400.0 / 1.5 - 500.0 / 1.5 + 0.0)
+              .epsilon(1e-4));  // (2400 - 500) / 1.5 = 1266.666...
+
+    // A gap no displacement can cover reports +infinity.
+    CHECK(std::isinf(
+        required_frontend_ms(5000.0, 0.0, SqueezeKind::SqOut, act, st)));
+
+    // Stale activations (no timecode / meter) shift nothing.
+    Activation bare;
+    CHECK(sp_end_shift_ms(100.0, SqueezeKind::SqOut, bare, st) == 0.0);
 }
 
 TEST_CASE("per-hit difficulty: default scales halve the raw offset") {

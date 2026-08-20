@@ -36,6 +36,13 @@ public:
     // on a tempo change reads the new tempo, same rule as at()).
     double tps_at(int64_t ticks) const;
 
+    // Continuous (sub-tick) variants for the display-layer exact squeeze
+    // solver: piecewise-linear, monotone, mutually inverse, and agreeing with
+    // at() on integer ticks. NOT part of the bit-for-bit scoring surface (see
+    // the header comment) -- never use them in the graph or the engine.
+    double ms_at_tick_f(double ticks) const;
+    double tick_at_ms(double ms) const;
+
 private:
     std::vector<int64_t> keys_;
     std::vector<double> tps_;
@@ -136,6 +143,19 @@ public:
     // `ticks - 1` for the duration just before the tick. Display-layer helper
     // (frontend->SP-end squeeze scaling); not part of the scoring surface.
     double ms_per_measure_at(int64_t ticks) const;
+
+    // Continuous measure position <-> tick, and the exact (sub-tick,
+    // piecewise-composed) SP end for an activation hit at `act_hit_ms`
+    // holding SP for `end_measures` measures. All display-layer only, like
+    // ms_per_measure_at: they interpolate in doubles with no plusmeasure tick
+    // rounding, so they must never feed the graph/engine/stored records.
+    // Right-continuous at section boundaries; exact inverses of each other
+    // when meter changes land on barlines (as real charts do -- a mid-measure
+    // meter change makes the measure position jump, and these follow the
+    // section arrays through it).
+    double measures_at_tick_f(double ticks) const;
+    double tick_at_measures_f(double measures) const;
+    double sp_end_ms(double act_hit_ms, int64_t end_measures) const;
 
 private:
     int64_t tick_r_;

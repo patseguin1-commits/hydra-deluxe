@@ -117,3 +117,55 @@ TEST_CASE("timing: ms_per_measure_at reads local measure durations") {
     CHECK(flat.ms_per_measure_at(0) == doctest::Approx(2000.0));
     CHECK(flat.ms_per_measure_at(12345) == doctest::Approx(2000.0));
 }
+
+TEST_CASE("timing: continuous helpers are exact, inverse, and monotone") {
+    // The field-verified map (What's My Age Again? Sync Chart shape): 4/4,
+    // 155 -> 160 at 57600, 160 -> 157 at 67200, 157 -> 160 at 69120.
+    std::map<int64_t, int64_t> tpm{{0, 1920}};
+    std::map<int64_t, double> bpm{
+        {0, 155.0}, {57600, 160.0}, {67200, 157.0}, {69120, 160.0}};
+    hydra::SongTiming st(480, tpm, bpm);
+
+    // ms_at_tick_f agrees with the integer-tick scoring path...
+    for (int64_t tick : {int64_t(0), int64_t(57600), int64_t(67200),
+                         int64_t(68880), int64_t(69120), int64_t(90000)})
+        CHECK(st.ms_index().ms_at_tick_f(static_cast<double>(tick)) ==
+              doctest::Approx(st.timecode(tick).ms()).epsilon(1e-12));
+
+    // ...and round-trips through its inverse at fractional ticks too.
+    for (double x : {0.0, 1234.5, 57599.9, 57600.0, 68880.25, 100000.75}) {
+        double ms = st.ms_index().ms_at_tick_f(x);
+        CHECK(st.ms_index().tick_at_ms(ms) == doctest::Approx(x).epsilon(1e-9));
+    }
+
+    // sp_end_ms: monotone in the hit time, continuous across the 57600
+    // boundary, and its interior slope is the mspm ratio the linearized
+    // transfer scale samples.
+    const double h0 = st.timecode(50000).ms();
+    double prev = -1e18;
+    bool monotone = true;
+    for (double h = h0; h < h0 + 20000.0; h += 37.0) {
+        double e = st.sp_end_ms(h, 6);
+        if (e < prev) monotone = false;
+        prev = e;
+    }
+    CHECK(monotone);
+
+    const double hb = st.timecode(57600).ms();
+    CHECK(st.sp_end_ms(hb + 1e-6, 6) - st.sp_end_ms(hb - 1e-6, 6) <
+          doctest::Approx(1e-4));
+
+    // act tick 57000 sits inside the 155 section; its 6-measure end lands
+    // inside the 157 section, so the local slope is tps(155)/tps(157).
+    const double hi = st.timecode(57000).ms();
+    double slope = (st.sp_end_ms(hi + 5.0, 6) - st.sp_end_ms(hi - 5.0, 6)) / 10.0;
+    CHECK(slope == doctest::Approx(1240.0 / 1256.0).epsilon(1e-9));
+
+    // Flat tempo, on-tick activation: the continuous map reproduces the
+    // tick-rounded scoring path exactly.
+    std::map<int64_t, double> bpm120{{0, 120.0}};
+    hydra::SongTiming flat(480, tpm, bpm120);
+    hydra::Timecode tc = flat.timecode(1920);
+    CHECK(flat.sp_end_ms(tc.ms(), 4) ==
+          doctest::Approx(flat.plusmeasure(tc, 4).ms()).epsilon(1e-12));
+}
