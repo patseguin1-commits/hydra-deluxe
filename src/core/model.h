@@ -138,7 +138,16 @@ struct SPSqueeze {
     const char* type_name() const {
         return kind == SqueezeKind::SqIn ? "SqIn" : "SqOut";
     }
-    std::string description() const;
+    // The squeeze as the joint two-hit constraint it really is:
+    // r*frontend + note > gap, with the even split, the combined budget at
+    // the given hit window, the minimum song speed when the gap exceeds the
+    // budget, and (at speed_pct != 100) the per-hit requirement in real ms.
+    // `transfer_r` is the frontend transfer scale in this squeeze's direction
+    // (early for SqOut, late for SqIn), from the *pre-extension* SP end.
+    std::string description(double transfer_r, double hit_window_ms,
+                            int speed_pct) const;
+    // Fallback when no timing/scales are available: r = 1, W = 85, 100%.
+    std::string description() const { return description(1.0, 85.0, 100); }
 
     bool operator==(const SPSqueeze& o) const { return offset_ms == o.offset_ms; }
     bool operator!=(const SPSqueeze& o) const { return !(*this == o); }
@@ -233,17 +242,36 @@ struct TransferScale {
     double late = 1.0;   // r+ : late (+) frontend hits (backend squeezes)
 };
 
-// The activation's transfer scale, from its timecode, SP meter, and (for the
+// Two SP ends coexist in one activation, so two transfer scales do too:
+// `pre` is measured at the plain 2*B-measure end and governs the SqIn/SqOut
+// feasibility (the phrase note must land inside SP as it stands *before* the
+// phrase is collected); `post` is measured at the +2-measure-extended end a
+// SqIn produces and governs the backend rows, which live at the extended end.
+// Without a SqIn the two are identical.
+struct ActTransferScales {
+    TransferScale pre;
+    TransferScale post;
+};
+
+// The transfer scale between two ticks: mspm(end)/mspm(act), probed at the
+// tick (late direction) and tick-1 (early direction). nullopt when either
+// front measure duration is non-positive. Shared by the display layer and
+// the search graph so the two can't drift.
+std::optional<TransferScale> transfer_scale_between(int64_t act_tick,
+                                                    int64_t end_tick,
+                                                    const SongTiming& timing);
+
+// The activation's transfer scales, from its timecode, SP meter, and (for the
 // SqIn +2-measure extension) its sqinouts. Display-only; nullopt when the
 // activation has no timecode or sp_meter (stale record).
-std::optional<TransferScale> frontend_transfer_scale(const Activation& act,
-                                                     const SongTiming& timing);
+std::optional<ActTransferScales> frontend_transfer_scales(const Activation& act,
+                                                          const SongTiming& timing);
 
 // Which directions of the transfer scale actually matter for this activation:
-// `late` when some positive backend squeeze wants a late (+) frontend hit,
-// `early` when a note is squeezed out of SP (a sqout backend, or any SqOut in
-// sqinouts) and so wants an early (-) one. `backends` is the caller's
-// act.display_backends(), passed in so it isn't rebuilt. Display-only.
+// `late` when some positive backend squeeze or a SqIn wants a late (+)
+// frontend hit, `early` when a note is squeezed out of SP (a sqout backend,
+// or any SqOut in sqinouts) and so wants an early (-) one. `backends` is the
+// caller's act.display_backends(), passed in so it isn't rebuilt. Display-only.
 struct TransferRelevance {
     bool late = false;
     bool early = false;
@@ -251,12 +279,13 @@ struct TransferRelevance {
 TransferRelevance transfer_scale_relevance(const Activation& act,
                                            const std::vector<BackendSqueeze>& backends);
 
-// A backend squeeze's raw ms mapped onto the nominal 140ms scale the ratings
+// A backend squeeze's raw ms mapped onto the nominal 2*W scale the ratings
 // assume. With frontend timing scaling by r at the SP end, the real combined
-// squeeze budget is squeeze_budget_ms(r) = 70*(1+r) rather than 140, so a raw
-// |offset| counts for |offset| * 2 / (1+r) of the nominal budget.
+// squeeze budget is squeeze_budget_ms(r, W) = W*(1+r) rather than 2*W, so a
+// raw |offset| counts for |offset| * 2 / (1+r) of the nominal budget (a
+// W-free quantity).
 double effective_backend_ms(double offset_ms, double transfer_r);
-double squeeze_budget_ms(double transfer_r);
+double squeeze_budget_ms(double transfer_r, double hit_window_ms = 85.0);
 
 // hymisc.BACKEND_DISPLAY_WINDOW_MS: backends within this window of the
 // deactivation are worth showing/storing.

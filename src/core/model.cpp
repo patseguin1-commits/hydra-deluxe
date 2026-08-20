@@ -286,15 +286,57 @@ const ChordNote& Chord::activation_note() const {
 
 // ---- SPSqueeze ----------------------------------------------------------
 
-std::string SPSqueeze::description() const {
-    char buf[96];
-    if (kind == SqueezeKind::SqIn)
-        std::snprintf(buf, sizeof(buf),
-                      "SqIn: Note timing must be earlier than %.1fms.", timing());
-    else
-        std::snprintf(buf, sizeof(buf),
-                      "SqOut: Note timing must be later than %.1fms.", timing());
-    return buf;
+std::string SPSqueeze::description(double transfer_r, double hit_window_ms,
+                                   int speed_pct) const {
+    char buf[192];
+    const double gap = difficulty();
+
+    // No gap to cover: the note has leeway. Keep the legacy single-hit line.
+    if (gap <= 0.0) {
+        if (kind == SqueezeKind::SqIn)
+            std::snprintf(buf, sizeof(buf),
+                          "SqIn: Note timing must be earlier than %.1fms.",
+                          timing());
+        else
+            std::snprintf(buf, sizeof(buf),
+                          "SqOut: Note timing must be later than %.1fms.",
+                          timing());
+        return buf;
+    }
+
+    // The joint constraint: r*frontend + note > gap. The even split is the
+    // smallest per-hit displacement that satisfies it; the budget is the
+    // largest coverable gap at 100% speed with the given hit window.
+    const bool sqin = kind == SqueezeKind::SqIn;
+    const double per_hit = gap / (1.0 + transfer_r);
+    const double budget = squeeze_budget_ms(transfer_r, hit_window_ms);
+
+    std::string out;
+    std::snprintf(buf, sizeof(buf),
+                  "%s: needs frontend(%s)x%.3f + note(%s) > %.1f ms\n",
+                  sqin ? "SqIn" : "SqOut", sqin ? "late" : "early", transfer_r,
+                  sqin ? "early" : "late", gap);
+    out += buf;
+
+    std::snprintf(buf, sizeof(buf),
+                  "  even split: %.1f ms each; budget %.1f ms @1x (W=%.0f)",
+                  per_hit, budget, hit_window_ms);
+    out += buf;
+
+    if (gap > budget) {
+        // Clone Hero song speeds move in 5% steps; round the exact minimum up.
+        double pct = gap / budget * 100.0;
+        int need = static_cast<int>(std::ceil(pct / 5.0)) * 5;
+        std::snprintf(buf, sizeof(buf), " -> needs >=%d%% speed", need);
+        out += buf;
+    }
+
+    if (speed_pct != 100 && speed_pct > 0) {
+        std::snprintf(buf, sizeof(buf), "\n  at %d%%: %.1f ms real per hit",
+                      speed_pct, per_hit / (speed_pct / 100.0));
+        out += buf;
+    }
+    return out;
 }
 
 // ---- BackendSqueeze -----------------------------------------------------
@@ -437,24 +479,9 @@ std::string Activation::notationstr_verbose() const {
     return notationstr() + " (" + joined + ")";
 }
 
-std::optional<TransferScale> frontend_transfer_scale(const Activation& act,
-                                                     const SongTiming& timing) {
-    if (!act.timecode || !act.sp_meter) return std::nullopt;
-
-    // 2 measures per SP bar; a SqIn extends the end by one +2-measure step no
-    // matter how many SqIns the activation carries (graph.cpp applies the
-    // extension once, on the first SP backend).
-    int64_t end_measures = 2 * static_cast<int64_t>(*act.sp_meter);
-    for (const SPSqueeze& sq : act.sqinouts) {
-        if (sq.kind == SqueezeKind::SqIn) {
-            end_measures += 2;
-            break;
-        }
-    }
-
-    int64_t act_tick = act.timecode->ticks();
-    int64_t end_tick = timing.plusmeasure(*act.timecode, end_measures).ticks();
-
+std::optional<TransferScale> transfer_scale_between(int64_t act_tick,
+                                                    int64_t end_tick,
+                                                    const SongTiming& timing) {
     TransferScale scale;
     double front_late = timing.ms_per_measure_at(act_tick);
     double front_early = timing.ms_per_measure_at(act_tick - 1);
@@ -462,6 +489,35 @@ std::optional<TransferScale> frontend_transfer_scale(const Activation& act,
     scale.late = timing.ms_per_measure_at(end_tick) / front_late;
     scale.early = timing.ms_per_measure_at(end_tick - 1) / front_early;
     return scale;
+}
+
+std::optional<ActTransferScales> frontend_transfer_scales(const Activation& act,
+                                                          const SongTiming& timing) {
+    if (!act.timecode || !act.sp_meter) return std::nullopt;
+
+    // 2 measures per SP bar. The SqIn/SqOut phrase note is judged against
+    // this pre-extension end; a SqIn then extends the end for the backends by
+    // one +2-measure step no matter how many SqIns the activation carries
+    // (graph.cpp applies the extension once, on the first SP backend).
+    int64_t act_tick = act.timecode->ticks();
+    int64_t end_measures = 2 * static_cast<int64_t>(*act.sp_meter);
+    int64_t pre_tick = timing.plusmeasure(*act.timecode, end_measures).ticks();
+
+    std::optional<TransferScale> pre =
+        transfer_scale_between(act_tick, pre_tick, timing);
+    if (!pre) return std::nullopt;
+
+    ActTransferScales scales{*pre, *pre};
+    for (const SPSqueeze& sq : act.sqinouts) {
+        if (sq.kind != SqueezeKind::SqIn) continue;
+        int64_t post_tick =
+            timing.plusmeasure(*act.timecode, end_measures + 2).ticks();
+        std::optional<TransferScale> post =
+            transfer_scale_between(act_tick, post_tick, timing);
+        if (post) scales.post = *post;
+        break;
+    }
+    return scales;
 }
 
 TransferRelevance transfer_scale_relevance(const Activation& act,
@@ -472,8 +528,10 @@ TransferRelevance transfer_scale_relevance(const Activation& act,
         if (act.is_sqout_backend(bsq)) rel.early = true;
         else if (*bsq.offset_ms > 2.0) rel.late = true;
     }
-    for (const SPSqueeze& sq : act.sqinouts)
+    for (const SPSqueeze& sq : act.sqinouts) {
         if (sq.kind == SqueezeKind::SqOut) rel.early = true;
+        else rel.late = true;  // a SqIn needs a late (+) frontend hit
+    }
     return rel;
 }
 
@@ -481,8 +539,8 @@ double effective_backend_ms(double offset_ms, double transfer_r) {
     return std::abs(offset_ms) * 2.0 / (1.0 + transfer_r);
 }
 
-double squeeze_budget_ms(double transfer_r) {
-    return 70.0 * (1.0 + transfer_r);
+double squeeze_budget_ms(double transfer_r, double hit_window_ms) {
+    return hit_window_ms * (1.0 + transfer_r);
 }
 
 // ---- Path ---------------------------------------------------------------

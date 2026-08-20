@@ -230,11 +230,16 @@ void render_multsqueeze_section(const Path* path) {
     }
 }
 
-// |r - 1| below this: the frontend transfer scale is not worth a warning.
-constexpr double kTransferWarnBand = 0.05;
+// The transfer scale is shown when it is material to a listed squeeze: the
+// gap's effective size moves by more than this many ms, or the gap exceeds
+// the combined budget outright. Gating on impact (not on |r - 1|) keeps a
+// near-1 ratio visible when a large gap makes even a fraction of a percent
+// decide success.
+constexpr double kTransferImpactMs = 1.0;
 
 void render_activations_section(const Path* path, const HydraRecord& record,
-                                const SongTiming* timing) {
+                                const SongTiming* timing,
+                                const Settings& settings) {
     if (begin_section("Activations")) {
         if (!path->has_activations()) {
             ImGui::TextDisabled("None.");
@@ -277,62 +282,96 @@ void render_activations_section(const Path* path, const HydraRecord& record,
 
                     // SP length is measure-based, so frontend timing error
                     // reaches the SP end scaled by the ratio of local measure
-                    // durations -- warn when that ratio breaks the 1:1 the
-                    // raw backend ms imply. Late (+) and early (-) hits can
-                    // scale differently when the activation or SP end sits
-                    // exactly on a meter/tempo change.
-                    std::optional<TransferScale> scale;
-                    if (timing) scale = frontend_transfer_scale(act, *timing);
-                    bool late_warns = scale && std::abs(scale->late - 1.0) > kTransferWarnBand;
-                    bool early_warns = scale && std::abs(scale->early - 1.0) > kTransferWarnBand;
-                    if (scale) {
-                        TransferRelevance rel = transfer_scale_relevance(act, backends);
-                        bool show_late = late_warns && rel.late;
-                        bool show_early = early_warns && rel.early;
-                        if (show_late || show_early) {
-                            char buf[192];
-                            if (show_late && show_early &&
-                                std::abs(scale->late - scale->early) > 0.005) {
-                                std::snprintf(buf, sizeof(buf),
-                                             "Frontend timing scales x%.2f (late) / x%.2f "
-                                             "(early) at the SP end.",
-                                             scale->late, scale->early);
-                            } else if (show_late && show_early) {
-                                // Both directions apply and are (nearly) equal.
-                                std::snprintf(buf, sizeof(buf),
-                                             "Frontend timing scales x%.2f to the SP end: "
-                                             "10ms at the frontend moves the SP end %s%.1fms.",
-                                             scale->late,
-                                             scale->late < 1.0 ? "only " : "",
-                                             10.0 * scale->late);
-                            } else {
-                                double r = show_late ? scale->late : scale->early;
-                                std::snprintf(buf, sizeof(buf),
-                                             "Frontend timing scales x%.2f to the SP end: "
-                                             "%s at the frontend moves the SP end %s%s%.1fms.",
-                                             r,
-                                             show_late ? "+10ms (late)" : "-10ms (early)",
-                                             r < 1.0 ? "only " : "",
-                                             show_late ? "+" : "-", 10.0 * r);
-                            }
-                            {
-                                WarnColor warn;
-                                // Wrap at the panel edge -- the details child
-                                // can be narrower than the line.
-                                ImGui::PushTextWrapPos(0.0f);
-                                ImGui::TextUnformatted(buf);
-                                ImGui::PopTextWrapPos();
-                            }
-                            hint("SP length is measured in measures, so frontend timing\n"
-                                 "reaches the SP end scaled by the measure-length ratio.\n"
-                                 "Early and late hits scale differently when the activation\n"
-                                 "or SP end sits exactly on a signature or tempo change.");
+                    // durations -- warn when that ratio materially changes a
+                    // listed squeeze. Late (+) and early (-) hits can scale
+                    // differently when the activation or SP end sits exactly
+                    // on a meter/tempo change; the phrase-note squeezes use
+                    // the pre-extension end, the backend rows the extended
+                    // one (they differ only when a SqIn is present).
+                    const double W = static_cast<double>(settings.hit_window_ms);
+                    std::optional<ActTransferScales> scales;
+                    if (timing) scales = frontend_transfer_scales(act, *timing);
+                    auto is_material = [&](double gap_ms, double r) {
+                        double gap = std::abs(gap_ms);
+                        return std::abs(effective_backend_ms(gap, r) - gap) >
+                                   kTransferImpactMs ||
+                               gap > squeeze_budget_ms(r, W);
+                    };
+                    bool late_warns = false;
+                    bool early_warns = false;
+                    if (scales) {
+                        for (const BackendSqueeze& bsq : backends) {
+                            if (!bsq.offset_ms) continue;
+                            if (act.is_sqout_backend(bsq))
+                                early_warns |= is_material(*bsq.offset_ms,
+                                                           scales->post.early);
+                            else if (*bsq.offset_ms > 2.0)
+                                late_warns |= is_material(*bsq.offset_ms,
+                                                          scales->post.late);
                         }
+                        for (const SPSqueeze& sq : act.sqinouts) {
+                            if (sq.kind == SqueezeKind::SqOut)
+                                early_warns |= is_material(sq.difficulty(),
+                                                           scales->pre.early);
+                            else
+                                late_warns |= is_material(sq.difficulty(),
+                                                          scales->pre.late);
+                        }
+                    }
+                    if (scales && (late_warns || early_warns)) {
+                        bool show_late = late_warns;
+                        bool show_early = early_warns;
+                        const TransferScale& scale = scales->post;
+                        char buf[192];
+                        if (show_late && show_early &&
+                            std::abs(scale.late - scale.early) > 0.005) {
+                            std::snprintf(buf, sizeof(buf),
+                                         "Frontend timing scales x%.2f (late) / x%.2f "
+                                         "(early) at the SP end.",
+                                         scale.late, scale.early);
+                        } else if (show_late && show_early) {
+                            // Both directions apply and are (nearly) equal.
+                            std::snprintf(buf, sizeof(buf),
+                                         "Frontend timing scales x%.2f to the SP end: "
+                                         "10ms at the frontend moves the SP end %s%.1fms.",
+                                         scale.late,
+                                         scale.late < 1.0 ? "only " : "",
+                                         10.0 * scale.late);
+                        } else {
+                            double r = show_late ? scale.late : scale.early;
+                            std::snprintf(buf, sizeof(buf),
+                                         "Frontend timing scales x%.2f to the SP end: "
+                                         "%s at the frontend moves the SP end %s%s%.1fms.",
+                                         r,
+                                         show_late ? "+10ms (late)" : "-10ms (early)",
+                                         r < 1.0 ? "only " : "",
+                                         show_late ? "+" : "-", 10.0 * r);
+                        }
+                        {
+                            WarnColor warn;
+                            // Wrap at the panel edge -- the details child
+                            // can be narrower than the line.
+                            ImGui::PushTextWrapPos(0.0f);
+                            ImGui::TextUnformatted(buf);
+                            ImGui::PopTextWrapPos();
+                        }
+                        hint("SP length is measured in measures, so frontend timing\n"
+                             "reaches the SP end scaled by the measure-length ratio.\n"
+                             "Early and late hits scale differently when the activation\n"
+                             "or SP end sits exactly on a signature or tempo change.");
                     }
 
                     for (const SPSqueeze& sq : act.sqinouts) {
+                        double r = 1.0;
+                        if (scales)
+                            r = sq.kind == SqueezeKind::SqIn ? scales->pre.late
+                                                             : scales->pre.early;
+                        std::string desc =
+                            sq.description(r, W, settings.display_speed_pct);
                         if (sq.is_difficult()) ImGui::PushStyleColor(ImGuiCol_Text, kWarningColor);
-                        ImGui::TextUnformatted(sq.description().c_str());
+                        ImGui::PushTextWrapPos(0.0f);
+                        ImGui::TextUnformatted(desc.c_str());
+                        ImGui::PopTextWrapPos();
                         if (sq.is_difficult()) ImGui::PopStyleColor();
                     }
 
@@ -358,19 +397,21 @@ void render_activations_section(const Path* path, const HydraRecord& record,
 
                                 // The scale that governs this row: sqout rows
                                 // need an early frontend, positive rows a late
-                                // one. eff maps the row's raw ms onto the
-                                // nominal 140ms budget the ratings assume
-                                // (the real combined budget is 70*(1+r)).
+                                // one. Both live at the (possibly SqIn-
+                                // extended) SP end, so they read `post`. eff
+                                // maps the row's raw ms onto the nominal 2*W
+                                // budget the ratings assume (the real combined
+                                // budget is W*(1+r)).
                                 std::optional<double> eff;
                                 double row_r = 1.0;
-                                if (scale && bsq.offset_ms) {
+                                if (scales && bsq.offset_ms) {
                                     bool applies = false;
                                     if (squeezed) {
-                                        row_r = scale->early;
-                                        applies = early_warns;
+                                        row_r = scales->post.early;
+                                        applies = is_material(*bsq.offset_ms, row_r);
                                     } else if (*bsq.offset_ms > 2.0) {
-                                        row_r = scale->late;
-                                        applies = late_warns;
+                                        row_r = scales->post.late;
+                                        applies = is_material(*bsq.offset_ms, row_r);
                                     }
                                     if (applies)
                                         eff = effective_backend_ms(*bsq.offset_ms, row_r);
@@ -381,10 +422,11 @@ void render_activations_section(const Path* path, const HydraRecord& record,
                                 ImGui::Text("%.1f", bsq.offset_ms.value_or(0.0));
                                 if (eff && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
                                     ImGui::SetTooltip(
-                                        "Effectively %.1fms on the normal 140ms scale:\n"
+                                        "Effectively %.1fms on the normal %.0fms scale:\n"
                                         "frontend timing scales x%.2f here, so the combined\n"
-                                        "squeeze budget is %.0fms, not 140ms.",
-                                        *eff, row_r, squeeze_budget_ms(row_r));
+                                        "squeeze budget is %.0fms, not %.0fms.",
+                                        *eff, 2.0 * W, row_r,
+                                        squeeze_budget_ms(row_r, W), 2.0 * W);
                                 ImGui::TableSetColumnIndex(1);
                                 ImGui::TextUnformatted(bsq.chord.notationstr().c_str());
                                 ImGui::TableSetColumnIndex(2);
@@ -472,7 +514,7 @@ void render_score_breakdown_section(const Path* path) {
 }
 
 void render_path_details(const Path* path, const HydraRecord& record,
-                         const SongTiming* timing) {
+                         const SongTiming* timing, const Settings& settings) {
     static double copied_at = -1.0;
     ImGui::PushFont(nullptr, 0.0f);  // default font for the button, like Python's MainFont
     if (ImGui::Button("Copy path string", ImVec2(px(180), px(30)))) {
@@ -488,7 +530,7 @@ void render_path_details(const Path* path, const HydraRecord& record,
     ImGui::Spacing();
 
     render_multsqueeze_section(path);
-    render_activations_section(path, record, timing);
+    render_activations_section(path, record, timing, settings);
     render_score_breakdown_section(path);
 }
 
@@ -627,7 +669,8 @@ void render_path_panel(AppState& app, const Path*& selected_path) {
     ImGui::BeginChild("pathdetails", ImVec2(0, 0), ImGuiChildFlags_Borders);
     if (selected_path)
         render_path_details(selected_path, *app.viewed_record,
-                           app.viewed_timing ? &*app.viewed_timing : nullptr);
+                           app.viewed_timing ? &*app.viewed_timing : nullptr,
+                           app.settings);
     ImGui::EndChild();
 }
 
