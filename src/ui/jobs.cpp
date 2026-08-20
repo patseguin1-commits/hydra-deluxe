@@ -211,16 +211,21 @@ bool report_file_exists(bool uncapped) {
     return GetFileAttributesW(report_html_path(uncapped).c_str()) != INVALID_FILE_ATTRIBUTES;
 }
 
-ReportJob::ReportJob(store::RecordStore& store, bool uncapped, bool open_when_done)
-    : store_(store), uncapped_(uncapped), open_when_done_(open_when_done) {}
+ReportJob::ReportJob(store::RecordStore& store, bool uncapped, bool open_when_done,
+                     int hit_window_ms)
+    : store_(store),
+      uncapped_(uncapped),
+      open_when_done_(open_when_done),
+      hit_window_ms_(hit_window_ms) {}
 
 void ReportJob::start() { spawn([this] { run(); }); }
 
 void ReportJob::run() {
     run_guarded([this] {
+        const double w = static_cast<double>(hit_window_ms_);
         auto [songs, records] = store_.counts();
         std::vector<app::report::ReportRow> rows =
-            app::report::collect_rows(store_, 5, uncapped_);
+            app::report::collect_rows(store_, 5, uncapped_, w);
         if (rows.empty()) throw std::runtime_error("no records stored yet");
 
         // Same page framing as the hydra_report CLI's defaults.
@@ -229,11 +234,12 @@ void ReportJob::run() {
                                " songs — top 5 paths per chart";
         std::filesystem::path dbp = std::filesystem::u8path(app::db_path(uncapped_));
         std::string footer = "Generated from " + dbp.filename().u8string() +
-                             ". Timing tiers match Hydra's squeeze ratings; "
-                             "'Beyond' is past the stock 140 ms window.";
+                             ". Squeeze timings are ms of error per hit, after "
+                             "frontend transfer scaling; 'Beyond' is past the " +
+                             std::to_string(hit_window_ms_) + " ms hit window.";
 
         write_and_open(report_html_path(uncapped_),
-                       app::report::build_html(rows, subtitle, footer),
+                       app::report::build_html(rows, subtitle, footer, w),
                        open_when_done_);
         return true;
     });

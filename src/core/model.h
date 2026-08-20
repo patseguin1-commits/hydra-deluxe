@@ -173,7 +173,10 @@ struct BackendSqueeze {
     std::optional<double> offset_ms;
 
     bool operator==(const BackendSqueeze& o) const;
-    std::string summarystr() const;
+    // Rating label. The outer +/-W edges come from the hit window; the inner
+    // -10/3/10 edges are absolute (they encode leeway/near-deact semantics,
+    // not the window).
+    std::string summarystr(double hit_window_ms = 85.0) const;
 };
 
 // Multiplier squeeze. Construction validates the chord+combo and throws

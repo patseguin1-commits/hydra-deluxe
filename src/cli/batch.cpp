@@ -98,7 +98,7 @@ int main(int argc, char** argv) {
     std::printf("Depth      : %s %d\n", settings.depth_mode == 0 ? "scores" : "points",
                 settings.depth_value);
     if (settings.mslimit_enabled)
-        std::printf("Timing cap : %d ms\n", settings.mslimit_value);
+        std::printf("Timing cap : %d ms/hit\n", settings.mslimit_value);
     else
         std::printf("Timing cap : none\n");
     std::printf("Squeeze win: %d ms\n", static_cast<int>(hydra::kSqueezeWindowMs));

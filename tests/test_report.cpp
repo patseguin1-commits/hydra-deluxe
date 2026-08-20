@@ -84,3 +84,46 @@ TEST_CASE("report page embeds every stored record (capped)") {
 TEST_CASE("report page embeds every stored record (uncapped)") {
     check_edition(true);
 }
+
+TEST_CASE("tier_for: W-derived per-hit bands") {
+    using report::tier_for;
+
+    // Default window 85: 1 / 21.25 / 42.5 / 63.75 / 85.
+    CHECK(tier_for(std::nullopt).first == "None");
+    CHECK(tier_for(0.5).first == "Normal");
+    CHECK(tier_for(1.0).first == "Hard");
+    CHECK(tier_for(21.24).first == "Hard");
+    CHECK(tier_for(21.25).first == "Extreme");
+    CHECK(tier_for(42.5).first == "Insane");
+    CHECK(tier_for(63.75).first == "Insane+");
+    CHECK(tier_for(84.9).first == "Insane+");
+    CHECK(tier_for(85.0).first == "Beyond");
+    CHECK(tier_for(85.0).second == "t5");
+
+    // A non-default window moves every band except the 1 ms Normal floor.
+    CHECK(tier_for(21.25, 70.0).first == "Extreme");
+    CHECK(tier_for(17.4, 70.0).first == "Hard");
+    CHECK(tier_for(17.5, 70.0).first == "Extreme");
+    CHECK(tier_for(70.0, 70.0).first == "Beyond");
+    CHECK(tier_for(0.5, 70.0).first == "Normal");
+}
+
+TEST_CASE("report payload carries the hit window and the tier table") {
+    // No store needed: an empty row list still embeds the metadata.
+    std::string html =
+        report::build_html({}, "sub", "foot", /*hit_window_ms=*/85.0);
+    CHECK(html.find("\"hit_window\":85.0") != std::string::npos);
+    CHECK(html.find("\"tiers\":[") != std::string::npos);
+    CHECK(html.find("{\"name\":\"Normal\",\"tok\":\"t0\",\"cutoff\":1.0}") !=
+          std::string::npos);
+    CHECK(html.find("{\"name\":\"Insane+\",\"tok\":\"t4\",\"cutoff\":85.0}") !=
+          std::string::npos);
+    CHECK(html.find("{\"name\":\"Beyond\",\"tok\":\"t5\",\"cutoff\":null}") !=
+          std::string::npos);
+    CHECK(html.find("{\"name\":\"None\",\"tok\":\"tn\",\"cutoff\":null}") !=
+          std::string::npos);
+    CHECK(html.find("\"rows\":[]") != std::string::npos);
+
+    // The dropdown is payload-built; no hardcoded band strings remain.
+    CHECK(html.find("Beyond 140ms") == std::string::npos);
+}

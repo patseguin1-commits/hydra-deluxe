@@ -52,11 +52,17 @@ int main(int argc, char** argv) {
         }
     }
 
+    // The hit window drives the timing-tier bands; read it from the same INI
+    // the GUI writes so the two report entry points agree.
+    const int hit_window_ms =
+        hydra::app::Settings::load(uncapped).hit_window_ms;
+    const double w = static_cast<double>(hit_window_ms);
+
     std::string db = dbpath ? *dbpath : hydra::app::db_path(uncapped);
     hydra::store::RecordStore store(db, uncapped);
     auto [songs, records] = store.counts();
     std::vector<hydra::app::report::ReportRow> rows =
-        hydra::app::report::collect_rows(store, max_paths, uncapped);
+        hydra::app::report::collect_rows(store, max_paths, uncapped, w);
     store.close();
 
     if (rows.empty()) {
@@ -71,8 +77,9 @@ int main(int argc, char** argv) {
                            hydra::group_thousands(songs) + " songs — " + shown;
     std::string dbname = std::filesystem::u8path(db).filename().u8string();
     std::string footer = "Generated from " + dbname +
-                         ". Timing tiers match Hydra's squeeze ratings; "
-                         "'Beyond' is past the stock 140 ms window.";
+                         ". Squeeze timings are ms of error per hit, after "
+                         "frontend transfer scaling; 'Beyond' is past the " +
+                         std::to_string(hit_window_ms) + " ms hit window.";
 
     // Make the folder rather than throwing away the work: collecting the rows
     // means inflating every stored record, which is the slow part.
@@ -85,7 +92,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "Cannot write %s\n", out.c_str());
         return 1;
     }
-    f << hydra::app::report::build_html(rows, subtitle, footer);
+    f << hydra::app::report::build_html(rows, subtitle, footer, w);
     f.close();
 
     std::printf("Wrote %s path rows to %s\n", hydra::group_thousands(

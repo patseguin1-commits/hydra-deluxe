@@ -180,7 +180,9 @@ bool report_file_exists(bool uncapped);
 // it runs off the render thread like every other job.
 class ReportJob : public ResultJobBase {
 public:
-    ReportJob(store::RecordStore& store, bool uncapped, bool open_when_done);
+    // hit_window_ms feeds the page's timing-tier bands (settings.hit_window_ms).
+    ReportJob(store::RecordStore& store, bool uncapped, bool open_when_done,
+              int hit_window_ms = 85);
     ~ReportJob() { shutdown(); }
 
     void start();
@@ -191,6 +193,7 @@ private:
     store::RecordStore& store_;
     bool uncapped_;
     bool open_when_done_;
+    int hit_window_ms_;
 };
 
 // ---- AnalyzeJob -------------------------------------------------------

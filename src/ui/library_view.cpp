@@ -471,7 +471,8 @@ void render_batch_modal(AppState& app) {
         if (!app.report_started && !app.batch_job->is_cancelled()) {
             app.report_started = true;
             app.report_job = std::make_unique<ReportJob>(*app.store, app.settings.uncapped,
-                                                         app.settings.auto_open_report);
+                                                         app.settings.auto_open_report,
+                                                         app.settings.hit_window_ms);
             app.report_job->start();
         }
         if (app.report_job && !app.report_job->finished()) {

@@ -347,19 +347,20 @@ bool BackendSqueeze::operator==(const BackendSqueeze& o) const {
            offset_ms == o.offset_ms;
 }
 
-std::string BackendSqueeze::summarystr() const {
+std::string BackendSqueeze::summarystr(double hit_window_ms) const {
     double off = offset_ms.value_or(0.0);
+    const double w = hit_window_ms;
     if (is_sp) {
-        if (off < -70) return "Insane SqOut";
+        if (off < -w) return "Insane SqOut";
         if (off < -10) return "Hard SqOut";
         if (off < 10) return "Standard SqOut";
-        if (off < 70) return "Easy SqOut";
+        if (off < w) return "Easy SqOut";
         return "Free SqOut";
     }
-    if (off < -70) return "Free";
+    if (off < -w) return "Free";
     if (off < -10) return "Easy";
     if (off < 3) return "Standard";
-    if (off < 70) return "Hard (uncounted)";
+    if (off < w) return "Hard (uncounted)";
     return "Insane (uncounted)";
 }
 

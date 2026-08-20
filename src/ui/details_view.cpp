@@ -99,7 +99,7 @@ void render_record_status(AppState& app, float width) {
         ImGui::Text("Best score:  %s", group_thousands(rec.best_path().totalscore()).c_str());
         ImGui::Text("Paths kept:  %d", (int)rec.all_paths().size());
         if (rec.ms_limit)
-            ImGui::Text("Limit timings:  %d ms", (int)*rec.ms_limit);
+            ImGui::Text("Limit timings:  %d ms/hit", (int)*rec.ms_limit);
         else
             ImGui::TextUnformatted("Limit timings:  off");
         if (kUncapped && rec.sp_cap) ImGui::Text("SP meter:  %d bars", *rec.sp_cap);
@@ -147,8 +147,12 @@ void render_controls(AppState& app) {
     ImGui::SameLine();
     // "mslimit_mstext" binds disabled_text ((50,50,50), same gray as the
     // InputInt's own disabled Text color) whenever mslimit is unchecked.
-    ImGui::TextUnformatted("ms");
+    ImGui::TextUnformatted("ms/hit");
     end_disabled_input(mslimit_disabled);
+    hint("Extra paths are only kept when their hardest squeeze needs at\n"
+         "most this many milliseconds of timing error per hit. Both hits\n"
+         "of a squeeze share the load, and frontend timing is scaled by\n"
+         "the transfer ratio before it counts.");
 
     // Uncapped edition only: a manual SP meter ceiling in bars. Unchecked runs
     // the auto-settling ladder (default); checked forces the given cap, and the
@@ -432,7 +436,7 @@ void render_activations_section(const Path* path, const HydraRecord& record,
                                 ImGui::TableSetColumnIndex(2);
                                 ImGui::Text("%d", squeezed ? bsq.sqout_points : bsq.points);
                                 ImGui::TableSetColumnIndex(3);
-                                std::string text = bsq.summarystr();
+                                std::string text = bsq.summarystr(W);
                                 if (eff) {
                                     char effbuf[32];
                                     std::snprintf(effbuf, sizeof(effbuf), " (eff. %.1fms)",
@@ -643,8 +647,9 @@ void render_path_panel(AppState& app, const Path*& selected_path) {
             } else if (tier == 2) {
                 std::string label = "More Paths";
                 if (app.viewed_record->ms_limit)
-                    label += " (Limit timings: " + std::to_string(*app.viewed_record->ms_limit) +
-                             " ms)";
+                    label += " (Limit timings: " +
+                             std::to_string((int)*app.viewed_record->ms_limit) +
+                             " ms/hit)";
                 ImGui::SeparatorText(label.c_str());
             }
             current_score = p->totalscore();

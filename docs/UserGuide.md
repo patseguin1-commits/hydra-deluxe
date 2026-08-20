@@ -90,9 +90,9 @@ Note that the more extra paths are allowed, the longer analysis will take, thoug
 There are two depth modes. You can keep some extra paths based on a certain number of `scores` (i.e. "the next best score under optimal") or a certain amount of `points` (i.e. "paths that are within 2000 points of optimal").
 
 #### Limit timings
-When enabled, extra paths are only kept if their hardest required squeeze is within this many milliseconds — useful if you want alternates you can realistically hit. Lower (or negative) values demand more slack. The limit a record was analyzed with is shown above its path list.
+When enabled, extra paths are only kept if their hardest required squeeze is within this many milliseconds *per hit* — useful if you want alternates you can realistically hit. Lower (or negative) values demand more slack. The limit a record was analyzed with is shown above its path list.
 
-Note: the limit compares raw squeeze milliseconds, measured at the SP end. It does not account for frontend timing scaling (see the note under Backends below), so where an activation shows a scale warning, a kept path can be somewhat harder to execute than its listed milliseconds suggest.
+The limit is measured per hit: a squeeze is a joint constraint on two hits (the activation and the squeezed note), so both hits share the required displacement, and frontend timing is scaled by the transfer ratio (see the note under Backends below) before it counts. A kept path is therefore realistically as hard as its listed milliseconds, even across tempo and time-signature changes.
 
 #### SP cap (Uncapped edition only)
 Forces the Star Power meter ceiling to a specific number of bars instead of letting Hydra raise it automatically until the score settles.
@@ -132,9 +132,13 @@ Backends: The notes surrounding the end of Star Power for this activation. There
 
 Perform a backend squeeze by hitting the `0ms` note early, so that it lands during Star Power.
 
-The backends have a (made up by me) rating that just conveys how difficult it would be to fit that note into Star Power. If you're interested in double backend squeezes, look here for notes that are in the `3ms` to `70ms` range. Or even higher if you're crazy. Whether these double backends are actually possible depends on some details that aren't considered by Hydra yet...
+The backends have a (made up by me) rating that just conveys how difficult it would be to fit that note into Star Power. If you're interested in double backend squeezes, look here for notes that are in the `3ms` to `85ms` range (the upper edge follows the hit-window setting). Or even higher if you're crazy. Whether these double backends are actually possible depends on some details that aren't considered by Hydra yet...
 
-One important caveat: Star Power length is measured in measures, not milliseconds. If the SP end falls where measures last a different amount of time than at the activation point (a different time signature and/or tempo), frontend timing only partially transfers to the SP end — hitting the activation 50ms late might move the SP end only 25ms. When this matters, the activation details show a scale warning (e.g. `x0.51`), and affected backend rows show an effective timing (`eff.`) that puts the real difficulty back on the normal 140ms scale. Late and early frontend hits can even scale differently, when the activation or the SP end sits exactly on a signature or tempo change.
+One important caveat: Star Power length is measured in measures, not milliseconds. If the SP end falls where measures last a different amount of time than at the activation point (a different time signature and/or tempo), frontend timing only partially transfers to the SP end — hitting the activation 50ms late might move the SP end only 25ms. When this matters, the activation details show a scale warning (e.g. `x0.51`), and affected backend rows show an effective timing (`eff.`) that puts the real difficulty back on the nominal two-hit scale (twice the hit window). The warning appears whenever the scaling is material to a listed squeeze — even a ratio within a fraction of a percent of 1.0 shows up when a large gap makes it decide success. Late and early frontend hits can even scale differently, when the activation or the SP end sits exactly on a signature or tempo change.
+
+SqIn and SqOut lines spell the squeeze out as the joint constraint it really is: `needs frontend(early)x0.987 + note(late) > 191.1 ms`, with the even per-hit split, the combined budget at the current hit window, the minimum song speed when the gap exceeds the budget, and (when a display speed other than 100% is set) the per-hit requirement in real milliseconds at that speed.
+
+Two INI settings feed these displays (`hydra_settings.ini`, no UI control yet): `hit_window_ms` (default 85 — the registrable Clone Hero Pro Drums window per side) and `display_speed_pct` (default 100).
 
 #### Score breakdown
 

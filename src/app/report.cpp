@@ -190,13 +190,6 @@ footer { color: var(--muted); font-size: 12px; }
     <input type="search" id="q" placeholder="Search song, artist, charter, or path notation">
     <select id="tier">
       <option value="">All timing tiers</option>
-      <option value="Normal">Normal</option>
-      <option value="Hard">Hard</option>
-      <option value="Extreme">Extreme</option>
-      <option value="Insane">Insane</option>
-      <option value="Insane+">Insane+</option>
-      <option value="Beyond">Beyond 140ms</option>
-      <option value="None">No squeezes</option>
     </select>
     <label class="toggle"><input type="checkbox" id="bestonly" checked> Best path only</label>
     <span class="count" id="count"></span>
@@ -215,7 +208,22 @@ footer { color: var(--muted); font-size: 12px; }
 
 <script id="data" type="application/json">__DATA__</script>
 <script>
-const ROWS = JSON.parse(document.getElementById('data').textContent);
+const DATA = JSON.parse(document.getElementById('data').textContent);
+const ROWS = DATA.rows;
+const HIT_WINDOW = DATA.hit_window;
+
+// The tier dropdown mirrors the bands the rows were labeled with.
+{
+  const sel = document.getElementById('tier');
+  for (const t of DATA.tiers) {
+    const o = document.createElement('option');
+    o.value = t.name;
+    o.textContent = t.name === 'Beyond' ? 'Beyond ' + HIT_WINDOW + ' ms/hit'
+                  : t.name === 'None' ? 'No squeezes'
+                  : t.name;
+    sel.appendChild(o);
+  }
+}
 
 const COLS = [
   {k:'song',    t:'Song',     num:false},
@@ -225,7 +233,7 @@ const COLS = [
   {k:'score',   t:'Score',    num:true},
   {k:'acts',    t:'Acts',     num:true},
   {k:'skip',    t:'Max skip', num:true},
-  {k:'ms',      t:'Hardest ms', num:true},
+  {k:'ms',      t:'ms/hit',   num:true},
   {k:'tier',    t:'Timing',   num:false},
   {k:'efill',   t:'Cal fill', num:true},
   {k:'mult',    t:'Avg mult', num:true},
@@ -382,13 +390,13 @@ function renderStats(rows) {
   const withMs = rows.filter(r => r.ms !== null && r.ms !== undefined);
   const tightest = withMs.length ? Math.max(...withMs.map(r => r.ms)) : null;
   const maxSkip = rows.length ? Math.max(...rows.map(r => r.skip)) : 0;
-  const beyond = rows.filter(r => r.ms !== null && r.ms >= 140).length;
+  const beyond = rows.filter(r => r.ms !== null && r.ms >= HIT_WINDOW).length;
 
   const stats = [
     ['Charts', new Set(best.map(r => r.song + r.artist)).size.toLocaleString()],
     ['Paths shown', rows.length.toLocaleString()],
-    ['Tightest squeeze', tightest === null ? '—' : tightest.toFixed(1) + ' ms'],
-    ['Past 140 ms', beyond.toLocaleString()],
+    ['Tightest squeeze', tightest === null ? '—' : tightest.toFixed(1) + ' ms/hit'],
+    ['Past ' + HIT_WINDOW + ' ms/hit', beyond.toLocaleString()],
     ['Highest skip', maxSkip],
   ];
 
@@ -479,18 +487,20 @@ std::string plain(const std::string& text) {
     return out.substr(a, b - a + 1);
 }
 
-std::pair<std::string, std::string> tier_for(const std::optional<double>& ms) {
+std::pair<std::string, std::string> tier_for(const std::optional<double>& ms,
+                                             double hit_window_ms) {
+    const double w = hit_window_ms;
     if (!ms) return {"None", "tn"};
-    if (*ms < 2) return {"Normal", "t0"};
-    if (*ms < 35) return {"Hard", "t1"};
-    if (*ms < 70) return {"Extreme", "t2"};
-    if (*ms < 105) return {"Insane", "t3"};
-    if (*ms < 140) return {"Insane+", "t4"};
+    if (*ms < 1) return {"Normal", "t0"};
+    if (*ms < w / 4) return {"Hard", "t1"};
+    if (*ms < w / 2) return {"Extreme", "t2"};
+    if (*ms < 3 * w / 4) return {"Insane", "t3"};
+    if (*ms < w) return {"Insane+", "t4"};
     return {"Beyond", "t5"};
 }
 
 std::vector<ReportRow> collect_rows(store::RecordStore& store, int64_t max_paths,
-                                    bool uncapped) {
+                                    bool uncapped, double hit_window_ms) {
     std::vector<ReportRow> rows;
     std::string current = store::current_record_version(uncapped);
 
@@ -509,7 +519,7 @@ std::vector<ReportRow> collect_rows(store::RecordStore& store, int64_t max_paths
         for (int64_t idx = 0; idx < shown; ++idx) {
             const Path* path = paths[static_cast<size_t>(idx)];
             store::PathSummary s = store::summarize_path(*path);
-            auto [label, token] = tier_for(s.hardest_ms);
+            auto [label, token] = tier_for(s.hardest_ms, hit_window_ms);
 
             ReportRow row;
             row.song = plain(meta.ref_name);
@@ -541,12 +551,37 @@ std::vector<ReportRow> collect_rows(store::RecordStore& store, int64_t max_paths
 }
 
 std::string build_html(const std::vector<ReportRow>& rows, const std::string& subtitle,
-                       const std::string& footer) {
-    // json.dumps(rows, separators=(',', ':')) with the row dicts' insertion
-    // order, then the "don't close our own <script>" guard.
+                       const std::string& footer, double hit_window_ms) {
+    // The payload: {hit_window, tiers, rows}. The page builds its tier
+    // dropdown and the stats tiles from hit_window/tiers, so the embedded UI
+    // can never drift from the bands the rows were labeled with.
     std::string data;
-    data.reserve(rows.size() * 160 + 2);
-    data.push_back('[');
+    data.reserve(rows.size() * 160 + 256);
+    data += "{\"hit_window\":" + py_repr(hit_window_ms);
+    data += ",\"tiers\":[";
+    {
+        const double w = hit_window_ms;
+        const struct { const char* name; const char* tok;
+                       std::optional<double> cutoff; } tiers[] = {
+            {"Normal", "t0", 1.0},          {"Hard", "t1", w / 4},
+            {"Extreme", "t2", w / 2},       {"Insane", "t3", 3 * w / 4},
+            {"Insane+", "t4", w},           {"Beyond", "t5", std::nullopt},
+            {"None", "tn", std::nullopt},
+        };
+        bool first_tier = true;
+        for (const auto& t : tiers) {
+            if (!first_tier) data.push_back(',');
+            first_tier = false;
+            data += "{\"name\":";
+            json_escape_into(data, t.name);
+            data += ",\"tok\":\"";
+            data += t.tok;
+            data += "\",\"cutoff\":" +
+                    (t.cutoff ? py_repr(*t.cutoff) : std::string("null"));
+            data.push_back('}');
+        }
+    }
+    data += "],\"rows\":[";
     bool first_row = true;
     for (const ReportRow& r : rows) {
         if (!first_row) data.push_back(',');
@@ -579,7 +614,7 @@ std::string build_html(const std::vector<ReportRow>& rows, const std::string& su
         data += ",\"notes\":" + std::to_string(r.notes);
         data.push_back('}');
     }
-    data.push_back(']');
+    data += "]}";
     return html::render_page(kPage, std::move(data), subtitle, footer);
 }
 
