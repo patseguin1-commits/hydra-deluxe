@@ -1,10 +1,13 @@
 // Domain model — the C++ port of hydra/hydata.py.
 //
 // The note/chord/path/record types the parser fills and the search produces.
-// The *string* forms here (Chord::code, Path::pathstring/pathstring_verbose,
-// Activation::notationstr) are user-visible and pinned by the tests, so they must
-// match Python byte-for-byte: comma-grouped scores, int() truncation on ms, the
-// exact +/- squeeze symbols and [KRYBG] slot layout.
+// The *string* forms here (Chord::code, Path::pathstring,
+// Activation::notationstr) are user-visible and pinned by the tests: comma-
+// grouped scores, int() truncation on ms, the exact +/- squeeze symbols and
+// [KRYBG] slot layout. Python byte-parity is deliberately broken for the
+// *verbose* forms since 1.5.0: notationstr_verbose/pathstring_verbose print
+// per-hit (transfer-scaled) squeeze ms, which hydata.py never computed. Do
+// not "fix" them back to raw offsets.
 //
 // The JSON save/load path from hydata.py is intentionally not ported — Phase 4
 // replaces it with a binary format — but Chord::code / Chord::from_code (which
@@ -202,6 +205,17 @@ private:
 
 // ---- Activation ---------------------------------------------------------
 
+// How frontend (activation-hit) timing error transfers to the SP end. SP
+// length is measure-based, so hitting the frontend d ms off moves the SP end
+// by r*d ms, where r = ms-per-measure at the SP end / ms-per-measure at the
+// frontend. The two directions differ when the activation or SP end sits
+// exactly on a meter/tempo change: an early (-) hit moves into the section
+// before the tick, a late (+) hit into the section at/after it.
+struct TransferScale {
+    double early = 1.0;  // r- : early (-) frontend hits (SqOut direction)
+    double late = 1.0;   // r+ : late (+) frontend hits (SqIns, backend squeezes)
+};
+
 struct Activation {
     std::optional<int> skips;
     std::optional<Timecode> timecode;
@@ -212,11 +226,26 @@ struct Activation {
     std::vector<SPSqueeze> sqinouts;
     std::optional<double> e_offset;
 
+    // Frontend transfer scales, computed by the search and stored with the
+    // record (blob v3; older blobs default to 1.0 = the flat-tempo identity)
+    // so difficulty stays computable without a SongTiming in hand. `pre` is
+    // measured at the plain 2*B-measure SP end and governs SqIn/SqOut
+    // feasibility; `post` at the SqIn-extended (+2 measures) end governs the
+    // backend rows, and equals `pre` when the activation has no SqIn.
+    TransferScale transfer_pre;
+    TransferScale transfer_post;
+
     std::string notationstr() const;
     std::string notationstr_verbose() const;
     bool is_e_critical() const;  // e_offset < kCalibrationFillWindowMs
     bool is_E0() const;
     std::optional<double> e_difficulty(bool verbose = false) const;
+
+    // One squeeze's difficulty as ms of timing error per hit: the squeeze is
+    // the joint constraint r*frontend + note > gap, so the even split
+    // gap/(1+r) is the smallest per-hit displacement that satisfies it. r is
+    // read from transfer_pre in the squeeze's direction. A W-free quantity.
+    double squeeze_difficulty(const SPSqueeze& sq) const;
     std::optional<double> difficulty() const;
     bool is_difficult() const;
 
@@ -229,17 +258,6 @@ struct Activation {
     // hydata.Activation.display_backends; used both by the details view and to
     // trim a record's backends before storing it.
     std::vector<BackendSqueeze> display_backends() const;
-};
-
-// How frontend (activation-hit) timing error transfers to the SP end. SP
-// length is measure-based, so hitting the frontend d ms off moves the SP end
-// by r*d ms, where r = ms-per-measure at the SP end / ms-per-measure at the
-// frontend. The two directions differ when the activation or SP end sits
-// exactly on a meter/tempo change: an early (-) hit moves into the section
-// before the tick, a late (+) hit into the section at/after it.
-struct TransferScale {
-    double early = 1.0;  // r- : early (-) frontend hits (SqOut direction)
-    double late = 1.0;   // r+ : late (+) frontend hits (backend squeezes)
 };
 
 // Two SP ends coexist in one activation, so two transfer scales do too:
@@ -287,14 +305,18 @@ TransferRelevance transfer_scale_relevance(const Activation& act,
 double effective_backend_ms(double offset_ms, double transfer_r);
 double squeeze_budget_ms(double transfer_r, double hit_window_ms = 85.0);
 
-// hymisc.BACKEND_DISPLAY_WINDOW_MS: backends within this window of the
-// deactivation are worth showing/storing.
-constexpr double kBackendDisplayWindowMs = 140.0;
+// Backends within this window of the deactivation are worth showing/storing
+// (was hymisc.BACKEND_DISPLAY_WINDOW_MS = 140). 2x the 85 ms hit window, so
+// the trim covers the full nominal squeeze budget; raising the hit_window_ms
+// *setting* above 85 does not widen this analysis-time trim.
+constexpr double kBackendDisplayWindowMs = 170.0;
 
 // Calibration-fill (E) timing window, applied to e_offset in both directions:
 // an activation with e_offset < -window is illegal (the fill can't be
-// summoned), and one with e_offset < +window is E-critical.
-constexpr double kCalibrationFillWindowMs = 70.0;
+// summoned), and one with e_offset < +window is E-critical. 85 since 1.5.0
+// (the +/-70 hit-window figure was outdated); search-load-bearing, so it is
+// a constant, never the hit_window_ms setting.
+constexpr double kCalibrationFillWindowMs = 85.0;
 
 // ---- Path ---------------------------------------------------------------
 

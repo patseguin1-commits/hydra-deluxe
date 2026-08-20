@@ -316,9 +316,22 @@ ScoreGraphEdge* ScoreGraph::add_act_edge(const Chord& frontend_chord,
     Timecode tc_E = song_.timing().timecode(tick_E);
     act_edge->activation_fill_deadline_ms = tc_E.ms();
 
-    for (int sp = 2; sp <= max_sp_bars(); ++sp)
-        act_edge->activation_initial_end_times[sp] =
-            plusmeasure(act_edge->dest->timecode, 2 * sp);
+    const int64_t act_tick = act_edge->dest->timecode.ticks();
+    for (int sp = 2; sp <= max_sp_bars(); ++sp) {
+        Timecode pre_end = plusmeasure(act_edge->dest->timecode, 2 * sp);
+        act_edge->activation_initial_end_times[sp] = pre_end;
+
+        // The transfer scales the difficulty metric divides by (see
+        // Activation::squeeze_difficulty). Same probe logic as the display's
+        // frontend_transfer_scales, via the shared core helper.
+        if (auto pre = transfer_scale_between(act_tick, pre_end.ticks(),
+                                              song_.timing()))
+            act_edge->act_transfer[sp] = *pre;
+        Timecode post_end = plusmeasure(act_edge->dest->timecode, 2 * sp + 2);
+        if (auto post = transfer_scale_between(act_tick, post_end.ticks(),
+                                               song_.timing()))
+            act_edge->act_transfer_post[sp] = *post;
+    }
 
     base_track_head_->branch_edge = act_edge;
     return act_edge;

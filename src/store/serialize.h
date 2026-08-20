@@ -31,10 +31,13 @@ namespace hydra::store {
 // version is not read; the caller treats it like a version mismatch (see
 // RecordStore::get_record).
 //
-// Version 2 appended HydraRecord::allzero_paths. Version 1 blobs are still
+// Version 2 appended HydraRecord::allzero_paths. Version 3 appended the four
+// frontend transfer scales (pre/post x early/late) to each activation; older
+// blobs read back with the 1.0 flat-tempo defaults. Version 1 blobs are still
 // read -- they simply have no all-0 path until the chart is re-analyzed -- so
-// an existing library does not go stale.
-constexpr uint32_t kBlobFormatVersion = 2;
+// an existing library does not go stale at the blob layer (the record version
+// stamp is what forces re-analysis).
+constexpr uint32_t kBlobFormatVersion = 3;
 
 class SerializeError : public std::runtime_error {
 public:

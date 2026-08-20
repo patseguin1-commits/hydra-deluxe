@@ -307,4 +307,36 @@ TEST_CASE("field fixture: What's My Age Again? (Sync Chart) SqOut") {
     // Leeway squeezes keep the legacy single-hit line.
     SPSqueeze easy{SqueezeKind::SqOut, 5.0};
     CHECK(easy.description() == "SqOut: Note timing must be later than -5.0ms.");
+
+    // An activation stamped with these scales reports per-hit difficulty.
+    Activation stamped = act;
+    stamped.skips = 1;
+    stamped.e_offset = 300.0;  // not e-critical
+    stamped.transfer_pre = TransferScale{r, 1.0};
+    stamped.transfer_post = stamped.transfer_pre;
+    stamped.sqinouts.push_back(sqout);
+    CHECK(stamped.squeeze_difficulty(sqout) == doctest::Approx(96.15).epsilon(1e-3));
+    REQUIRE(stamped.difficulty().has_value());
+    CHECK(*stamped.difficulty() == doctest::Approx(96.15).epsilon(1e-3));
+    CHECK(stamped.is_difficult());
+}
+
+TEST_CASE("per-hit difficulty: default scales halve the raw offset") {
+    // r = 1 (flat tempo, the default for stale/old records): the joint
+    // constraint splits evenly, so per-hit is exactly half the raw gap.
+    Activation act;
+    act.skips = 0;
+    act.e_offset = 300.0;  // not e-critical
+    act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -12.0});
+    act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, 7.0});
+
+    CHECK(act.squeeze_difficulty(act.sqinouts[0]) == doctest::Approx(6.0));
+    CHECK(act.squeeze_difficulty(act.sqinouts[1]) == doctest::Approx(3.5));
+    REQUIRE(act.difficulty().has_value());
+    CHECK(*act.difficulty() == doctest::Approx(6.0));
+
+    // SqIns divide by the late scale, SqOuts by the early one.
+    act.transfer_pre = TransferScale{0.5, 3.0};
+    CHECK(act.squeeze_difficulty(act.sqinouts[0]) == doctest::Approx(8.0));
+    CHECK(act.squeeze_difficulty(act.sqinouts[1]) == doctest::Approx(1.75));
 }

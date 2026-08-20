@@ -57,6 +57,14 @@ struct ScoreGraphEdge {
     std::optional<double> activation_fill_deadline_ms;
     std::map<int, Timecode> activation_initial_end_times;  // SP meter -> Timecode
 
+    // Frontend transfer scales per SP meter, sampled at the pre-extension SP
+    // end (2*sp measures) and at the SqIn-extended one (2*sp + 2). The engine
+    // stamps the pre pair onto each Act for per-hit difficulty; the rebuild
+    // copies both onto the emitted Activation. A meter can be missing when
+    // the measure durations degenerate (engine defaults to 1.0).
+    std::map<int, TransferScale> act_transfer;
+    std::map<int, TransferScale> act_transfer_post;
+
     std::optional<Timecode> sqinout_time;
     std::optional<double> sqinout_timing;
     int late_sqin_count = 0;

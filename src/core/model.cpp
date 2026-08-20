@@ -438,9 +438,18 @@ std::optional<double> Activation::e_difficulty(bool verbose) const {
     return std::nullopt;
 }
 
+double Activation::squeeze_difficulty(const SPSqueeze& sq) const {
+    const double r = sq.kind == SqueezeKind::SqIn ? transfer_pre.late
+                                                  : transfer_pre.early;
+    return sq.difficulty() / (1.0 + r);
+}
+
 std::optional<double> Activation::difficulty() const {
+    // Per-hit ms across the board: squeezes are joint two-hit constraints
+    // split evenly; the E fill is a single hit, so its raw offset already is
+    // per-hit.
     std::vector<double> diffs;
-    for (const SPSqueeze& sq : sqinouts) diffs.push_back(sq.difficulty());
+    for (const SPSqueeze& sq : sqinouts) diffs.push_back(squeeze_difficulty(sq));
     if (auto e = e_difficulty()) diffs.push_back(*e);
     if (diffs.empty()) return std::nullopt;
     return *std::max_element(diffs.begin(), diffs.end());
@@ -449,7 +458,7 @@ std::optional<double> Activation::difficulty() const {
 bool Activation::is_difficult() const {
     if (auto e = e_difficulty(); e && *e > 2.0) return true;
     for (const SPSqueeze& sq : sqinouts)
-        if (sq.is_difficult()) return true;
+        if (squeeze_difficulty(sq) > 2.0) return true;
     return false;
 }
 
@@ -467,7 +476,8 @@ std::string Activation::notationstr_verbose() const {
             std::to_string(static_cast<long long>(*e_difficulty(true))) + " ms");
     for (const SPSqueeze& sq : sqinouts)
         timings.push_back(
-            std::to_string(static_cast<long long>(sq.difficulty())) + " ms");
+            std::to_string(static_cast<long long>(squeeze_difficulty(sq))) +
+            " ms");
 
     if (timings.empty()) return notationstr();
 

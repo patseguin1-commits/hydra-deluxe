@@ -6,6 +6,7 @@
 
 #include "doctest.h"
 
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -80,6 +81,64 @@ TEST_CASE("search invariants hold across the corpus and config knobs") {
     CHECK(mismatches == 0);
     REQUIRE(charts > 0);
     MESSAGE("checked " << charts << " charts");
+}
+
+// The graph stamps each activation with frontend transfer scales at build
+// time; the details view recomputes them from the song timing on demand. The
+// two code paths share transfer_scale_between but walk to the SP end
+// separately, so this pins them together -- and with them the per-hit
+// difficulty the ms filter, hardest_ms, and the report all derive.
+TEST_CASE("stored transfer scales match the display-layer recomputation") {
+    int charts = 0, acts = 0, nonflat = 0, mismatches = 0;
+
+    for (const std::string& path : corpus::chart_paths()) {
+        Song song = load_songpath(path, true, true);
+        if (song.is_empty()) continue;
+
+        std::optional<HydraRecord> record;
+        try {
+            record = analyze_chart(song, true, 0, 4, std::nullopt);
+        } catch (const ChartFileError&) {
+            continue;
+        }
+        ++charts;
+
+        std::string d;
+        for (const Path* p : record->all_paths()) {
+            for (const Activation& act : p->all_activations()) {
+                ++acts;
+                if (act.transfer_pre.early != 1.0 || act.transfer_pre.late != 1.0)
+                    ++nonflat;
+
+                auto scales = frontend_transfer_scales(act, song.timing());
+                if (!scales) {
+                    d = "display recomputation returned no scales";
+                    break;
+                }
+                if (std::abs(scales->pre.early - act.transfer_pre.early) > 1e-9 ||
+                    std::abs(scales->pre.late - act.transfer_pre.late) > 1e-9 ||
+                    std::abs(scales->post.early - act.transfer_post.early) > 1e-9 ||
+                    std::abs(scales->post.late - act.transfer_post.late) > 1e-9) {
+                    d = "stored scales diverge from recomputation";
+                    break;
+                }
+                if (act.transfer_pre.early <= 0.0 || act.transfer_pre.late <= 0.0 ||
+                    act.transfer_post.early <= 0.0 || act.transfer_post.late <= 0.0) {
+                    d = "non-positive transfer scale";
+                    break;
+                }
+            }
+            if (!d.empty()) break;
+        }
+        if (!d.empty() && ++mismatches <= 8)
+            CHECK_MESSAGE(false, path << " " << d);
+    }
+
+    CHECK(mismatches == 0);
+    REQUIRE(charts > 0);
+    REQUIRE(acts > 0);
+    MESSAGE("checked " << acts << " activations on " << charts << " charts ("
+                       << nonflat << " with a non-flat scale)");
 }
 
 // The all-0 pass is a second, constrained search. Its whole contract is that

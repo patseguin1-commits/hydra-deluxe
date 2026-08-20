@@ -116,9 +116,16 @@ void write_activation(Writer& w, const Activation& act) {
     }
 
     w.opt_f64(act.e_offset);
+
+    // Format version 3 and later: the frontend transfer scales, so per-hit
+    // difficulty is computable straight off the blob (no SongTiming needed).
+    w.f64(act.transfer_pre.early);
+    w.f64(act.transfer_pre.late);
+    w.f64(act.transfer_post.early);
+    w.f64(act.transfer_post.late);
 }
 
-Activation read_activation(Reader& r) {
+Activation read_activation(Reader& r, uint32_t version) {
     Activation act;
     act.skips = r.opt_i32();
     act.timecode = Timecode::raw(r.i64());
@@ -149,6 +156,15 @@ Activation read_activation(Reader& r) {
     }
 
     act.e_offset = r.opt_f64();
+
+    // Pre-v3 blobs keep the 1.0 defaults: the flat-tempo identity, matching
+    // the raw-ms difficulty those records were computed with (halved).
+    if (version >= 3) {
+        act.transfer_pre.early = r.f64();
+        act.transfer_pre.late = r.f64();
+        act.transfer_post.early = r.f64();
+        act.transfer_post.late = r.f64();
+    }
     return act;
 }
 
@@ -180,7 +196,7 @@ void write_path(Writer& w, const Path& path) {
     w.opt_i32(path.var_point);
 }
 
-Path read_path(Reader& r) {
+Path read_path(Reader& r, uint32_t version) {
     Path path;
 
     uint32_t nmsq = r.u32();
@@ -193,7 +209,8 @@ Path read_path(Reader& r) {
 
     uint32_t nact = r.u32();
     path.activations.reserve(nact);
-    for (uint32_t i = 0; i < nact; ++i) path.activations.push_back(read_activation(r));
+    for (uint32_t i = 0; i < nact; ++i)
+        path.activations.push_back(read_activation(r, version));
 
     path.score_base = r.i64();
     path.score_combo = r.i64();
@@ -209,7 +226,7 @@ Path read_path(Reader& r) {
 
     uint32_t nvar = r.u32();
     path.variants.reserve(nvar);
-    for (uint32_t i = 0; i < nvar; ++i) path.variants.push_back(read_path(r));
+    for (uint32_t i = 0; i < nvar; ++i) path.variants.push_back(read_path(r, version));
 
     path.var_point = r.opt_i32();
 
@@ -252,14 +269,15 @@ HydraRecord read_record(const std::vector<uint8_t>& blob) {
 
     uint32_t npaths = r.u32();
     record.paths.reserve(npaths);
-    for (uint32_t i = 0; i < npaths; ++i) record.paths.push_back(read_path(r));
+    for (uint32_t i = 0; i < npaths; ++i) record.paths.push_back(read_path(r, version));
 
     // A version 1 blob ends here. It keeps an empty allzero_paths, so the
     // record loads fine and simply shows no all-0 path until re-analyzed.
     if (version >= 2) {
         uint32_t nzero = r.u32();
         record.allzero_paths.reserve(nzero);
-        for (uint32_t i = 0; i < nzero; ++i) record.allzero_paths.push_back(read_path(r));
+        for (uint32_t i = 0; i < nzero; ++i)
+            record.allzero_paths.push_back(read_path(r, version));
     }
 
     for (Path& p : record.paths) p.prepare_variants();
