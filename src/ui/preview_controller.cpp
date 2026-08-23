@@ -1,7 +1,8 @@
 #include "ui/preview_controller.h"
 
-#include <algorithm>
+#include <cstdint>
 #include <exception>
+#include <memory>
 #include <optional>
 #include <utility>
 
@@ -34,17 +35,12 @@ void PreviewController::open(const store::ChartLibraryEntry& entry, bool pro,
 }
 
 void PreviewController::close() {
-    // Stop the device before the transport it points at is destroyed.
+    // Stop the device before the audio it pulls from is destroyed.
     audio_device_.reset();
-    {
-        std::lock_guard<std::mutex> lock(transport_mu_);
-        transport_.reset();
-    }
+    transport_.unload();
     job_.reset();  // ResultJobBase's shutdown() joins the worker
     scene_ = hydra::app::PreviewScene{};
     scene_dirty_ = true;  // the renderer (if kept) must drop the old chart
-    clock_ = hydra::app::PreviewClock{};
-    length_ms_ = 0.0;
     have_frame_ = false;
     active_ = false;
     open_key_.clear();
@@ -58,16 +54,18 @@ void PreviewController::poll() {
         PreviewLoadJob::Result result = job_->take_result();
         scene_ = std::move(result.scene);
         scene_dirty_ = true;
-        transport_ = std::make_unique<audio::PreviewTransport>(std::move(result.mixed));
-        transport_->set_gain(static_cast<float>(volume_pct_) / 100.0f);
-        length_ms_ = (std::max)(scene_.song_length_ms, transport_->length_ms());
-        clock_.seek_ms(0.0);
+        transport_.set_gain(static_cast<float>(volume_pct_) / 100.0f);
+        transport_.load(std::make_unique<audio::Playhead>(std::move(result.mixed)),
+                        scene_.song_length_ms);
         // Open the output device only when there is audio to play; a chart with
         // no locatable stems previews silently (the highway still draws).
-        if (transport_->length_frames() > 0) {
+        if (transport_.has_audio()) {
             try {
                 audio_device_ = std::make_unique<audio::PreviewAudioDevice>(
-                    *transport_, transport_mu_);
+                    transport_.channels(), transport_.sample_rate(),
+                    [this](float* out, int64_t frames) {
+                        return transport_.read_frames(out, frames);
+                    });
                 audio_device_->start();
             } catch (const std::exception& e) {
                 error_ = e.what();  // no device: still previewable, just muted
@@ -101,12 +99,7 @@ ID3D11ShaderResourceView* PreviewController::render(int width, int height) {
             renderer_->set_scene(scene_, opts);
             scene_dirty_ = false;
         }
-        // Stop at the end of the song rather than scrolling into the void.
-        if (clock_.playing() && length_ms_ > 0.0 && clock_.now_ms() >= length_ms_) {
-            pause();
-            seek_ms(length_ms_);
-        }
-        renderer_->render(clock_.now_ms(), params_);
+        renderer_->render(transport_.tick(), params_);
         have_frame_ = true;
         return renderer_->texture_srv();
     } catch (const std::exception& e) {
@@ -115,62 +108,41 @@ ID3D11ShaderResourceView* PreviewController::render(int width, int height) {
     }
 }
 
-// ---- transport controls: the clock leads, audio follows ----------------
-// (transport_mu_ guards only the audio transport, which the device thread
-// also reads; the clock is GUI-thread state.)
+// ---- transport controls: forwarded to the Transport --------------------
 
 void PreviewController::play() {
     if (!active_ || job_) return;  // nothing loaded yet
-    {
-        std::lock_guard<std::mutex> lock(transport_mu_);
-        if (transport_) {
-            transport_->seek_ms(clock_.now_ms());
-            transport_->play();
-        }
-    }
-    clock_.play();
+    transport_.play();
 }
 
-void PreviewController::pause() {
-    clock_.pause();
-    std::lock_guard<std::mutex> lock(transport_mu_);
-    if (transport_) transport_->pause();
-}
+void PreviewController::pause() { transport_.pause(); }
 
 void PreviewController::toggle() {
-    if (clock_.playing())
+    if (transport_.playing())
         pause();
     else
         play();
 }
 
-bool PreviewController::playing() const { return clock_.playing(); }
+bool PreviewController::playing() const { return transport_.playing(); }
 
-double PreviewController::position_ms() const { return clock_.now_ms(); }
+double PreviewController::position_ms() const { return transport_.now_ms(); }
 
-double PreviewController::length_ms() const { return length_ms_; }
+double PreviewController::length_ms() const { return transport_.length_ms(); }
 
-void PreviewController::seek_ms(double ms) {
-    if (ms < 0.0) ms = 0.0;
-    if (length_ms_ > 0.0 && ms > length_ms_) ms = length_ms_;
-    clock_.seek_ms(ms);
-    std::lock_guard<std::mutex> lock(transport_mu_);
-    if (transport_) transport_->seek_ms(ms);
-}
+void PreviewController::seek_ms(double ms) { transport_.seek_ms(ms); }
 
-bool PreviewController::has_audio() const {
-    std::lock_guard<std::mutex> lock(transport_mu_);
-    return transport_ && transport_->length_frames() > 0;
-}
+bool PreviewController::has_audio() const { return transport_.has_audio(); }
 
+// The volume percent lives here, not on the transport: it is a setting that
+// outlives the chart, remembered for the next one opened.
 void PreviewController::set_volume(int percent) {
     volume_pct_ = percent < 0 ? 0 : percent > 100 ? 100 : percent;
-    std::lock_guard<std::mutex> lock(transport_mu_);
-    if (transport_) transport_->set_gain(static_cast<float>(volume_pct_) / 100.0f);
+    transport_.set_gain(static_cast<float>(volume_pct_) / 100.0f);
 }
 
 hydra::app::PreviewTimeBox PreviewController::time_box() const {
-    return hydra::app::build_time_box(scene_, clock_.now_ms());
+    return hydra::app::build_time_box(scene_, transport_.now_ms());
 }
 
 }  // namespace hydra::ui

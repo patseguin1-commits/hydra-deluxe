@@ -3,8 +3,8 @@
 #include <atomic>
 #include <cstdint>
 #include <stdexcept>
+#include <utility>
 
-#include "audio/player.h"
 #include "miniaudio.h"
 
 namespace hydra::audio {
@@ -14,20 +14,18 @@ namespace {
 // The device callback's user data. Kept a plain file-local struct (not the
 // private Impl) so the C-style callback can reach it.
 struct Playback {
-    PreviewTransport* transport;
-    std::mutex* mutex;
+    PreviewAudioDevice::Source source;
 };
 
 // miniaudio's audio thread calls this. It fills `output` with `frame_count`
-// interleaved f32 frames; read_frames copies real audio while playing, writes
-// silence and auto-pauses at the end, and does nothing while paused. The lock
-// keeps the UI thread's transport controls from racing the pull.
+// interleaved f32 frames by pulling from the source, which copies real audio
+// while playing, writes silence and auto-pauses at the end, and does nothing
+// while paused. The source takes its own lock so the UI thread's controls
+// cannot race the pull.
 void data_callback(ma_device* device, void* output, const void* /*input*/,
                    ma_uint32 frame_count) {
     auto* pb = static_cast<Playback*>(device->pUserData);
-    std::lock_guard<std::mutex> lock(*pb->mutex);
-    pb->transport->read_frames(static_cast<float*>(output),
-                               static_cast<int64_t>(frame_count));
+    pb->source(static_cast<float*>(output), static_cast<int64_t>(frame_count));
 }
 
 }  // namespace
@@ -46,13 +44,13 @@ struct PreviewAudioDevice::Impl {
     bool started = false;
 };
 
-PreviewAudioDevice::PreviewAudioDevice(PreviewTransport& transport, std::mutex& mutex)
-    : impl_(new Impl{Playback{&transport, &mutex}, {}, false, false}) {
+PreviewAudioDevice::PreviewAudioDevice(int channels, int sample_rate, Source source)
+    : impl_(new Impl{Playback{std::move(source)}, {}, false, false}) {
     if (g_headless.load()) return;  // inited stays false: start/stop only flip state
     ma_device_config config = ma_device_config_init(ma_device_type_playback);
     config.playback.format = ma_format_f32;
-    config.playback.channels = static_cast<ma_uint32>(transport.channels());
-    config.sampleRate = static_cast<ma_uint32>(transport.sample_rate());
+    config.playback.channels = static_cast<ma_uint32>(channels);
+    config.sampleRate = static_cast<ma_uint32>(sample_rate);
     config.dataCallback = data_callback;
     config.pUserData = &impl_->playback;
     if (ma_device_init(nullptr, &config, &impl_->device) != MA_SUCCESS) {

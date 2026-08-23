@@ -3,10 +3,10 @@
 // The details modal's Preview tab drives this. It ties together an async
 // PreviewLoadJob (re-parse + decode + build scene), the offscreen
 // PreviewRenderer (the Onyx port, docs/adr/0008), a PreviewTransport over the
-// mixed audio, and a PreviewAudioDevice that plays it. The display clock
-// (app/preview_clock.h) is the master, as in Onyx: the highway is drawn at
-// clock.now_ms() each frame, and on play the audio is seeked to that time and
-// then follows. A chart with no audio still plays and scrubs.
+// mixed audio, and a PreviewAudioDevice that plays it. The Transport owns the
+// play/pause/seek rules and the master display clock, as in Onyx: the highway
+// is drawn at transport_.tick() each frame, and on play the audio is seeked to
+// that time and then follows. A chart with no audio still plays and scrubs.
 //
 // One controller lives on AppState, created on first use with the GUI's shared
 // D3D11 device. It is opened for the selected chart, torn down when the modal
@@ -17,21 +17,19 @@
 #define HYDRA_UI_PREVIEW_CONTROLLER_H
 
 #include <memory>
-#include <mutex>
 #include <string>
 
-#include "app/preview_clock.h"
 #include "app/preview_view.h"
 #include "core/model.h"  // Path
 #include "render/preview_renderer.h"
 #include "store/record_store.h"  // ChartLibraryEntry
+#include "ui/preview_transport.h"
 
 struct ID3D11Device;
 struct ID3D11DeviceContext;
 struct ID3D11ShaderResourceView;
 
 namespace hydra::audio {
-class PreviewTransport;
 class PreviewAudioDevice;
 }  // namespace hydra::audio
 
@@ -106,18 +104,12 @@ private:
     bool scene_dirty_ = true;  // scene_ changed since the renderer last saw it
     bool pro_ = true;          // the pro-drums view setting the chart was opened with
 
-    // The master clock (GUI thread only) and the song length it runs to: the
-    // later of the last note and the audio's end.
-    hydra::app::PreviewClock clock_;
-    double length_ms_ = 0.0;
     int volume_pct_ = 40;
 
-    // The transport is shared with the audio thread; transport_mu_ guards every
-    // access (the device's pull and the UI's controls). Declared before
-    // audio_device_ so the device (which references the transport) is destroyed
-    // first.
-    mutable std::mutex transport_mu_;
-    std::unique_ptr<hydra::audio::PreviewTransport> transport_;
+    // Play, pause, seek, the master clock and the audio that follows it.
+    // Declared before audio_device_ so the device (whose callback pulls from
+    // the transport) is destroyed first.
+    PreviewTransport transport_;
     std::unique_ptr<hydra::audio::PreviewAudioDevice> audio_device_;
 
     bool active_ = false;

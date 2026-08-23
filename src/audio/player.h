@@ -1,14 +1,14 @@
-// The transport core of the Preview player.
+// The pure, device-free audio playhead of the Preview.
 //
 // It owns one mixed PCM buffer (see audio/mixer.h) and the playback position,
-// and serves frames to an output callback through read_frames(). The Preview's
-// master clock is the display clock (app/preview_clock.h, as in Onyx — see
-// docs/adr/0008); the controller seeks this transport to that clock on play,
-// and every frame served advances the audio position from there. This type
-// deliberately holds no output device — it is pure and fully unit-tested. The
-// GUI wraps a miniaudio ma_device around a PreviewTransport and calls
-// read_frames() from the device callback; opening the device needs real
-// hardware and stays out of the tests.
+// and serves frames to an output callback through read_frames(). It has no
+// clock of its own: the Preview Transport (src/ui/preview_transport.h) drives
+// it, seeking it to the master display clock on play (app/preview_clock.h, as
+// in Onyx — see docs/adr/0008), after which every frame served advances the
+// audio position from there. This type deliberately holds no output device —
+// it is pure and fully unit-tested. The Transport wraps a miniaudio ma_device
+// around a Playhead and calls read_frames() from the device callback; opening
+// the device needs real hardware and stays out of the tests.
 
 #ifndef HYDRA_AUDIO_PLAYER_H
 #define HYDRA_AUDIO_PLAYER_H
@@ -19,11 +19,11 @@
 
 namespace hydra::audio {
 
-class PreviewTransport {
+class Playhead {
 public:
-    explicit PreviewTransport(DecodedAudio mixed);
+    explicit Playhead(DecodedAudio mixed);
 
-    // Transport state. A new transport is paused at the start.
+    // Playback state. A new playhead is paused at the start.
     void play();
     void pause();
     void toggle();

@@ -1,12 +1,12 @@
 // The output-device half of the Preview player.
 //
-// PreviewTransport (audio/player.h) is pure and device-free; this wraps a
-// miniaudio playback device around one, pulling frames from read_frames() on
-// miniaudio's audio thread. The transport is not internally synchronized, so
-// the device takes the caller-owned `mutex` around every pull; the UI thread
-// locks the same mutex when it calls transport controls. The device is torn
-// down (stopped, so the callback has returned) before the transport it points
-// at may be destroyed, so destroy the device first.
+// The audio playhead (audio/player.h) is pure and device-free; this wraps a
+// miniaudio playback device around a pull callback that supplies frames on
+// miniaudio's audio thread. The device knows nothing about what it pulls from
+// and holds no lock of its own: the lock lives in the Transport that supplies
+// the source (src/ui/preview_transport.h), which takes it inside the callback.
+// The device is torn down (stopped, so the callback has returned) before the
+// source it calls may be destroyed, so destroy the device first.
 //
 // miniaudio's device API lives only here, kept private to hydra_audio like the
 // decoders; the header stays free of miniaudio via a pImpl.
@@ -14,11 +14,10 @@
 #ifndef HYDRA_AUDIO_DEVICE_H
 #define HYDRA_AUDIO_DEVICE_H
 
-#include <mutex>
+#include <cstdint>
+#include <functional>
 
 namespace hydra::audio {
-
-class PreviewTransport;
 
 // Process-wide switch for harnesses with no sound card (the GUI test runner):
 // when set, PreviewAudioDevice opens nothing and start()/stop() only track
@@ -28,9 +27,14 @@ bool headless();
 
 class PreviewAudioDevice {
 public:
-    // Opens a playback device matching `transport`'s channel count and sample
-    // rate (f32 samples). Throws std::runtime_error if the device won't open.
-    PreviewAudioDevice(PreviewTransport& transport, std::mutex& mutex);
+    // Fills `out` with `frame_count` interleaved f32 frames and returns the
+    // count of real audio frames written (the rest being silence).
+    using Source = std::function<int64_t(float* out, int64_t frame_count)>;
+
+    // Opens a playback device with `channels` channels at `sample_rate` (f32
+    // samples) that pulls through `source`. Throws std::runtime_error if the
+    // device won't open.
+    PreviewAudioDevice(int channels, int sample_rate, Source source);
     ~PreviewAudioDevice();
 
     PreviewAudioDevice(const PreviewAudioDevice&) = delete;

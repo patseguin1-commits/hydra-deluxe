@@ -246,8 +246,8 @@ private:
 // Prepares a chart for the 3D Preview off the render thread, mirroring
 // AnalyzeJob: re-parse the notes and gather audio (resolve_preview_source),
 // decode and mix every stem to one buffer, and build the PreviewScene. The
-// controller pulls the finished scene + mixed audio and hands the buffer to a
-// PreviewTransport. Parse + decode are heavy, so none of it runs on-frame.
+// controller pulls the finished scene + mixed audio and hands the buffer to an
+// audio::Playhead. Parse + decode are heavy, so none of it runs on-frame.
 class PreviewLoadJob : public ResultJobBase {
 public:
     PreviewLoadJob(store::ChartLibraryEntry entry, bool pro, bool bass2x,

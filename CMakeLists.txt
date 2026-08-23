@@ -220,6 +220,7 @@ add_library(hydra_ui STATIC
     src/ui/jobs.cpp
     src/ui/library_view.cpp
     src/ui/preview_controller.cpp
+    src/ui/preview_transport.cpp
     src/ui/theme.cpp
     src/ui/win32_dialogs.cpp
 )
@@ -301,6 +302,7 @@ add_executable(hydra_tests
     tests/test_highway_draw.cpp
     tests/test_preview_golden.cpp
     tests/test_preview_clock.cpp
+    tests/test_preview_transport.cpp
     tests/test_image_decode.cpp
     tests/test_preview_renderer.cpp
     tests/test_song.cpp

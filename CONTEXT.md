@@ -162,4 +162,5 @@ skipped, so one broken stem does not silence the rest.
 The Preview's play, pause, and seek control together with its clock. The clock
 is the master: while playing it is the time at play plus the time since; the
 note highway reads it to place the notes, and the audio follows it.
-_Avoid_: player (the whole Preview), scrubber (the UI control only)
+_Avoid_: player (the whole Preview), scrubber (the UI control only), playhead
+(the audio follower only)

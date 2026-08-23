@@ -6,34 +6,34 @@
 
 namespace hydra::audio {
 
-PreviewTransport::PreviewTransport(DecodedAudio mixed)
+Playhead::Playhead(DecodedAudio mixed)
     : audio_(std::move(mixed)),
       channels_(audio_.channels),
       sample_rate_(audio_.sample_rate),
       length_(audio_.frames()) {}
 
-void PreviewTransport::play() { playing_ = true; }
-void PreviewTransport::pause() { playing_ = false; }
-void PreviewTransport::toggle() { playing_ = !playing_; }
+void Playhead::play() { playing_ = true; }
+void Playhead::pause() { playing_ = false; }
+void Playhead::toggle() { playing_ = !playing_; }
 
-void PreviewTransport::seek_frames(int64_t frame) {
+void Playhead::seek_frames(int64_t frame) {
     position_ = std::clamp<int64_t>(frame, 0, length_);
 }
 
-void PreviewTransport::seek_ms(double ms) {
+void Playhead::seek_ms(double ms) {
     if (sample_rate_ <= 0) return;
     seek_frames(static_cast<int64_t>(std::llround(ms * sample_rate_ / 1000.0)));
 }
 
-double PreviewTransport::position_ms() const {
+double Playhead::position_ms() const {
     return sample_rate_ > 0 ? position_ * 1000.0 / sample_rate_ : 0.0;
 }
 
-double PreviewTransport::length_ms() const {
+double Playhead::length_ms() const {
     return sample_rate_ > 0 ? length_ * 1000.0 / sample_rate_ : 0.0;
 }
 
-int64_t PreviewTransport::read_frames(float* out, int64_t frame_count) {
+int64_t Playhead::read_frames(float* out, int64_t frame_count) {
     if (frame_count <= 0) return 0;
     std::size_t total = static_cast<std::size_t>(frame_count) * channels_;
 
