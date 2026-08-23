@@ -10,6 +10,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "core/squeeze_rating.h"
+
 namespace hydra {
 
 namespace {

@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "core/model.h"
+#include "core/squeeze_rating.h"
 #include "corpus_util.h"
 #include "parse/song.h"
 #include "search/engine.h"
@@ -90,10 +91,10 @@ TEST_CASE("search invariants hold across the corpus and config knobs") {
     MESSAGE("checked " << charts << " charts");
 }
 
-// The graph stamps each activation with frontend transfer scales at build
-// time; the details view recomputes them from the song timing on demand. The
-// two code paths share transfer_scale_between but walk to the SP end
-// separately, so this pins them together -- and with them the ratios the
+// The engine stamps each activation with its frontend transfer scales at
+// copy-out; the details view recomputes them from the song timing on demand.
+// Both go through frontend_transfer_scales, so this pins the stored values
+// against a live recompute across the corpus -- and with them the ratios the
 // squeeze detail lines and eff. figures show.
 TEST_CASE("stored transfer scales match the display-layer recomputation") {
     int charts = 0, acts = 0, nonflat = 0, mismatches = 0;

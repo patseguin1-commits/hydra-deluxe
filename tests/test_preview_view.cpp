@@ -12,6 +12,7 @@
 
 #include "app/analysis.h"
 #include "app/preview_view.h"
+#include "core/squeeze_rating.h"
 #include "corpus_util.h"
 #include "parse/song.h"
 

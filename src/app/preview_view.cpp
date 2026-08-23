@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <optional>
 
+#include "core/squeeze_rating.h"
+
 namespace hydra::app {
 
 PreviewLane lane_of(NoteColor color) {

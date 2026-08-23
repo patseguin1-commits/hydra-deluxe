@@ -100,8 +100,7 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
         av.frontend =
             "Frontend: " + (act.chord ? act.chord->rowstr() : std::string("None"));
 
-        std::vector<BackendSqueeze> backends = act.display_backends();
-        ActivationRating rate = rate_activation(act, backends, timing, W);
+        ActivationRating rate = rate_activation(act, timing, W);
 
         if (rate.late_warns || rate.early_warns) {
             bool show_late = rate.late_warns;
@@ -138,10 +137,9 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
         for (const SPSqueeze& sq : act.sqinouts)
             av.sqinouts.push_back({sq.description(), sq.is_difficult()});
 
-        av.backends.reserve(backends.size());
-        for (size_t i = 0; i < backends.size(); ++i) {
-            const BackendSqueeze& bsq = backends[i];
-            const BackendRating& br = rate.backends[i];
+        av.backends.reserve(rate.backends.size());
+        for (const BackendRating& br : rate.backends) {
+            const BackendSqueeze& bsq = br.row;
 
             BackendRowView row;
             char tbuf[32];
@@ -154,7 +152,7 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
                               "frontend timing scales x%.2f here, so the combined\n"
                               "squeeze budget is %.0fms, not %.0fms.",
                               *br.effective_ms, 2.0 * W, br.scale,
-                              squeeze_budget_ms(br.scale, W), 2.0 * W);
+                              br.budget_ms, 2.0 * W);
                 row.tooltip = tip;
             }
             row.chord = bsq.chord.notationstr();
