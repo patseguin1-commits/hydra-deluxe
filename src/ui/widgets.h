@@ -11,7 +11,9 @@
 #ifndef HYDRA_UI_WIDGETS_H
 #define HYDRA_UI_WIDGETS_H
 
+#include <cfloat>
 #include <cstdio>
+#include <string>
 
 #include "imgui.h"
 #include "imgui_internal.h"  // RenderTextEllipsis
@@ -43,6 +45,62 @@ inline void progress_bar_counted(int done, int total) {
     char overlay[32];
     std::snprintf(overlay, sizeof(overlay), "%d/%d", done, total);
     ImGui::ProgressBar(frac, ImVec2(-1, 0), overlay);
+}
+
+// ---- Fixed slots: stop live numbers from moving their neighbours ----------
+//
+// The UI font is proportional, so "67.6 s" and "71.1 s" are not the same
+// width. Any control laid out after a changing number walks left and right
+// as the digits change, and a mouse held on it sees its value drift. The
+// rule: a piece of text that changes while the user may be interacting
+// nearby takes a fixed-width slot sized for the widest value it can show.
+
+// A run of `count` copies of the widest digit in the current font, for
+// building "widest this can get" sample strings.
+inline std::string widest_digits(int count) {
+    char widest = '0';
+    float best = 0.0f;
+    for (char d = '0'; d <= '9'; ++d) {
+        char one[2] = {d, 0};
+        float w = ImGui::CalcTextSize(one).x;
+        if (w > best) { best = w; widest = d; }
+    }
+    return std::string(count > 0 ? (size_t)count : 1, widest);
+}
+
+// Number of decimal digits in n (1 for 0).
+inline int digit_count(long long n) {
+    int c = 1;
+    for (n = n < 0 ? -n : n; n >= 10; n /= 10) ++c;
+    return c;
+}
+
+inline float text_slot_width(const char* sample) { return ImGui::CalcTextSize(sample).x; }
+
+// Draws `text` and leaves the cursor on the same line exactly `slot_w` past
+// where the text began, so whatever follows never moves. The caller does
+// NOT call SameLine() after this.
+inline void text_in_slot(const char* text, float slot_w) {
+    float x0 = ImGui::GetCursorPosX();
+    ImGui::TextUnformatted(text);
+    ImGui::SameLine(x0 + slot_w);
+}
+
+// A button whose label changes (a count, Play/Pause): give it the width of
+// its widest label so the controls after it stay put.
+inline float button_slot_width(const char* widest_label) {
+    return ImGui::CalcTextSize(widest_label, nullptr, true).x +
+           ImGui::GetStyle().FramePadding.x * 2.0f;
+}
+inline bool button_in_slot(const char* label, float slot_w) {
+    return ImGui::Button(label, ImVec2(slot_w, 0.0f));
+}
+
+// A popup modal that keeps one width while its text changes. Pair with
+// ImGuiWindowFlags_AlwaysAutoResize: height still follows the content,
+// width is pinned to `width`.
+inline void pin_next_modal_width(float width) {
+    ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.0f), ImVec2(width, FLT_MAX));
 }
 
 // Shows `text` in a (wrapped) tooltip when the last item is hovered. Callers

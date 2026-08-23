@@ -87,6 +87,15 @@ public:
     void seek_ms(double ms);
     bool has_audio() const;
 
+    // The scrubber is being held (mouse down on it). As in Onyx, playback
+    // pauses for the hold and resumes on release if it was playing; the
+    // highway still follows the seeks. Call every frame with the slider's
+    // active state. Without this the clock kept running under the held
+    // slider and the audio was re-seeked to the held time every frame —
+    // heard as a buzz.
+    void set_scrubbing(bool held);
+    bool scrubbing() const { return scrubbing_; }
+
     // Playback volume in percent (0..100); applied to the audio as it is
     // served, and remembered for the next chart opened.
     void set_volume(int percent);
@@ -111,6 +120,8 @@ private:
     bool pro_ = true;          // the pro-drums view setting the chart was opened with
 
     int volume_pct_ = 40;
+    bool scrubbing_ = false;
+    bool resume_after_scrub_ = false;
 
     // Play, pause, seek, the master clock and the audio that follows it.
     // Declared before audio_device_ so the device (whose callback pulls from

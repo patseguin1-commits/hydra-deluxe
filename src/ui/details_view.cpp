@@ -558,24 +558,37 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
         return;
     }
 
-    // Transport row: play/pause, a scrubber, and the time readout.
-    if (ImGui::Button(pc->playing() ? "Pause" : "Play")) pc->toggle();
+    // Transport row: play/pause, a scrubber, and the time readout. Every
+    // piece whose text changes while playing sits in a fixed slot (see
+    // widgets.h): otherwise the Vol slider walked under a held mouse as the
+    // readout's digits changed width.
+    const float play_w = std::max(button_slot_width("Play"), button_slot_width("Pause"));
+    if (button_in_slot(pc->playing() ? "Pause" : "Play", play_w)) pc->toggle();
     ImGui::SameLine();
 
     // The clock drives the scrubber, so a chart with no audio still scrubs.
     double len_ms = pc->length_ms();
     float pos_s = static_cast<float>(pc->position_ms() / 1000.0);
     float len_s = static_cast<float>(len_ms / 1000.0);
+    std::string len_digits = widest_digits(digit_count((long long)len_s));
+    std::string readout_sample = len_digits + "." + len_digits.substr(0, 1) + " / " +
+                                 len_digits + "." + len_digits.substr(0, 1) + " s";
+    const float readout_w = text_slot_width(readout_sample.c_str());
     const float volume_w = px(110.0f);
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
     ImGui::SetNextItemWidth(std::max(
-        px(120.0f), ImGui::GetContentRegionAvail().x - px(150.0f) - volume_w - px(60.0f)));
+        px(120.0f), ImGui::GetContentRegionAvail().x - readout_w - text_slot_width("Vol") -
+                        volume_w - 3.0f * spacing));
     if (ImGui::SliderFloat("##scrub", &pos_s, 0.0f, len_s > 0.0f ? len_s : 1.0f, "%.1fs"))
         pc->seek_ms(static_cast<double>(pos_s) * 1000.0);
+    // Holding the scrubber pauses playback (Onyx's rule); release resumes.
+    pc->set_scrubbing(ImGui::IsItemActive());
     ImGui::SameLine();
-    ImGui::Text("%.1f / %.1f s", pos_s, len_s);
+    char readout[48];
+    std::snprintf(readout, sizeof(readout), "%.1f / %.1f s", pos_s, len_s);
+    text_in_slot(readout, readout_w);
 
     // Volume: applied live and remembered in the settings file.
-    ImGui::SameLine();
     ImGui::TextUnformatted("Vol");
     ImGui::SameLine();
     int volume = app.settings.preview_volume;

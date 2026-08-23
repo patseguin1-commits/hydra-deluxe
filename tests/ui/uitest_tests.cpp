@@ -163,12 +163,12 @@ void test_preview(ImGuiTestContext* ctx) {
         const P building{S::Building, 4, 4};
         IM_CHECK_EQ(reading.fraction(), 0.0f);
         IM_CHECK_STR_EQ(reading.label().c_str(), "Reading chart");
-        IM_CHECK_FLOAT_EQ_EPS(decode0.fraction(), 0.10f, 1e-5f);
-        IM_CHECK_FLOAT_EQ_EPS(decode2.fraction(), 0.475f, 1e-5f);
+        IM_CHECK_FLOAT_NEAR_EQ(decode0.fraction(), 0.10f, 1e-5f);
+        IM_CHECK_FLOAT_NEAR_EQ(decode2.fraction(), 0.475f, 1e-5f);
         IM_CHECK_STR_EQ(decode2.label().c_str(), "Decoding audio 3/4");
         IM_CHECK_STR_EQ(decode4.label().c_str(), "Decoding audio 4/4");
-        IM_CHECK_FLOAT_EQ_EPS(mixing.fraction(), 0.85f, 1e-5f);
-        IM_CHECK_FLOAT_EQ_EPS(building.fraction(), 0.95f, 1e-5f);
+        IM_CHECK_FLOAT_NEAR_EQ(mixing.fraction(), 0.85f, 1e-5f);
+        IM_CHECK_FLOAT_NEAR_EQ(building.fraction(), 0.95f, 1e-5f);
         IM_CHECK_STR_EQ(building.label().c_str(), "Building scene");
     }
 
@@ -190,6 +190,110 @@ void test_preview(ImGuiTestContext* ctx) {
     IM_CHECK(h.app->preview->playing());
     ctx->ItemClick("**/Pause");
     IM_CHECK(!h.app->preview->playing());
+}
+
+// Shared: open chart 0's Preview and wait for the load. Returns false on error.
+bool open_preview(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return false;
+    open_details(ctx, 0);
+    if (ctx->IsError()) return false;
+    ctx->ItemClick("**/Preview");
+    IM_CHECK_RETV(wait_until(ctx, [&] { return h.app->preview && h.app->preview->active(); }, 10), false);
+    IM_CHECK_RETV(wait_until(ctx, [&] { return !h.app->preview->loading(); }, 120), false);
+    IM_CHECK_RETV(h.app->preview->error().empty(), false);
+    return true;
+}
+
+// Click-and-hold on the time bar while playing. Onyx pauses playback for the
+// hold; Hydra used to keep playing and re-seek the audio to the held time
+// every frame, which came out as a buzz. The transport must be paused while
+// the mouse is down, sit still at the held time, and resume on release.
+void test_scrub_hold(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_preview(ctx)) return;
+    ctx->ItemClick("**/Play");
+    IM_CHECK(h.app->preview->playing());
+    ctx->MouseMove("**/##scrub");
+    ctx->MouseDown(0);
+    ctx->Yield(5);
+    IM_CHECK(!h.app->preview->playing());
+    double held = h.app->preview->position_ms();
+    ctx->Yield(30);
+    IM_CHECK_FLOAT_NEAR_EQ(h.app->preview->position_ms(), held, 0.5);
+    ctx->MouseUp(0);
+    ctx->Yield(2);
+    IM_CHECK(h.app->preview->playing());
+    // The same hold while paused stays paused afterwards.
+    ctx->ItemClick("**/Pause");
+    ctx->MouseMove("**/##scrub");
+    ctx->MouseDown(0);
+    ctx->Yield(5);
+    ctx->MouseUp(0);
+    ctx->Yield(2);
+    IM_CHECK(!h.app->preview->playing());
+}
+
+// A widget must not move under the mouse because a number next to it changed
+// width (the font is proportional). The Vol slider sits after the live time
+// readout; the page arrows straddle the page counter.
+void test_layout_drift(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_preview(ctx)) return;
+    ctx->ItemClick("**/Play");
+    ImVec2 vol0 = ctx->ItemInfo("**/##volume").RectFull.Min;
+    ImVec2 play0 = ctx->ItemInfo("**/Pause").RectFull.Min;
+    ImVec2 scrub0 = ctx->ItemInfo("**/##scrub").RectFull.Min;
+    float scrubw0 = ctx->ItemInfo("**/##scrub").RectFull.GetWidth();
+    double t0 = h.app->preview->position_ms();
+    // Let the readout pass through several different digit strings.
+    IM_CHECK(wait_until(ctx, [&] { return h.app->preview->position_ms() > t0 + 1500.0; }, 10));
+    for (int i = 0; i < 20; ++i) {
+        ctx->Yield(3);
+        IM_CHECK_FLOAT_NEAR_EQ(ctx->ItemInfo("**/##volume").RectFull.Min.x, vol0.x, 0.01f);
+        IM_CHECK_FLOAT_NEAR_EQ(ctx->ItemInfo("**/##scrub").RectFull.Min.x, scrub0.x, 0.01f);
+        IM_CHECK_FLOAT_NEAR_EQ(ctx->ItemInfo("**/##scrub").RectFull.GetWidth(), scrubw0, 0.01f);
+    }
+    ctx->ItemClick("**/Pause");
+    // Play/Pause swap must not shift the scrubber either.
+    IM_CHECK_FLOAT_NEAR_EQ(ctx->ItemInfo("**/##scrub").RectFull.Min.x, scrub0.x, 0.01f);
+    (void)play0;
+}
+
+// The Analyzing modal shows the chart being worked on and live counts. It
+// must not change width (and walk its Cancel button around) as they change —
+// this is where the drift was most visible.
+void test_batch_modal_drift(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    ctx->SetRef("//Hydra");
+    ctx->ItemClick("Analyze library");
+    ctx->SetRef("//Analyzing");
+    ctx->ItemClick("Start");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->batch_job && !h.app->batch_job->snapshot().preparing; }, 30));
+    ImRect cancel0 = ctx->ItemInfo("Cancel").RectFull;
+    ImRect win0 = ctx->GetWindowByRef("//Analyzing")->Rect();
+    int seen_titles = 0;
+    std::string last_title;
+    while (!h.app->batch_job->snapshot().finished && seen_titles < 6) {
+        ctx->Yield();
+        std::string t = h.app->batch_job->snapshot().current_title;
+        if (!t.empty() && t != last_title) { last_title = t; ++seen_titles; }
+        ImRect cancel = ctx->ItemInfo("Cancel").RectFull;
+        ImRect win = ctx->GetWindowByRef("//Analyzing")->Rect();
+        IM_CHECK_FLOAT_NEAR_EQ(cancel.Min.x, cancel0.Min.x, 0.01f);
+        IM_CHECK_FLOAT_NEAR_EQ(cancel.Min.y, cancel0.Min.y, 0.01f);
+        IM_CHECK_FLOAT_NEAR_EQ(win.GetWidth(), win0.GetWidth(), 0.01f);
+        IM_CHECK_FLOAT_NEAR_EQ(win.Min.x, win0.Min.x, 0.01f);
+    }
+    IM_CHECK(seen_titles >= 2);  // the loop actually saw titles change
+    h.app->batch_job->cancel();
+    IM_CHECK(wait_until(ctx, [&] { return h.app->batch_job->snapshot().finished; }, 300));
+    ctx->ItemClick("Continue");
 }
 
 void test_settings_and_reports(ImGuiTestContext* ctx) {
@@ -253,6 +357,9 @@ void register_tests(Harness& h) {
         {"analyze", test_analyze},
         {"cap-switch", test_cap_switch},
         {"preview", test_preview},
+        {"scrub-hold", test_scrub_hold},
+        {"layout-drift", test_layout_drift},
+        {"batch-modal-drift", test_batch_modal_drift},
         {"settings-and-reports", test_settings_and_reports},
     };
     for (const Entry& e : entries) {

@@ -136,16 +136,23 @@ void render_folder_manager(AppState& app) {
 
 // The single row of library-wide actions at the top of the main screen.
 void render_actions_row(AppState& app) {
+    // The buttons here carry live counts and swap labels, so each takes the
+    // width of its widest label (widgets.h): the row must not reflow under
+    // the mouse when a count changes.
+    int folder_count = (int)app.settings.chartfolders.size();
     char manage_label[64];
-    std::snprintf(manage_label, sizeof(manage_label), "Manage folders... (%d)",
-                  (int)app.settings.chartfolders.size());
-    if (ImGui::Button(manage_label)) ImGui::OpenPopup("Song folders");
+    std::snprintf(manage_label, sizeof(manage_label), "Manage folders... (%d)", folder_count);
+    std::string manage_widest =
+        "Manage folders... (" + widest_digits(digit_count(folder_count)) + ")";
+    if (button_in_slot(manage_label, button_slot_width(manage_widest.c_str())))
+        ImGui::OpenPopup("Song folders");
     hint("Add or remove the folders Hydra scans for charts");
     ImGui::SameLine();
 
     bool can_scan = !app.settings.chartfolders.empty();
     begin_disabled_button(!can_scan);
-    if (ImGui::Button(app.settings.is_rescan ? "Refresh scan" : "Scan charts")) {
+    const float scan_w = std::max(button_slot_width("Refresh scan"), button_slot_width("Scan charts"));
+    if (button_in_slot(app.settings.is_rescan ? "Refresh scan" : "Scan charts", scan_w)) {
         app.start_scan();
         ImGui::OpenPopup("Scanning charts");
     }
@@ -162,8 +169,13 @@ void render_actions_row(AppState& app) {
     // Nothing to analyze -> disabled, like "Scan charts" with no folders
     // (running a batch over 0 charts just failed the report afterwards).
     int64_t analyzable = searching ? app.current_page.total_count : app.library_total;
+    // A search count can never exceed the library, so this slot fits both labels.
+    std::string analyze_widest =
+        "Analyze search (" + widest_digits(digit_count(app.library_total)) + ")";
+    const float analyze_w =
+        std::max(button_slot_width("Analyze library"), button_slot_width(analyze_widest.c_str()));
     begin_disabled_button(analyzable == 0);
-    if (ImGui::Button(label)) {
+    if (button_in_slot(label, analyze_w)) {
         // Confirm before starting: a library batch can be hours of all-core
         // CPU, which shouldn't fire irrevocably from one click.
         app.batch_confirm_pending = true;
@@ -350,8 +362,13 @@ void render_library_table(AppState& app, int visible_rows) {
     // trailing empty page (30 charts / 15 rows is 2 pages, not 3).
     int64_t last_page =
         std::max<int64_t>(0, (app.current_page.total_count - 1) / app.rows_per_page);
-    ImGui::Text("%d/%lld", app.table_viewpage + 1, (long long)last_page + 1);
-    ImGui::SameLine();
+    // "1/12" .. "12/12" in a slot as wide as the last page's digits twice, so
+    // the right arrow doesn't move when the page number grows a digit.
+    char page_text[32];
+    std::snprintf(page_text, sizeof(page_text), "%d/%lld", app.table_viewpage + 1,
+                  (long long)last_page + 1);
+    std::string page_digits = widest_digits(digit_count((long long)last_page + 1));
+    text_in_slot(page_text, text_slot_width((page_digits + "/" + page_digits).c_str()));
 
     bool at_last_page = app.table_viewpage >= last_page;
     begin_disabled_button(at_last_page);
@@ -363,6 +380,7 @@ void render_library_table(AppState& app, int visible_rows) {
 }
 
 void render_scan_modal(AppState& app) {
+    pin_next_modal_width(px(460.0f));  // live counts must not resize it
     if (!ImGui::BeginPopupModal("Scanning charts", nullptr,
                                 ImGuiWindowFlags_AlwaysAutoResize)) {
         return;
@@ -417,6 +435,9 @@ void render_scan_modal(AppState& app) {
 }
 
 void render_batch_modal(AppState& app) {
+    // The title and counts change every chart; the modal keeps one width and
+    // the title line is always there, so the Cancel button never moves.
+    pin_next_modal_width(px(520.0f));
     if (!ImGui::BeginPopupModal("Analyzing", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         // The popup can close without our buttons running; don't leave the
         // confirm stage armed with no modal on screen.
@@ -461,7 +482,10 @@ void render_batch_modal(AppState& app) {
 
     ImGui::Text(app.batch_job->is_cancelled() ? "Cancelling..."
                                               : s.finished ? "Finished." : "Analyzing...");
-    if (!s.current_title.empty()) ImGui::TextUnformatted(s.current_title.c_str());
+    if (!s.current_title.empty())
+        text_ellipsized(s.current_title.c_str());
+    else
+        ImGui::TextUnformatted(" ");  // keep the line so the layout below holds still
 
     progress_bar_counted(s.completed, s.total);
     ImGui::Text("%d analyzed, %d already stored, %d failed.", s.completed - s.failed, s.skipped,

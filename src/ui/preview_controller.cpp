@@ -49,6 +49,8 @@ void PreviewController::close() {
     scene_dirty_ = true;  // the renderer (if kept) must drop the old chart
     have_frame_ = false;
     active_ = false;
+    scrubbing_ = false;
+    resume_after_scrub_ = false;
     open_key_.clear();
     error_.clear();
 }
@@ -137,6 +139,18 @@ double PreviewController::position_ms() const { return transport_.now_ms(); }
 double PreviewController::length_ms() const { return transport_.length_ms(); }
 
 void PreviewController::seek_ms(double ms) { transport_.seek_ms(ms); }
+
+void PreviewController::set_scrubbing(bool held) {
+    if (held == scrubbing_) return;
+    scrubbing_ = held;
+    if (held) {
+        resume_after_scrub_ = transport_.playing();
+        if (resume_after_scrub_) transport_.pause();
+    } else if (resume_after_scrub_) {
+        resume_after_scrub_ = false;
+        transport_.play();
+    }
+}
 
 bool PreviewController::has_audio() const { return transport_.has_audio(); }
 
