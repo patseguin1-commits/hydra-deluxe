@@ -9,8 +9,8 @@
 #include "uitest_harness.h"
 
 #include "app/config.h"
+#include "app/report_files.h"
 #include "ui/app_state.h"
-#include "ui/jobs.h"
 #include "ui/preview_controller.h"
 
 namespace fs = std::filesystem;
@@ -185,7 +185,7 @@ void test_settings_and_reports(ImGuiTestContext* ctx) {
     IM_CHECK(wait_until(ctx, [&] { return h.app->batch_job && h.app->batch_job->snapshot().finished; }, 300));
     IM_CHECK(wait_until(ctx, [&] { return h.app->report_job && h.app->report_job->finished(); }, 60));
     IM_CHECK(h.app->report_job->ok());
-    IM_CHECK(hydra::ui::report_file_exists());
+    IM_CHECK(hydra::app::report_file_exists());
     IM_CHECK_EQ(h.opened_urls.size(), (size_t)0);
     ctx->ItemClick("**/Open path report");
     IM_CHECK_EQ(h.opened_urls.size(), (size_t)1);
@@ -201,7 +201,7 @@ void test_settings_and_reports(ImGuiTestContext* ctx) {
     ctx->ItemClick("**/###111");
     IM_CHECK(wait_until(ctx, [&] { return h.app->dm_report_job && h.app->dm_report_job->finished(); }, 60));
     IM_CHECK_STR_EQ(h.app->dm_report_job->error().c_str(), "");
-    IM_CHECK(fs::exists(hydra::ui::dm_report_html_path()));
+    IM_CHECK(fs::exists(hydra::app::dm_report_html_path()));
     IM_CHECK_EQ(h.app->dm_report_job->matched(), 1);
     IM_CHECK_EQ(h.opened_urls.size(), (size_t)1);  // still: auto-open is off
 }

@@ -9,7 +9,7 @@
 #include "app/config.h"
 #include "audio/device.h"
 #include "audio/player.h"
-#include "ui/jobs.h"
+#include "ui/preview_load_job.h"
 
 namespace hydra::ui {
 

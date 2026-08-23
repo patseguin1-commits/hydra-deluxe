@@ -8,6 +8,7 @@
 #include <filesystem>
 
 #include "app/html_page.h"
+#include "core/squeeze_rating.h"
 
 namespace hydra::app::report {
 
@@ -323,17 +324,17 @@ std::string plain(const std::string& text) {
 
 std::pair<std::string, std::string> tier_for(const std::optional<double>& ms,
                                              double hit_window_ms) {
-    // Raw squeeze ms, banded against the two-hit budget 2*W: quarters of the
-    // budget after the 2 ms "Normal" floor. At the historical W = 70 this is
-    // the original 2/35/70/105/140 ladder.
-    const double w = hit_window_ms;
-    if (!ms) return {"None", "tn"};
-    if (*ms < kDifficultMs) return {"Normal", "t0"};
-    if (*ms < w / 2) return {"Hard", "t1"};
-    if (*ms < w) return {"Extreme", "t2"};
-    if (*ms < 3 * w / 2) return {"Insane", "t3"};
-    if (*ms < 2 * w) return {"Insane+", "t4"};
-    return {"Beyond", "t5"};
+    // The ladder itself lives in core/squeeze_rating.h (timing_tiers) so
+    // these labels and the page's embedded tier table cannot drift apart.
+    // The two open bands are the table's last two entries: "Beyond", then
+    // the "None" (no squeeze) entry.
+    const std::vector<TimingTier> tiers = timing_tiers(hit_window_ms);
+    const TimingTier& none = tiers.back();
+    const TimingTier& beyond = tiers[tiers.size() - 2];
+    if (!ms) return {none.name, none.tok};
+    for (const TimingTier& t : tiers)
+        if (t.cutoff && *ms < *t.cutoff) return {t.name, t.tok};
+    return {beyond.name, beyond.tok};
 }
 
 std::vector<ReportRow> collect_rows(store::RecordStore& store, int64_t max_paths,
@@ -398,16 +399,8 @@ std::string build_html(const std::vector<ReportRow>& rows, const std::string& su
     data += "{\"hit_window\":" + py_repr(hit_window_ms);
     data += ",\"tiers\":[";
     {
-        const double w = hit_window_ms;
-        const struct { const char* name; const char* tok;
-                       std::optional<double> cutoff; } tiers[] = {
-            {"Normal", "t0", kDifficultMs}, {"Hard", "t1", w / 2},
-            {"Extreme", "t2", w},           {"Insane", "t3", 3 * w / 2},
-            {"Insane+", "t4", 2 * w},       {"Beyond", "t5", std::nullopt},
-            {"None", "tn", std::nullopt},
-        };
         bool first_tier = true;
-        for (const auto& t : tiers) {
+        for (const TimingTier& t : timing_tiers(hit_window_ms)) {
             if (!first_tier) data.push_back(',');
             first_tier = false;
             data += "{\"name\":";

@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstdint>
 #include <map>
+#include <string>
+#include <vector>
 
 #include "core/squeeze_rating.h"
 
@@ -519,4 +521,58 @@ TEST_CASE("exact solver prices displacements across a tempo boundary") {
     // Stale activations (no timecode / meter) shift nothing.
     Activation bare;
     CHECK(sp_end_shift_ms(100.0, SqueezeKind::SqOut, bare, st) == 0.0);
+}
+
+TEST_CASE("timing_tiers: the ladder at W=85 and at W=70") {
+    // The default 85 ms window -> a 170 ms two-hit budget: the 2 ms "Normal"
+    // floor, then quarters of the budget.
+    std::vector<TimingTier> t85 = timing_tiers();
+    REQUIRE(t85.size() == 7);
+
+    CHECK(std::string(t85[0].name) == "Normal");
+    CHECK(std::string(t85[0].tok) == "t0");
+    REQUIRE(t85[0].cutoff.has_value());
+    CHECK(*t85[0].cutoff == doctest::Approx(2.0));
+
+    CHECK(std::string(t85[1].name) == "Hard");
+    CHECK(std::string(t85[1].tok) == "t1");
+    REQUIRE(t85[1].cutoff.has_value());
+    CHECK(*t85[1].cutoff == doctest::Approx(42.5));
+
+    CHECK(std::string(t85[2].name) == "Extreme");
+    CHECK(std::string(t85[2].tok) == "t2");
+    REQUIRE(t85[2].cutoff.has_value());
+    CHECK(*t85[2].cutoff == doctest::Approx(85.0));
+
+    CHECK(std::string(t85[3].name) == "Insane");
+    CHECK(std::string(t85[3].tok) == "t3");
+    REQUIRE(t85[3].cutoff.has_value());
+    CHECK(*t85[3].cutoff == doctest::Approx(127.5));
+
+    CHECK(std::string(t85[4].name) == "Insane+");
+    CHECK(std::string(t85[4].tok) == "t4");
+    REQUIRE(t85[4].cutoff.has_value());
+    CHECK(*t85[4].cutoff == doctest::Approx(170.0));
+
+    // The two open bands carry no cutoff, and "None" is last.
+    CHECK(std::string(t85[5].name) == "Beyond");
+    CHECK(std::string(t85[5].tok) == "t5");
+    CHECK_FALSE(t85[5].cutoff.has_value());
+    CHECK(std::string(t85[6].name) == "None");
+    CHECK(std::string(t85[6].tok) == "tn");
+    CHECK_FALSE(t85[6].cutoff.has_value());
+
+    // The historical 70 ms window reproduces the original 2/35/70/105/140
+    // ladder exactly; only the cutoffs move.
+    std::vector<TimingTier> t70 = timing_tiers(70.0);
+    REQUIRE(t70.size() == 7);
+    const double want70[5] = {2.0, 35.0, 70.0, 105.0, 140.0};
+    for (size_t i = 0; i < 5; ++i) {
+        CHECK(std::string(t70[i].name) == std::string(t85[i].name));
+        CHECK(std::string(t70[i].tok) == std::string(t85[i].tok));
+        REQUIRE(t70[i].cutoff.has_value());
+        CHECK(*t70[i].cutoff == doctest::Approx(want70[i]));
+    }
+    CHECK_FALSE(t70[5].cutoff.has_value());
+    CHECK_FALSE(t70[6].cutoff.has_value());
 }

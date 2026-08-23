@@ -187,6 +187,16 @@ ActivationRating rate_activation(const Activation& act,
     return out;
 }
 
+std::vector<TimingTier> timing_tiers(double hit_window_ms) {
+    const double w = hit_window_ms;
+    return {
+        {"Normal", "t0", kDifficultMs}, {"Hard", "t1", w / 2},
+        {"Extreme", "t2", w},           {"Insane", "t3", 3 * w / 2},
+        {"Insane+", "t4", 2 * w},       {"Beyond", "t5", std::nullopt},
+        {"None", "tn", std::nullopt},
+    };
+}
+
 namespace {
 
 // Bisection ceiling: displacements past this are far outside anything a

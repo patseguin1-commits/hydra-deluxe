@@ -1,6 +1,6 @@
 // Tests for app/dm_report: the score-vs-optimal join (collect_dm_rows) and
 // the comparison page (build_dm_html). Pins the status strings the UI
-// compares as raw literals (see ui/jobs.cpp's DmReportJob tally).
+// compares as raw literals (see ui/dm_jobs.cpp's DmReportJob tally).
 
 #include "doctest.h"
 
@@ -84,7 +84,7 @@ TEST_CASE("collect_dm_rows joins scores to records and labels them") {
         app::dm_report::collect_dm_rows(store, scores, kMode);
     REQUIRE(rows.size() == 3);
 
-    // These exact strings are load-bearing: ui/jobs.cpp tallies the finished
+    // These exact strings are load-bearing: ui/dm_jobs.cpp tallies the finished
     // modal's counts by comparing them as literals.
     CHECK(rows[0].status == "matched");
     CHECK(rows[1].status == "above optimal");

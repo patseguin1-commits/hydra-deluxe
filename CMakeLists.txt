@@ -145,13 +145,16 @@ add_library(hydra_core STATIC
     src/app/preview_view.cpp
     src/app/preview_source.cpp
     src/app/report.cpp
+    src/app/report_files.cpp
 )
 target_include_directories(hydra_core PUBLIC src)
 target_compile_definitions(hydra_core PUBLIC HYDRA_VERSION="${PROJECT_VERSION}")
 # store/ needs sqlite3; app/ hashes chart files via CNG (bcrypt.lib) and walks
 # folders via the Win32 Find*File API (already linked into every Windows exe).
+# shell32: report_files.cpp hands finished report pages to the browser with
+# ShellExecuteW, for both the GUI's report jobs and the hydra_report CLI.
 target_link_libraries(hydra_core PUBLIC sqlite3 miniz)
-target_link_libraries(hydra_core PRIVATE bcrypt hydra_warnings)
+target_link_libraries(hydra_core PRIVATE bcrypt shell32 hydra_warnings)
 
 # ---- hydra_audio: the Preview audio engine (decode + mix + player) -------
 # Decodes chart stems to float PCM, mixes them, and (GUI-side) drives the
@@ -216,10 +219,12 @@ add_library(hydra_ui STATIC
     src/ui/app_shell.cpp
     src/ui/app_state.cpp
     src/ui/details_view.cpp
+    src/ui/dm_jobs.cpp
     src/ui/icons.cpp
-    src/ui/jobs.cpp
+    src/ui/library_jobs.cpp
     src/ui/library_view.cpp
     src/ui/preview_controller.cpp
+    src/ui/preview_load_job.cpp
     src/ui/preview_transport.cpp
     src/ui/theme.cpp
     src/ui/win32_dialogs.cpp
@@ -230,10 +235,11 @@ set_source_files_properties(src/ui/icons.cpp PROPERTIES COMPILE_OPTIONS "/W1")
 target_include_directories(hydra_ui PRIVATE third_party/stb)
 # hydra_render + hydra_audio join the GUI here (Phase 5): the Preview tab's
 # controller (preview_controller.cpp) drives the offscreen renderer and the
-# audio engine, and jobs.cpp's PreviewLoadJob decodes + mixes stems. PUBLIC so
-# the exes link them transitively.
+# audio engine, and preview_load_job.cpp's PreviewLoadJob decodes + mixes
+# stems. PUBLIC so the exes link them transitively.
 target_link_libraries(hydra_ui PUBLIC hydra_dm imgui imgui_test_engine hydra_render hydra_audio)
-# shell32: ShellExecuteW (opening reports); ole32: the folder-picker dialog;
+# shell32/ole32: the folder-picker dialog (opening reports moved down to
+# hydra_core's report_files.cpp with the rest of the report-file handling);
 # hydra_image: icons.cpp decodes its PNGs through the shared stb TU.
 target_link_libraries(hydra_ui PRIVATE ole32 shell32 hydra_image hydra_warnings)
 

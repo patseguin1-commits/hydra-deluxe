@@ -17,10 +17,10 @@
 #include "imgui_te_internal.h"
 
 #include "app/config.h"
+#include "app/report_files.h"
 #include "audio/device.h"
 #include "net/dmbot_client.h"
 #include "ui/app_state.h"
-#include "ui/jobs.h"
 #include "ui/preview_controller.h"
 
 namespace fs = std::filesystem;
@@ -241,7 +241,7 @@ void reset_app(Harness& h) {
     h.app.reset();
 
     hydra::audio::set_headless(true);
-    hydra::ui::set_open_in_browser([&h](const std::wstring& path) {
+    hydra::app::set_open_in_browser([&h](const std::wstring& path) {
         h.opened_urls.push_back(path);
         return true;
     });

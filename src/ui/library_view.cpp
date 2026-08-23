@@ -1,5 +1,6 @@
 #include "ui/library_view.h"
 
+#include "app/report_files.h"
 #include "imgui.h"
 #include "store/record_store.h"
 #include "ui/fonts.h"
@@ -483,7 +484,7 @@ void render_batch_modal(AppState& app) {
             ImGui::TextColored(kWarningColor, "Path report failed: %s",
                                app.report_job->error().c_str());
         } else if (app.report_job) {
-            if (ImGui::Button("Open path report")) open_report_in_browser();
+            if (ImGui::Button("Open path report")) app::open_report_in_browser();
             ImGui::SameLine();
             if (ImGui::Checkbox("Open automatically", &app.settings.auto_open_report))
                 app.commit_settings();
@@ -538,7 +539,7 @@ void render_dm_picker_modal(AppState& app) {
                                     ? "The report opened in your browser."
                                     : "The report is ready.");
             ImGui::Spacing();
-            if (ImGui::Button("Open report again")) open_dm_report_in_browser();
+            if (ImGui::Button("Open report again")) app::open_dm_report_in_browser();
             ImGui::SameLine();
             if (ImGui::Button("Compare another")) app.dm_report_job.reset();
             ImGui::SameLine();
@@ -691,9 +692,9 @@ void render_main_window(AppState& app) {
 
     // A way back into the last batch's HTML report (it used to exist only as
     // an unrequested browser launch right after a batch).
-    if (report_file_exists()) {
+    if (app::report_file_exists()) {
         ImGui::SameLine();
-        if (ImGui::Button("Open path report") && !open_report_in_browser())
+        if (ImGui::Button("Open path report") && !app::open_report_in_browser())
             app.set_status("The path report could not be opened.");
     }
     ImGui::Spacing();

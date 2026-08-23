@@ -19,12 +19,12 @@
 
 #include <cstdio>
 #include <filesystem>
-#include <fstream>
 #include <optional>
 #include <string>
 
 #include "app/config.h"
 #include "app/report.h"
+#include "app/report_files.h"
 #include "core/model.h"
 #include "store/record_store.h"
 
@@ -77,24 +77,22 @@ int main(int argc, char** argv) {
     std::error_code ec;
     std::filesystem::create_directories(outpath.parent_path(), ec);
 
-    std::ofstream f(outpath, std::ios::binary | std::ios::trunc);
-    if (!f) {
+    try {
+        hydra::app::write_report_file(outpath, report.html);
+    } catch (const std::exception&) {
         std::fprintf(stderr, "Cannot write %s\n", out.c_str());
         return 1;
     }
-    f << report.html;
-    f.close();
 
     std::printf("Wrote %s path rows to %s\n",
                 hydra::group_thousands(report.rows).c_str(), out.c_str());
 
     if (open_when_done) {
-        // Hand the page to the default browser. ShellExecuteW returns > 32 on
-        // success; failure (no association, whatever) isn't worth failing the
-        // run over — the file is already written and its path was printed.
-        HINSTANCE rc = ShellExecuteW(nullptr, L"open", outpath.c_str(), nullptr,
-                                     nullptr, SW_SHOWNORMAL);
-        if (reinterpret_cast<INT_PTR>(rc) <= 32)
+        // Hand the page to the default browser (the same call the GUI's
+        // report jobs make). Failure (no association, whatever) isn't worth
+        // failing the run over — the file is already written and its path was
+        // printed.
+        if (!hydra::app::open_in_browser(outpath.wstring()))
             std::fprintf(stderr, "Could not open the page automatically.\n");
     }
     return 0;

@@ -9,6 +9,7 @@
 
 #include "app/analysis.h"
 #include "app/report.h"
+#include "core/squeeze_rating.h"
 #include "corpus_util.h"
 #include "store/record_store.h"
 
@@ -145,6 +146,20 @@ TEST_CASE("tier_for: raw-ms bands derived from the two-hit budget") {
     CHECK(tier_for(70.0, 70.0).first == "Insane");
     CHECK(tier_for(105.0, 70.0).first == "Insane+");
     CHECK(tier_for(140.0, 70.0).first == "Beyond");
+}
+
+TEST_CASE("tier_for walks the timing_tiers table edge by edge") {
+    // tier_for and the page's embedded tier table read the one ladder in
+    // core/squeeze_rating.h, so every banded entry's cutoff is exactly where
+    // the label flips to the next entry's.
+    std::vector<TimingTier> tiers = timing_tiers(85.0);
+    REQUIRE(tiers.size() >= 2);
+    for (size_t i = 0; i + 1 < tiers.size(); ++i) {
+        if (!tiers[i].cutoff) continue;
+        const double cutoff = *tiers[i].cutoff;
+        CHECK(report::tier_for(cutoff - 0.01, 85.0).first == tiers[i].name);
+        CHECK(report::tier_for(cutoff, 85.0).first == tiers[i + 1].name);
+    }
 }
 
 TEST_CASE("report payload carries the hit window and the tier table") {

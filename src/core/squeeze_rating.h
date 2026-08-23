@@ -125,6 +125,16 @@ ActivationRating rate_activation(const Activation& act,
                                  const SongTiming* timing,
                                  double hit_window_ms = kDefaultHitWindowMs);
 
+// ---- timing tiers ---------------------------------------------------------
+
+// The report's timing tiers: raw squeeze ms banded against the two-hit
+// budget 2*W, quarters of the budget after the kDifficultMs "Normal" floor
+// (at the historical W = 70 this is the 2/35/70/105/140 ladder). In payload
+// order; `cutoff` is the band's exclusive upper edge, unset for the open
+// "Beyond" band and the "None" (no squeeze) entry.
+struct TimingTier { const char* name; const char* tok; std::optional<double> cutoff; };
+std::vector<TimingTier> timing_tiers(double hit_window_ms = kDefaultHitWindowMs);
+
 // ---- exact squeeze solver -------------------------------------------------
 // The transfer scale linearizes the SP-end map E(h) at one point; these
 // evaluate it exactly through SongTiming::sp_end_ms, so a displacement that

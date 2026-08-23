@@ -9,7 +9,7 @@
 //
 // The render.com backend is free-tier and spins down when idle, so the first
 // request after a lull can take tens of seconds to cold-start. Callers run
-// these off the render thread (see ui/jobs.h) with a generous timeout and a
+// these off the render thread (see ui/dm_jobs.h) with a generous timeout and a
 // cancel flag.
 
 #ifndef HYDRA_NET_DMBOT_CLIENT_H

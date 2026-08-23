@@ -1,23 +1,11 @@
-#include "ui/jobs.h"
+#include "ui/library_jobs.h"
 
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-
-#include <algorithm>
 #include <filesystem>
-#include <fstream>
-#include <thread>
+#include <stdexcept>
 
 #include "app/config.h"
-#include "app/dm_report.h"
-#include "app/preview_source.h"
-#include "app/preview_view.h"
 #include "app/report.h"
-#include "audio/mixer.h"
-#include "core/model.h"
-#include "net/dmbot_client.h"
+#include "app/report_files.h"
 
 namespace hydra::ui {
 
@@ -170,124 +158,6 @@ void BatchJob::run() {
     snap_.finished = true;
 }
 
-// ---- ReportJob --------------------------------------------------------
-
-namespace {
-
-// Report pages live next to the db.
-std::wstring html_artifact_path(const wchar_t* name) {
-    std::filesystem::path dbp = std::filesystem::u8path(app::db_path());
-    return (dbp.parent_path() / name).wstring();
-}
-
-OpenInBrowserFn g_open_in_browser;
-
-bool open_in_browser(const std::wstring& path) {
-    if (g_open_in_browser) return g_open_in_browser(path);
-    HINSTANCE rc = ShellExecuteW(nullptr, L"open", path.c_str(), nullptr,
-                                 nullptr, SW_SHOWNORMAL);
-    return reinterpret_cast<INT_PTR>(rc) > 32;
-}
-
-// The shared report tail: write the page and open it in the browser.
-void write_and_open(const std::filesystem::path& outpath, const std::string& html,
-                    bool open_when_done) {
-    std::ofstream f(outpath, std::ios::binary | std::ios::trunc);
-    if (!f) throw std::runtime_error("cannot write " + outpath.u8string());
-    f << html;
-    f.close();
-    if (open_when_done && !open_in_browser(outpath.wstring()))
-        throw std::runtime_error("could not open " + outpath.u8string());
-}
-
-}  // namespace
-
-void set_open_in_browser(OpenInBrowserFn fn) { g_open_in_browser = std::move(fn); }
-
-std::wstring report_html_path() { return html_artifact_path(L"hydra_paths.html"); }
-
-bool open_report_in_browser() { return open_in_browser(report_html_path()); }
-
-bool report_file_exists() {
-    return GetFileAttributesW(report_html_path().c_str()) != INVALID_FILE_ATTRIBUTES;
-}
-
-ReportJob::ReportJob(store::RecordStore& store, store::CapQuery cap, bool open_when_done,
-                     int hit_window_ms)
-    : store_(store),
-      cap_(cap),
-      open_when_done_(open_when_done),
-      hit_window_ms_(hit_window_ms) {}
-
-void ReportJob::start() { spawn([this] { run(); }); }
-
-void ReportJob::run() {
-    run_guarded([this] {
-        // One seam for the whole page — rows, counts, and framing come from
-        // generate_report, the same call the hydra_report CLI makes.
-        app::report::ReportOptions options;
-        options.max_paths = 5;
-        options.cap = cap_;
-        options.hit_window_ms = hit_window_ms_;
-        options.db_path = app::db_path();
-        app::report::GeneratedReport report =
-            app::report::generate_report(store_, options);
-        if (report.rows == 0) throw std::runtime_error("no records stored yet");
-
-        write_and_open(report_html_path(), report.html, open_when_done_);
-        return true;
-    });
-}
-
-// ---- DmFetchUsersJob --------------------------------------------------
-
-void DmFetchUsersJob::start() { spawn([this] { run(); }); }
-
-void DmFetchUsersJob::run() {
-    run_guarded([this] {
-        users_ = net::fetch_users(net::kDefaultApiBase, &cancel_);
-        return true;
-    });
-}
-
-// ---- DmReportJob ------------------------------------------------------
-
-std::wstring dm_report_html_path() { return html_artifact_path(L"hydra_dmcompare.html"); }
-
-bool open_dm_report_in_browser() { return open_in_browser(dm_report_html_path()); }
-
-DmReportJob::DmReportJob(store::RecordStore& store, std::string discord_id, std::string username,
-                         std::string chartmode, bool open_when_done)
-    : store_(store),
-      discord_id_(std::move(discord_id)),
-      username_(std::move(username)),
-      chartmode_(std::move(chartmode)),
-      open_when_done_(open_when_done) {}
-
-void DmReportJob::start() { spawn([this] { run(); }); }
-
-void DmReportJob::run() {
-    run_guarded([this] {
-        std::vector<net::DmScore> scores =
-            net::fetch_scores(discord_id_, net::kDefaultApiBase, &cancel_);
-        // Join, tally, and framing all live behind generate_dm_report; the
-        // job only fetches, forwards the counts, and writes the file.
-        app::dm_report::GeneratedDmReport report =
-            app::dm_report::generate_dm_report(store_, scores, chartmode_,
-                                               username_);
-        if (report.stats.total == 0)
-            throw std::runtime_error("this user has no scores to compare");
-
-        total_ = report.stats.total;
-        matched_ = report.stats.matched;
-        above_ = report.stats.above;
-        unmatched_ = report.stats.unmatched;
-
-        write_and_open(dm_report_html_path(), report.html, open_when_done_);
-        return true;
-    });
-}
-
 // ---- AnalyzeJob -------------------------------------------------------
 
 namespace {
@@ -332,32 +202,36 @@ void AnalyzeJob::start() {
 
 app::AnalysisResult AnalyzeJob::take_result() { return std::move(*result_); }
 
-// ---- PreviewLoadJob ---------------------------------------------------
+// ---- ReportJob --------------------------------------------------------
 
-PreviewLoadJob::PreviewLoadJob(store::ChartLibraryEntry entry, bool pro, bool bass2x,
-                               std::optional<Path> path)
-    : entry_(std::move(entry)),
-      pro_(pro),
-      bass2x_(bass2x),
-      path_(std::move(path)) {}
+ReportJob::ReportJob(store::RecordStore& store, store::CapQuery cap, bool open_when_done,
+                     int hit_window_ms)
+    : store_(store),
+      cap_(cap),
+      open_when_done_(open_when_done),
+      hit_window_ms_(hit_window_ms) {}
 
-void PreviewLoadJob::start() { spawn([this] { run(); }); }
+void ReportJob::start() { spawn([this] { run(); }); }
 
-void PreviewLoadJob::run() {
+void ReportJob::run() {
     run_guarded([this] {
-        // Re-parse the chart and locate its audio (the note stream and stems
-        // are never stored), then decode + mix to one 48 kHz stereo buffer.
-        app::PreviewSource source =
-            app::resolve_preview_source(entry_.notespath, pro_, bass2x_);
-        audio::DecodedAudio mixed =
-            audio::decode_and_mix(source.stems, /*out_rate=*/48000, /*out_channels=*/2);
-        const Path* path = path_ ? &*path_ : nullptr;
-        app::PreviewScene scene = app::build_preview_scene(source.song, path);
-        result_ = Result{std::move(scene), std::move(mixed)};
+        // One seam for the whole page — rows, counts, and framing come from
+        // generate_report, the same call the hydra_report CLI makes.
+        app::report::ReportOptions options;
+        options.max_paths = 5;
+        options.cap = cap_;
+        options.hit_window_ms = hit_window_ms_;
+        options.db_path = app::db_path();
+        app::report::GeneratedReport report =
+            app::report::generate_report(store_, options);
+        if (report.rows == 0) throw std::runtime_error("no records stored yet");
+
+        std::filesystem::path outpath = app::report_html_path();
+        app::write_report_file(outpath, report.html);
+        if (open_when_done_ && !app::open_in_browser(outpath.wstring()))
+            throw std::runtime_error("could not open " + outpath.u8string());
         return true;
     });
 }
-
-PreviewLoadJob::Result PreviewLoadJob::take_result() { return std::move(*result_); }
 
 }  // namespace hydra::ui

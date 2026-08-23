@@ -19,8 +19,9 @@
 #include "app/analysis.h"
 #include "app/config.h"
 #include "store/record_store.h"
+#include "ui/dm_jobs.h"
 #include "ui/generation.h"
-#include "ui/jobs.h"
+#include "ui/library_jobs.h"
 
 struct ID3D11Device;
 struct ID3D11DeviceContext;
