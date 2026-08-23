@@ -188,11 +188,16 @@ constexpr int kBlobHeadBytes = 18;
 // The cap filter for a single-row lookup (get_summary / get_record). Appended
 // after "WHERE hyhash=? AND chartmode=?"; bind_cap_lookup binds its one
 // parameter at the given index. Auto takes the best row: current version
-// first, then the highest cap.
+// first, then the newest. Newest, not tallest: an Auto run that settles below
+// an older, taller row (an imported uncapped result, a what-if the user
+// typed) is the result the user just asked for, and the only one that ran
+// under the current depth / ms settings. The tallest rule showed the old row
+// forever and "Analyze paths!" could never replace it. Write order is the
+// rowid: INSERT OR REPLACE gives a rewritten row a fresh one.
 void append_cap_lookup(std::string& sql, const CapQuery& cap) {
     if (cap.exact) sql += " AND sp_cap=?";
     else sql += " AND sp_cap>" + std::to_string(kCloneHeroSpCap) +
-                " ORDER BY (hyversion=?) DESC, sp_cap DESC LIMIT 1";
+                " ORDER BY (hyversion=?) DESC, rowid DESC LIMIT 1";
 }
 void bind_cap_lookup(sqlite3_stmt* s, int idx, const CapQuery& cap) {
     if (cap.exact) sqlite3_bind_int(s, idx, *cap.exact);
@@ -202,8 +207,8 @@ void bind_cap_lookup(sqlite3_stmt* s, int idx, const CapQuery& cap) {
 // The cap filter for a set query over alias r (list_records / for_each_blob):
 // exact keeps rows at that cap; Auto keeps, per (hyhash, chartmode), the one
 // row an Auto lookup would pick -- no other row above 4 outranks it, where
-// "outranks" is current-version first, then higher cap. Binds three
-// parameters for Auto, one for exact.
+// "outranks" is current-version first, then newer (see append_cap_lookup).
+// Binds four parameters for Auto, one for exact.
 void append_cap_set_filter(std::string& sql, const CapQuery& cap) {
     if (cap.exact) {
         sql += " AND r.sp_cap = ?";
@@ -215,7 +220,7 @@ void append_cap_set_filter(std::string& sql, const CapQuery& cap) {
            "   WHERE x.hyhash = r.hyhash AND x.chartmode = r.chartmode"
            "     AND x.sp_cap > " + four +
            "     AND ((x.hyversion = ?) > (r.hyversion = ?)"
-           "          OR ((x.hyversion = ?) = (r.hyversion = ?) AND x.sp_cap > r.sp_cap)))";
+           "          OR ((x.hyversion = ?) = (r.hyversion = ?) AND x.rowid > r.rowid)))";
 }
 int bind_cap_set_filter(sqlite3_stmt* s, int idx, const CapQuery& cap) {
     if (cap.exact) {

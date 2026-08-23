@@ -24,10 +24,18 @@ improving) that settles at 64 give identical paths. The only thing Auto adds is
 "I also tried the next rung and nothing improved." We judged that not worth a
 second row or a label. Imported pre-1.6 records could not have told us anyway.
 
-**Auto is satisfied by the chart's highest record above 4.** Records made by
-the current app version win over stale ones, then the highest cap wins. If
-nothing above 4 exists, the ladder runs. This is the rule behind "only analyze
-again if there is no record for the current settings".
+**Auto is satisfied by the chart's newest record above 4.** Records made by
+the current app version win over stale ones, then the most recently written
+one wins. If nothing above 4 exists, the ladder runs. This is the rule behind
+"only analyze again if there is no record for the current settings".
+
+1.6.0 shipped with "the highest cap wins". That rule had a hole: a chart with
+an old tall row (an imported uncapped result, or a what-if the user typed)
+could never show a fresh Auto run that settled lower. The user pressed
+Analyze, the ladder settled at 64, the store kept the 64-bar row, and the view
+went on showing the 1728-bar row with its stale depth and ms settings. Newest
+wins means an Auto run always becomes the Auto answer; the taller row stays
+for an explicit lookup at its cap.
 
 **The ms limit and score range do not key a record.** They are stored on it
 and shown, as before; re-analyzing with a different value overwrites. Only the
@@ -35,8 +43,8 @@ cap changes a record's identity.
 
 ## What this costs
 
-An Auto re-run that settles lower than an existing row leaves an unused row
-behind: the higher one still wins. Harmless, but it is there.
+An Auto re-run that settles lower than an existing row leaves the taller row
+behind, reachable only by typing its cap. Harmless, but it is there.
 
 Every lookup must say which cap it wants. The leaderboard comparison is pinned
 to 4 bars and refuses to run otherwise, because the leaderboard plays by Clone

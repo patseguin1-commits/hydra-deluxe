@@ -463,7 +463,7 @@ int user_version(const std::string& path) {
 
 }  // namespace
 
-TEST_CASE("records at different caps coexist; Auto picks the highest current one") {
+TEST_CASE("records at different caps coexist; Auto picks the newest current one") {
     RecordStore store(":memory:");
     store.add_song("h", "Song", "Artist", "Charter", fixture().song);
     store.add_record(RecordKey{"h", "mode", CapQuery::at(4)}, at_cap(4));
@@ -476,7 +476,7 @@ TEST_CASE("records at different caps coexist; Auto picks the highest current one
     CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::at(8)}).status ==
           RecordStatus::NotAnalyzed);
 
-    // Auto takes the highest cap above 4 and counts it as already analyzed.
+    // Auto takes the newest row above 4 and counts it as already analyzed.
     CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic()}).record->sp_cap == 32);
     CHECK(store.has_record(RecordKey{"h", "mode", CapQuery::automatic()}));
     CHECK(store.get_summary(RecordKey{"h", "mode", CapQuery::automatic()}).status ==
@@ -531,6 +531,40 @@ TEST_CASE("records at different caps coexist; Auto picks the highest current one
     CHECK(store.reindex() == 3);
     CHECK(store.list_records(std::nullopt, CapQuery::at(4), SortColumn::Score, true)[0]
               .summary.score == fixture().record.best_path().totalscore());
+}
+
+TEST_CASE("an Auto run that settles below an existing row becomes the Auto answer") {
+    // The real sequence behind the bug: a chart already holds a tall row (an
+    // imported uncapped run, or a what-if the user typed), then the user
+    // presses Analyze under Auto and the ladder settles lower. The fresh row
+    // is the one the user just paid for and the one that matches the current
+    // depth / ms settings, so every Auto lookup must show it -- not the
+    // taller, older one.
+    RecordStore store(":memory:");
+    store.add_song("h", "Song", "Artist", "Charter", fixture().song);
+    store.add_record(RecordKey{"h", "mode", CapQuery::at(32)}, at_cap(32));
+    store.add_record(RecordKey{"h", "mode", CapQuery::automatic()}, at_cap(16));
+    CHECK(store.counts().second == 2);
+
+    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic()}).record->sp_cap == 16);
+    std::vector<RecordListing> listed =
+        store.list_records(std::nullopt, CapQuery::automatic(), SortColumn::Score, true);
+    REQUIRE(listed.size() == 1);
+    CHECK(listed[0].sp_cap == 16);
+    int seen = 0;
+    store.for_each_blob(std::nullopt, CapQuery::automatic(),
+                        [&](const RecordStore::BlobRow& meta, const HydraRecord*) {
+                            CHECK(meta.sp_cap == 16);
+                            ++seen;
+                        });
+    CHECK(seen == 1);
+
+    // The taller row is still there for an explicit lookup.
+    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::at(32)}).record->sp_cap == 32);
+
+    // Re-analyzing at the taller cap makes it the newest again.
+    store.add_record(RecordKey{"h", "mode", CapQuery::at(32)}, at_cap(32));
+    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic()}).record->sp_cap == 32);
 }
 
 TEST_CASE("prepare_row refuses a key whose exact cap isn't the record's") {
