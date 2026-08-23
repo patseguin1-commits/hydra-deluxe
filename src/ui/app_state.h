@@ -38,10 +38,9 @@ struct LibraryPage {
     // The "Best Path" cell's state, resolved once per page refresh — querying
     // the store per visible row per frame contended the store's mutex with
     // batch workers thousands of times a second.
-    enum class SummaryState { New, Current, Stale };
     struct RowSummary {
-        SummaryState state = SummaryState::New;
-        std::string bestpath;  // set when state == Current
+        store::RecordStatus state = store::RecordStatus::NotAnalyzed;
+        std::string bestpath;  // set when state == Ready
     };
 
     std::vector<store::ChartLibraryEntry> rows;
@@ -51,13 +50,13 @@ struct LibraryPage {
 
 // Per-frame UI state of the Song Details modal. Owned here, not as statics in
 // the draw code: a static outlives this AppState (the UI test runner builds one
-// per test) and a static pointer into viewed_record outlived the record itself
-// (1.5.1 SP-cap crash). Everything in here is derived from, and must be
+// per test) and a static pointer into `viewed`'s record outlived the record
+// itself (1.5.1 SP-cap crash). Everything in here is derived from, and must be
 // re-synced against, the AppState fields it mirrors.
 struct DetailsViewState {
     // Tracks show_details' false->true edge, which is what opens the popup.
     bool prev_open = false;
-    // Points into viewed_record; valid only for record_watcher's generation.
+    // Points into `viewed`'s record; valid only for record_watcher's generation.
     const Path* selected_path = nullptr;
     GenerationWatcher record_watcher;
     // The SP cap number box keeps its last value while Auto is ticked, so
@@ -110,18 +109,15 @@ public:
     // The details modal's own per-frame state (see DetailsViewState above).
     DetailsViewState details_ui;
 
-    // The record for `selected` under the current chartmode, reloaded on
-    // selection and after a fresh analysis. nullopt means "no record yet";
-    // an empty-paths record (see RecordStore::get_record) means "stale
-    // version, please re-analyze".
-    std::optional<HydraRecord> viewed_record;
+    // The stored-record lookup for `selected` under the current chartmode,
+    // reloaded on selection and after a fresh analysis. It carries the status
+    // (not analyzed / stale / ready), the record when there is one, and that
+    // song's timing context — the store is DB+mutex, so the per-frame details
+    // view must never query it again. Reset to a default (NotAnalyzed) when
+    // nothing is selected.
+    store::RecordLookup viewed;
     Generation record_generation;  // bumped by refresh_viewed_record(); invalidates UI selection caches
     void refresh_viewed_record();
-
-    // Timing context for `selected`'s song, loaded alongside viewed_record —
-    // the store is DB+mutex, so the per-frame details view must never query
-    // it. nullopt when the song isn't registered.
-    std::optional<SongTiming> viewed_timing;
 
     // 3D Preview (Phase 5). The GUI's shared D3D11 device is injected once at
     // startup (set_render_device, mirroring load_icons); the controller is

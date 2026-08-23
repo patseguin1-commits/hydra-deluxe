@@ -41,16 +41,28 @@ const AnalysisResult& analyzed() {
 }  // namespace
 
 TEST_CASE("build_record_status: the three states and their lines") {
-    CHECK(build_record_status(nullptr).state ==
-          RecordStatusView::State::NotAnalyzed);
+    // The store's status is what decides the panel; the view only formats it.
+    auto ready = [](const HydraRecord& record) {
+        store::RecordLookup lookup;
+        lookup.status = store::RecordStatus::Ready;
+        lookup.hyversion = store::current_record_version();
+        lookup.record = record;
+        return lookup;
+    };
 
-    HydraRecord stale;  // empty paths == stale version (see RecordStore)
-    CHECK(build_record_status(&stale).state ==
-          RecordStatusView::State::Stale);
+    CHECK(build_record_status(store::RecordLookup{}).state ==
+          store::RecordStatus::NotAnalyzed);
+
+    store::RecordLookup stale;
+    stale.status = store::RecordStatus::Stale;
+    stale.hyversion = "0.0.0";  // no record: a stale blob is never decoded
+    RecordStatusView stale_view = build_record_status(stale);
+    CHECK(stale_view.state == store::RecordStatus::Stale);
+    CHECK(stale_view.lines.empty());
 
     const HydraRecord& rec = analyzed().record;
-    RecordStatusView view = build_record_status(&rec);
-    REQUIRE(view.state == RecordStatusView::State::Ready);
+    RecordStatusView view = build_record_status(ready(rec));
+    REQUIRE(view.state == store::RecordStatus::Ready);
     REQUIRE(view.lines.size() == 4);
     CHECK(view.lines[0] ==
           "Best score:  " + group_thousands(rec.best_path().totalscore()));
@@ -61,12 +73,20 @@ TEST_CASE("build_record_status: the three states and their lines") {
 
     HydraRecord nolimit = rec;
     nolimit.ms_limit.reset();
-    CHECK(build_record_status(&nolimit).lines[2] == "Limit timings:  off");
+    CHECK(build_record_status(ready(nolimit)).lines[2] == "Limit timings:  off");
 
     // The cap line always names the cap the record ran at.
     HydraRecord whatif = rec;
     whatif.sp_cap = 32;
-    CHECK(build_record_status(&whatif).lines[3] == "SP cap:  32 bars");
+    CHECK(build_record_status(ready(whatif)).lines[3] == "SP cap:  32 bars");
+
+    // A Ready record that found nothing stays Ready and says so in one line.
+    HydraRecord nothing = rec;
+    nothing.paths.clear();
+    RecordStatusView none = build_record_status(ready(nothing));
+    CHECK(none.state == store::RecordStatus::Ready);
+    REQUIRE(none.lines.size() == 1);
+    CHECK(none.lines[0] == "No paths found.");
 }
 
 TEST_CASE("build_score_breakdown: exact lines, truncation not rounding") {

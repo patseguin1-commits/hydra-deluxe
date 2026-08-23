@@ -44,20 +44,15 @@ void AppState::refresh_page() {
     // Resolve each row's Best Path summary once here instead of per row per
     // frame in the render loop (a SQLite query at 60fps x 200 rows, on the
     // render thread, against the same mutex the batch workers hold).
-    std::string current_version = store::current_record_version();
     const store::CapQuery cap = settings.cap_query();
     current_page.summaries.clear();
     current_page.summaries.reserve(current_page.rows.size());
     for (const store::ChartLibraryEntry& row : current_page.rows) {
+        store::SummaryLookup summary =
+            store->get_summary(row.md5, settings.chartmode_key(), cap);
         LibraryPage::RowSummary rs;
-        if (auto summary = store->get_summary(row.md5, settings.chartmode_key(), cap)) {
-            if (summary->first == current_version) {
-                rs.state = LibraryPage::SummaryState::Current;
-                rs.bestpath = summary->second;
-            } else {
-                rs.state = LibraryPage::SummaryState::Stale;
-            }
-        }
+        rs.state = summary.status;
+        rs.bestpath = std::move(summary.bestpath);
         current_page.summaries.push_back(std::move(rs));
     }
 
@@ -83,13 +78,11 @@ void AppState::select(const store::ChartLibraryEntry& entry) {
 
 void AppState::refresh_viewed_record() {
     if (!selected) {
-        viewed_record.reset();
-        viewed_timing.reset();
+        viewed = store::RecordLookup{};
         return;
     }
-    viewed_record =
+    viewed =
         store->get_record(selected->md5, settings.chartmode_key(), settings.cap_query());
-    viewed_timing = store->get_timing(selected->md5);
     record_generation.bump();
 }
 

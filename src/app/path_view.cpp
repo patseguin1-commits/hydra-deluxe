@@ -18,28 +18,29 @@ std::string measurestr(const Timecode& tc) {
 
 }  // namespace
 
-RecordStatusView build_record_status(const HydraRecord* record) {
+RecordStatusView build_record_status(const store::RecordLookup& lookup) {
     RecordStatusView view;
-    if (!record) {
-        view.state = RecordStatusView::State::NotAnalyzed;
+    view.state = lookup.status;
+    if (view.state != store::RecordStatus::Ready || !lookup.record) return view;
+
+    const HydraRecord& record = *lookup.record;
+    // A Ready record can legitimately hold nothing -- the chart was analyzed
+    // and no path survived. Say so instead of asking for a best path.
+    if (record.paths.empty()) {
+        view.lines.push_back("No paths found.");
         return view;
     }
-    if (record->paths.empty()) {
-        view.state = RecordStatusView::State::Stale;
-        return view;
-    }
-    view.state = RecordStatusView::State::Ready;
     view.lines.push_back("Best score:  " +
-                         group_thousands(record->best_path().totalscore()));
+                         group_thousands(record.best_path().totalscore()));
     view.lines.push_back("Paths kept:  " +
-                         std::to_string((int)record->all_paths().size()));
-    if (record->ms_limit)
+                         std::to_string((int)record.all_paths().size()));
+    if (record.ms_limit)
         view.lines.push_back("Limit timings:  " +
-                             std::to_string((int)*record->ms_limit) + " ms");
+                             std::to_string((int)*record.ms_limit) + " ms");
     else
         view.lines.push_back("Limit timings:  off");
-    if (record->sp_cap)
-        view.lines.push_back("SP cap:  " + std::to_string(*record->sp_cap) + " bars");
+    if (record.sp_cap)
+        view.lines.push_back("SP cap:  " + std::to_string(*record.sp_cap) + " bars");
     return view;
 }
 

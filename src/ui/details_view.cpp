@@ -81,19 +81,18 @@ void render_record_status(AppState& app, float width) {
     ImGui::BeginChild("songanalysis", ImVec2(width, px(200)), ImGuiChildFlags_Borders);
     ImGui::SeparatorText("Stored result");
 
-    app::RecordStatusView status =
-        app::build_record_status(app.viewed_record ? &*app.viewed_record : nullptr);
+    app::RecordStatusView status = app::build_record_status(app.viewed);
     switch (status.state) {
-        case app::RecordStatusView::State::NotAnalyzed:
+        case store::RecordStatus::NotAnalyzed:
             ImGui::TextDisabled("Not analyzed yet.");
             break;
-        case app::RecordStatusView::State::Stale: {
+        case store::RecordStatus::Stale: {
             WarnColor warn;
             ImGui::TextWrapped("Stale: analyzed by an older Hydra version. "
                                "Re-analyze to refresh it.");
             break;
         }
-        case app::RecordStatusView::State::Ready:
+        case store::RecordStatus::Ready:
             for (const std::string& line : status.lines)
                 ImGui::TextUnformatted(line.c_str());
             break;
@@ -406,7 +405,7 @@ void render_path_row(const Path* p, const Path*& selected_path) {
 // the all-0 section's visibility rule) comes from app::build_path_list.
 void render_path_panel(AppState& app, const Path*& selected_path) {
     ImGui::BeginChild("pathlist", ImVec2(px(600), 0), ImGuiChildFlags_Borders);
-    app::PathListView list = app::build_path_list(*app.viewed_record);
+    app::PathListView list = app::build_path_list(*app.viewed.record);
 
     int tier = 0;
     for (const app::PathGroupView& group : list.groups) {
@@ -449,8 +448,8 @@ void render_path_panel(AppState& app, const Path*& selected_path) {
     ImGui::SameLine();
     ImGui::BeginChild("pathdetails", ImVec2(0, 0), ImGuiChildFlags_Borders);
     if (selected_path)
-        render_path_details(selected_path, *app.viewed_record,
-                           app.viewed_timing ? &*app.viewed_timing : nullptr,
+        render_path_details(selected_path, *app.viewed.record,
+                           app.viewed.timing ? &*app.viewed.timing : nullptr,
                            app.settings, app.details_ui.copied_at);
     ImGui::EndChild();
 }
@@ -701,16 +700,17 @@ void render_details_modal(AppState& app) {
         return;
     }
 
-    // selected_path points into app.viewed_record, so it is only valid for
+    // selected_path points into app.viewed's record, so it is only valid for
     // the record generation it was chosen under. Re-sync it wherever the
     // record may have changed since the last check: at the top of the frame
     // (an analysis stored on a previous frame) and again after the controls
-    // panel, whose SP cap widgets replace viewed_record in the middle of this
+    // panel, whose SP cap widgets replace the lookup in the middle of this
     // very frame -- the path panel below would otherwise read the freed record.
     auto sync_selected_path = [&] {
         if (record_watcher.changed(app.record_generation)) {
-            selected_path = app.viewed_record && !app.viewed_record->paths.empty()
-                                ? &app.viewed_record->best_path()
+            selected_path = app.viewed.status == store::RecordStatus::Ready &&
+                                    !app.viewed.record->paths.empty()
+                                ? &app.viewed.record->best_path()
                                 : nullptr;
         }
     };
@@ -747,14 +747,16 @@ void render_details_modal(AppState& app) {
         if (ImGui::BeginTabItem("Paths")) {
             if (app.analyze_job) {
                 render_analyze_progress(app);
-            } else if (!app.viewed_record) {
+            } else if (app.viewed.status == store::RecordStatus::NotAnalyzed) {
                 ImGui::TextUnformatted(
                     "After analyzing this song, paths will show up here.");
-            } else if (app.viewed_record->paths.empty()) {
+            } else if (app.viewed.status == store::RecordStatus::Stale) {
                 ImGui::TextColored(
                     kWarningColor,
                     "This record is out of date. To make sure you have the latest "
                     "results, please re-analyze.");
+            } else if (app.viewed.record->paths.empty()) {
+                ImGui::TextUnformatted("No paths found.");
             } else {
                 render_path_panel(app, selected_path);
             }

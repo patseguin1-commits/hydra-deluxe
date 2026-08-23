@@ -339,14 +339,15 @@ std::pair<std::string, std::string> tier_for(const std::optional<double>& ms,
 std::vector<ReportRow> collect_rows(store::RecordStore& store, int64_t max_paths,
                                     const store::CapQuery& cap, double hit_window_ms) {
     std::vector<ReportRow> rows;
-    std::string current = store::current_record_version();
 
     store.for_each_blob(std::nullopt, cap, [&](const store::RecordStore::BlobRow& meta,
-                                               const HydraRecord& record) {
-        // record.is_version_compatible() in Python; here the row's stamp.
-        if (meta.hyversion != current) return;
+                                               const HydraRecord* record) {
+        // Only rows the store calls Ready have a decoded record; anything
+        // else (a stale stamp) is skipped, as record.is_version_compatible()
+        // did in Python.
+        if (!record) return;
 
-        std::vector<const Path*> paths = record.all_paths();
+        std::vector<const Path*> paths = record->all_paths();
         std::stable_sort(paths.begin(), paths.end(), [](const Path* a, const Path* b) {
             return a->totalscore() > b->totalscore();
         });

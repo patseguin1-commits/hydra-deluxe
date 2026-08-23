@@ -28,8 +28,9 @@
 namespace hydra::store {
 
 // Bumped whenever write_record's layout changes. A blob written with a newer
-// version is not read; the caller treats it like a version mismatch (see
-// RecordStore::get_record).
+// version is not read; the caller treats it like a version mismatch, the same
+// way a row stamped by another Hydra version reads back as
+// RecordStatus::Stale (see RecordStore::get_record).
 //
 // Version 2 appended HydraRecord::allzero_paths. Version 3 appended the four
 // frontend transfer scales (pre/post x early/late) to each activation; older

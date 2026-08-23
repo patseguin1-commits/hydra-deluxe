@@ -363,19 +363,19 @@ void dump_state(Harness& h) {
         const char* st = "new";
         if (i < a.current_page.summaries.size()) {
             auto s = a.current_page.summaries[i].state;
-            st = s == hydra::ui::LibraryPage::SummaryState::Current ? "current"
-                 : s == hydra::ui::LibraryPage::SummaryState::Stale ? "stale"
-                                                                     : "new";
+            st = s == hydra::store::RecordStatus::Ready   ? "current"
+                 : s == hydra::store::RecordStatus::Stale ? "stale"
+                                                          : "new";
         }
         std::printf("    row[%zu] \"%s\" - %s (%s) md5=%s bestpath=%s\n", i, r.title.c_str(),
                     r.artist.c_str(), r.charter.c_str(), r.md5.c_str(), st);
     }
     std::printf("  selected=%s show_details=%s viewed_record=%s paths=%zu\n",
                 a.selected ? a.selected->title.c_str() : "(none)", yes_no(a.show_details),
-                yes_no(a.viewed_record.has_value()),
-                a.viewed_record ? a.viewed_record->paths.size() : 0);
-    if (a.viewed_record && !a.viewed_record->paths.empty())
-        std::printf("  best_path=%s\n", a.viewed_record->best_path().pathstring().c_str());
+                yes_no(a.viewed.record.has_value()),
+                a.viewed.record ? a.viewed.record->paths.size() : 0);
+    if (a.viewed.record && !a.viewed.record->paths.empty())
+        std::printf("  best_path=%s\n", a.viewed.record->best_path().pathstring().c_str());
     std::printf("  chartmode=\"%s\" prodrums=%s bass2x=%s depth=%d auto_open_report=%s\n",
                 a.settings.chartmode_key().c_str(), yes_no(a.settings.view_prodrums),
                 yes_no(a.settings.view_bass2x), a.settings.depth_value,

@@ -68,9 +68,31 @@ struct PreparedRow {
 PreparedRow prepare_row(const std::string& hyhash, const std::string& chartmode,
                         const HydraRecord& record);
 
-// hymisc.RECORD_VERSION equivalent: the app version that produced a row. A
-// row stamped by another version reads as stale.
+// hymisc.RECORD_VERSION equivalent: the app version that produced a row. For
+// the store and its own tests only -- production callers must not compare
+// version stamps themselves; ask a lookup for its RecordStatus instead.
 std::string current_record_version();
+
+// What a stored-record lookup found. The store is the only place that decides
+// whether a row is usable: NotAnalyzed (no row at all), Stale (a row another
+// Hydra version wrote, so its contents are not trusted and its blob is never
+// decoded), or Ready (a real result -- which may legitimately have zero
+// paths).
+enum class RecordStatus { NotAnalyzed, Stale, Ready };
+
+// The answer to get_record: the status, plus the payload when it is Ready.
+struct RecordLookup {
+    RecordStatus status = RecordStatus::NotAnalyzed;
+    std::string hyversion;              // the row's stamp; empty when NotAnalyzed
+    std::optional<HydraRecord> record;  // set only when Ready
+    std::optional<SongTiming> timing;   // set when Ready and the song is registered
+};
+
+// The answer to get_summary: the same status, without touching the blob.
+struct SummaryLookup {
+    RecordStatus status = RecordStatus::NotAnalyzed;
+    std::string bestpath;  // meaningful only when status == Ready
+};
 
 // Which cap's record a lookup wants. at(N): the record analyzed at exactly N
 // bars. automatic(): the chart's highest cap above Clone Hero's 4 -- what an
@@ -153,17 +175,17 @@ public:
 
     // ---- reading ------------------------------------------------------
 
-    // (hyversion, bestpath), without touching the blob. nullopt if there's no
-    // record for this key and cap.
-    std::optional<std::pair<std::string, std::string>> get_summary(
-        const std::string& hyhash, const std::string& chartmode, const CapQuery& cap);
+    // The row's status and best-path string, without touching the blob.
+    // Always returns a value; bestpath is set only when status is Ready.
+    SummaryLookup get_summary(const std::string& hyhash, const std::string& chartmode,
+                              const CapQuery& cap);
 
-    // The full record, inflated and with its timecodes restored against the
-    // song's tempo map. nullopt if there's no row; a record with empty paths
-    // if the stored version doesn't match the current one.
-    std::optional<HydraRecord> get_record(const std::string& hyhash,
-                                          const std::string& chartmode,
-                                          const CapQuery& cap);
+    // The row's status and, when Ready, the full record -- inflated and with
+    // its timecodes restored against the song's tempo map, which comes back
+    // in `timing` so callers never have to re-decode it. Always returns a
+    // value; a Stale row's blob is not decoded at all.
+    RecordLookup get_record(const std::string& hyhash, const std::string& chartmode,
+                            const CapQuery& cap);
 
     // The song's timing context (tick resolution + tempo/meter maps), needed
     // to restore a loaded record's timecodes. nullopt if the song isn't
@@ -177,7 +199,8 @@ public:
 
     // One record's song identity, as yielded by for_each_blob. Mirrors the
     // songmeta dict hystore.iter_blobs builds per row, plus the row's
-    // hyversion (the C++ HydraRecord doesn't carry one).
+    // hyversion and the status it implies (the C++ HydraRecord doesn't carry
+    // a version).
     struct BlobRow {
         std::string hyhash;
         std::string ref_name;
@@ -185,19 +208,19 @@ public:
         std::string ref_charter;
         std::string chartmode;
         std::string hyversion;
+        RecordStatus status = RecordStatus::Ready;
         int sp_cap = kCloneHeroSpCap;
     };
 
     // Calls fn once per stored record (optionally filtered to one chartmode,
-    // always filtered to the wanted cap), in insertion order, with the record
-    // inflated from its blob. Mirrors
+    // always filtered to the wanted cap), in insertion order. Every row is
+    // yielded, stale ones included; the record pointer is null unless
+    // meta.status is Ready, so a stale row's blob is never decoded. Mirrors
     // hystore.iter_blobs: timecodes are NOT restored (the report only needs
-    // pathstrings and summaries, which never read them), and a record stamped
-    // by another version/edition arrives empty — json_load's short-circuit,
-    // same as get_record.
+    // pathstrings and summaries, which never read them).
     void for_each_blob(
         const std::optional<std::string>& chartmode, const CapQuery& cap,
-        const std::function<void(const BlobRow&, const HydraRecord&)>& fn);
+        const std::function<void(const BlobRow&, const HydraRecord*)>& fn);
 
     // One-time import of the pre-1.6 Uncapped edition's separate library.
     // Copies that file's current-version records (and their songs) into this

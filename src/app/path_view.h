@@ -17,6 +17,7 @@
 #include "core/model.h"
 #include "core/squeeze_rating.h"
 #include "core/timing.h"
+#include "store/record_store.h"
 
 namespace hydra::app {
 
@@ -29,13 +30,12 @@ struct TextLine {
 // ---- stored-result panel --------------------------------------------------
 
 struct RecordStatusView {
-    enum class State { NotAnalyzed, Stale, Ready };
-    State state = State::NotAnalyzed;
+    store::RecordStatus state = store::RecordStatus::NotAnalyzed;
     std::vector<std::string> lines;  // Ready only
 };
-// `record` may be null (never analyzed). An empty-paths record means "stale
-// version" (see RecordStore::get_record).
-RecordStatusView build_record_status(const HydraRecord* record);
+// The store decides the status; this only turns it into display lines. A
+// Ready record with no paths is still a real result, shown as one line.
+RecordStatusView build_record_status(const store::RecordLookup& lookup);
 
 // ---- multiplier squeezes ---------------------------------------------------
 

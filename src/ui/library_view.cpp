@@ -256,10 +256,10 @@ void render_search_box(AppState& app) {
 
 const char* summary_label(const LibraryPage::RowSummary& summary, ImVec4* out_color) {
     switch (summary.state) {
-        case LibraryPage::SummaryState::Current:
+        case store::RecordStatus::Ready:
             *out_color = kBestPathColor;
             return summary.bestpath.c_str();
-        case LibraryPage::SummaryState::Stale:
+        case store::RecordStatus::Stale:
             *out_color = kWarningColor;
             return "(Stale)";
         default:
@@ -332,10 +332,10 @@ void render_library_table(AppState& app, int visible_rows) {
         ImGui::PopFont();
         ImGui::PopStyleColor();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
-            if (summary.state == LibraryPage::SummaryState::New)
+            if (summary.state == store::RecordStatus::NotAnalyzed)
                 ImGui::SetTooltip("Not analyzed yet. Open the song and press \"Analyze "
                                   "paths!\", or use Analyze library.");
-            else if (summary.state == LibraryPage::SummaryState::Stale)
+            else if (summary.state == store::RecordStatus::Stale)
                 ImGui::SetTooltip("Analyzed by an older Hydra version. "
                                   "Re-analyze to refresh it.");
         }

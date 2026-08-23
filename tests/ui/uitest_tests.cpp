@@ -73,40 +73,39 @@ void test_analyze(ImGuiTestContext* ctx) {
     IM_CHECK(visible_text(h).find("After analyzing this song") != std::string::npos);
     ctx->ItemClick("**/Analyze paths!");
     IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
-    IM_CHECK(h.app->viewed_record.has_value());
-    IM_CHECK(!h.app->viewed_record->paths.empty());
-    std::string best = h.app->viewed_record->best_path().pathstring();
+    IM_CHECK(h.app->viewed.record.has_value());
+    IM_CHECK(!h.app->viewed.record->paths.empty());
+    std::string best = h.app->viewed.record->best_path().pathstring();
     IM_CHECK(wait_until(ctx, [&] { return visible_text(h).find(best) != std::string::npos; }, 5));
     // The library row's Best Path cell now shows it too.
     IM_CHECK(h.app->current_page.summaries[0].state ==
-             hydra::ui::LibraryPage::SummaryState::Current);
+             hydra::store::RecordStatus::Ready);
 
     // Records are kept per SP cap: switching the cap away from 4 shows the
     // song as not analyzed (no record at that cap), switching back finds the
     // 4-bar record again, and the INI follows every change.
-    using hydra::ui::LibraryPage;
     ctx->ItemInputValue("**/##spcapvalue", 8);
     IM_CHECK(wait_until(ctx, [&] { return h.app->settings.sp_cap == 8; }, 5));
-    IM_CHECK(h.app->current_page.summaries[0].state == LibraryPage::SummaryState::New);
-    IM_CHECK(!h.app->viewed_record.has_value());
+    IM_CHECK(h.app->current_page.summaries[0].state == hydra::store::RecordStatus::NotAnalyzed);
+    IM_CHECK(!h.app->viewed.record.has_value());
     IM_CHECK(hydra::app::Settings::load_file(h.ini_path).sp_cap == 8);
     ctx->ItemInputValue("**/##spcapvalue", 4);
     IM_CHECK(wait_until(ctx, [&] { return h.app->settings.sp_cap == 4; }, 5));
-    IM_CHECK(h.app->current_page.summaries[0].state == LibraryPage::SummaryState::Current);
-    IM_CHECK(h.app->viewed_record.has_value());
+    IM_CHECK(h.app->current_page.summaries[0].state == hydra::store::RecordStatus::Ready);
+    IM_CHECK(h.app->viewed.record.has_value());
     IM_CHECK(wait_until(ctx, [&] { return visible_text(h).find("SP cap:  4 bars") != std::string::npos; }, 5));
     // Auto has nothing above 4 bars to reuse, so it reads as new too.
     ctx->ItemClick("**/Auto##spcapauto");
     IM_CHECK(wait_until(ctx, [&] { return !h.app->settings.sp_cap.has_value(); }, 5));
-    IM_CHECK(h.app->current_page.summaries[0].state == LibraryPage::SummaryState::New);
+    IM_CHECK(h.app->current_page.summaries[0].state == hydra::store::RecordStatus::NotAnalyzed);
     IM_CHECK(!hydra::app::Settings::load_file(h.ini_path).sp_cap.has_value());
     ctx->ItemClick("**/Auto##spcapauto");
     IM_CHECK(wait_until(ctx, [&] { return h.app->settings.sp_cap == 4; }, 5));
-    IM_CHECK(h.app->current_page.summaries[0].state == LibraryPage::SummaryState::Current);
+    IM_CHECK(h.app->current_page.summaries[0].state == hydra::store::RecordStatus::Ready);
 }
 
 // Switching the SP cap between two caps that both have a record swaps
-// viewed_record mid-frame, after the modal already chose which path to show.
+// the viewed record mid-frame, after the modal already chose which path to show.
 // That used to leave the details panel reading the freed record (1.5.1 crash:
 // bad_alloc from a garbage vector copy, 0xc0000409 on the UI thread).
 void test_cap_switch(ImGuiTestContext* ctx) {
@@ -119,22 +118,22 @@ void test_cap_switch(ImGuiTestContext* ctx) {
     auto analyze = [&] {
         ctx->ItemClick("**/Analyze paths!");
         return wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300) &&
-               h.app->viewed_record.has_value() && !h.app->viewed_record->paths.empty();
+               h.app->viewed.record.has_value() && !h.app->viewed.record->paths.empty();
     };
     IM_CHECK(analyze());
-    std::string best4 = h.app->viewed_record->best_path().pathstring();
+    std::string best4 = h.app->viewed.record->best_path().pathstring();
     ctx->ItemInputValue("**/##spcapvalue", 6);
     IM_CHECK(wait_until(ctx, [&] { return h.app->settings.sp_cap == 6; }, 5));
     IM_CHECK(analyze());
-    std::string best6 = h.app->viewed_record->best_path().pathstring();
+    std::string best6 = h.app->viewed.record->best_path().pathstring();
 
     // Flip back and forth; every switch must land on the current record's
     // best path, never on whatever the previous record's memory now holds.
     for (int cap : {4, 6, 4, 6, 4}) {
         ctx->ItemInputValue("**/##spcapvalue", cap);
         IM_CHECK(wait_until(ctx, [&] { return h.app->settings.sp_cap == cap; }, 5));
-        IM_CHECK(h.app->viewed_record.has_value());
-        IM_CHECK(h.app->viewed_record->sp_cap == cap);
+        IM_CHECK(h.app->viewed.record.has_value());
+        IM_CHECK(h.app->viewed.record->sp_cap == cap);
         const std::string& best = cap == 4 ? best4 : best6;
         IM_CHECK(wait_until(ctx, [&] { return visible_text(h).find(best) != std::string::npos; }, 5));
     }

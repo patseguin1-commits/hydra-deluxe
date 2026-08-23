@@ -581,8 +581,9 @@ void RecordStore::add_row(const PreparedRow& row) {
         throw std::runtime_error(std::string("add_row failed: ") + sqlite3_errmsg(db_));
 }
 
-std::optional<std::pair<std::string, std::string>> RecordStore::get_summary(
-    const std::string& hyhash, const std::string& chartmode, const CapQuery& cap) {
+SummaryLookup RecordStore::get_summary(const std::string& hyhash,
+                                       const std::string& chartmode,
+                                       const CapQuery& cap) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     std::string sql = "SELECT hyversion, bestpath FROM records WHERE hyhash=? AND chartmode=?";
     append_cap_lookup(sql, cap);
@@ -590,13 +591,21 @@ std::optional<std::pair<std::string, std::string>> RecordStore::get_summary(
     bind_text(s, 1, hyhash);
     bind_text(s, 2, chartmode);
     bind_cap_lookup(s, 3, cap);
-    if (sqlite3_step(s) != SQLITE_ROW) return std::nullopt;
-    return std::make_pair(column_text(s, 0), column_text(s, 1));
+    if (sqlite3_step(s) != SQLITE_ROW) return SummaryLookup{};
+
+    SummaryLookup out;
+    if (column_text(s, 0) != current_record_version()) {
+        out.status = RecordStatus::Stale;
+        return out;
+    }
+    out.status = RecordStatus::Ready;
+    out.bestpath = column_text(s, 1);
+    return out;
 }
 
-std::optional<HydraRecord> RecordStore::get_record(const std::string& hyhash,
-                                                    const std::string& chartmode,
-                                                    const CapQuery& cap) {
+RecordLookup RecordStore::get_record(const std::string& hyhash,
+                                     const std::string& chartmode,
+                                     const CapQuery& cap) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     std::string sql = "SELECT hyversion, blob FROM records WHERE hyhash=? AND chartmode=?";
     append_cap_lookup(sql, cap);
@@ -604,19 +613,25 @@ std::optional<HydraRecord> RecordStore::get_record(const std::string& hyhash,
     bind_text(s, 1, hyhash);
     bind_text(s, 2, chartmode);
     bind_cap_lookup(s, 3, cap);
-    if (sqlite3_step(s) != SQLITE_ROW) return std::nullopt;
+    if (sqlite3_step(s) != SQLITE_ROW) return RecordLookup{};
 
-    std::string hyversion = column_text(s, 0);
-    if (hyversion != current_record_version()) {
-        // Stamped by a different version: read as empty, matching
-        // hydata.json_load's short-circuit on hyversion mismatch — no
-        // paths to speak of, so callers should prompt a re-analyze.
-        return HydraRecord{};
+    RecordLookup out;
+    out.hyversion = column_text(s, 0);
+    if (out.hyversion != current_record_version()) {
+        // Stamped by a different version: the blob is not decoded at all,
+        // matching hydata.json_load's short-circuit on hyversion mismatch.
+        // Callers see Stale and prompt a re-analyze.
+        out.status = RecordStatus::Stale;
+        return out;
     }
 
+    out.status = RecordStatus::Ready;
     const std::vector<uint8_t> blob = column_blob(s, 1);
-    if (auto timing = get_timing(hyhash)) return read_record(blob, *timing);
-    return read_record(blob);
+    // The tempomap is decoded once, here, and handed back with the record --
+    // the display layer needs the same timing and must not query for it again.
+    out.timing = get_timing(hyhash);
+    out.record = out.timing ? read_record(blob, *out.timing) : read_record(blob);
+    return out;
 }
 
 std::optional<SongTiming> RecordStore::get_timing(const std::string& hyhash) {
@@ -643,7 +658,7 @@ bool RecordStore::has_record(const std::string& hyhash, const std::string& chart
 
 void RecordStore::for_each_blob(
     const std::optional<std::string>& chartmode, const CapQuery& cap,
-    const std::function<void(const BlobRow&, const HydraRecord&)>& fn) {
+    const std::function<void(const BlobRow&, const HydraRecord*)>& fn) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     // Read every row up front (like reindex) so fn never runs under an open
@@ -668,18 +683,30 @@ void RecordStore::for_each_blob(
         int idx = 1;
         if (chartmode) bind_text(s, idx++, *chartmode);
         bind_cap_set_filter(s, idx, cap);
-        while (sqlite3_step(s) == SQLITE_ROW)
-            rows.push_back({{column_text(s, 0), column_text(s, 1), column_text(s, 2),
-                             column_text(s, 3), column_text(s, 4), column_text(s, 5),
-                             sqlite3_column_int(s, 6)},
-                            column_blob(s, 7)});
+        const std::string current = current_record_version();
+        while (sqlite3_step(s) == SQLITE_ROW) {
+            Row row;
+            row.meta.hyhash = column_text(s, 0);
+            row.meta.ref_name = column_text(s, 1);
+            row.meta.ref_artist = column_text(s, 2);
+            row.meta.ref_charter = column_text(s, 3);
+            row.meta.chartmode = column_text(s, 4);
+            row.meta.hyversion = column_text(s, 5);
+            row.meta.status = row.meta.hyversion == current ? RecordStatus::Ready
+                                                            : RecordStatus::Stale;
+            row.meta.sp_cap = sqlite3_column_int(s, 6);
+            row.blob = column_blob(s, 7);
+            rows.push_back(std::move(row));
+        }
     }
 
-    std::string current = current_record_version();
     for (const Row& row : rows) {
-        HydraRecord record;
-        if (row.meta.hyversion == current) record = read_record(row.blob);
-        fn(row.meta, record);
+        if (row.meta.status != RecordStatus::Ready) {
+            fn(row.meta, nullptr);
+            continue;
+        }
+        HydraRecord record = read_record(row.blob);
+        fn(row.meta, &record);
     }
 }
 
