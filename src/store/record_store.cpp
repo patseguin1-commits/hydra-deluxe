@@ -276,13 +276,17 @@ PathSummary summarize_record(const HydraRecord& record) {
 
 std::string current_record_version() { return kHydraVersion; }
 
-PreparedRow prepare_row(const std::string& hyhash, const std::string& chartmode,
-                        const HydraRecord& record) {
+PreparedRow prepare_row(const RecordKey& key, const HydraRecord& record) {
     if (!record.sp_cap)
         throw std::invalid_argument("prepare_row: record carries no sp_cap");
+    if (key.cap.exact && *key.cap.exact != *record.sp_cap)
+        throw std::invalid_argument("prepare_row: key asks for sp_cap " +
+                                    std::to_string(*key.cap.exact) +
+                                    " but the record was analyzed at " +
+                                    std::to_string(*record.sp_cap));
     PreparedRow row;
-    row.hyhash = hyhash;
-    row.chartmode = chartmode;
+    row.hyhash = key.hyhash;
+    row.chartmode = key.chartmode;
     row.hyversion = current_record_version();
     row.sp_cap = *record.sp_cap;
     row.bestpath = record.paths.empty() ? std::string() : record.best_path().pathstring();
@@ -556,9 +560,8 @@ void RecordStore::add_song(const std::string& hyhash, const std::string& ref_nam
         throw std::runtime_error(std::string("add_song failed: ") + sqlite3_errmsg(db_));
 }
 
-void RecordStore::add_record(const std::string& hyhash, const std::string& chartmode,
-                             const HydraRecord& record) {
-    add_row(prepare_row(hyhash, chartmode, record));
+void RecordStore::add_record(const RecordKey& key, const HydraRecord& record) {
+    add_row(prepare_row(key, record));
 }
 
 void RecordStore::add_row(const PreparedRow& row) {
@@ -581,16 +584,14 @@ void RecordStore::add_row(const PreparedRow& row) {
         throw std::runtime_error(std::string("add_row failed: ") + sqlite3_errmsg(db_));
 }
 
-SummaryLookup RecordStore::get_summary(const std::string& hyhash,
-                                       const std::string& chartmode,
-                                       const CapQuery& cap) {
+SummaryLookup RecordStore::get_summary(const RecordKey& key) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     std::string sql = "SELECT hyversion, bestpath FROM records WHERE hyhash=? AND chartmode=?";
-    append_cap_lookup(sql, cap);
+    append_cap_lookup(sql, key.cap);
     Stmt s = prepare(db_, sql.c_str());
-    bind_text(s, 1, hyhash);
-    bind_text(s, 2, chartmode);
-    bind_cap_lookup(s, 3, cap);
+    bind_text(s, 1, key.hyhash);
+    bind_text(s, 2, key.chartmode);
+    bind_cap_lookup(s, 3, key.cap);
     if (sqlite3_step(s) != SQLITE_ROW) return SummaryLookup{};
 
     SummaryLookup out;
@@ -603,16 +604,14 @@ SummaryLookup RecordStore::get_summary(const std::string& hyhash,
     return out;
 }
 
-RecordLookup RecordStore::get_record(const std::string& hyhash,
-                                     const std::string& chartmode,
-                                     const CapQuery& cap) {
+RecordLookup RecordStore::get_record(const RecordKey& key) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     std::string sql = "SELECT hyversion, blob FROM records WHERE hyhash=? AND chartmode=?";
-    append_cap_lookup(sql, cap);
+    append_cap_lookup(sql, key.cap);
     Stmt s = prepare(db_, sql.c_str());
-    bind_text(s, 1, hyhash);
-    bind_text(s, 2, chartmode);
-    bind_cap_lookup(s, 3, cap);
+    bind_text(s, 1, key.hyhash);
+    bind_text(s, 2, key.chartmode);
+    bind_cap_lookup(s, 3, key.cap);
     if (sqlite3_step(s) != SQLITE_ROW) return RecordLookup{};
 
     RecordLookup out;
@@ -629,7 +628,7 @@ RecordLookup RecordStore::get_record(const std::string& hyhash,
     const std::vector<uint8_t> blob = column_blob(s, 1);
     // The tempomap is decoded once, here, and handed back with the record --
     // the display layer needs the same timing and must not query for it again.
-    out.timing = get_timing(hyhash);
+    out.timing = get_timing(key.hyhash);
     out.record = out.timing ? read_record(blob, *out.timing) : read_record(blob);
     return out;
 }
@@ -642,17 +641,16 @@ std::optional<SongTiming> RecordStore::get_timing(const std::string& hyhash) {
     return decode_tempomap(column_blob(s, 0));
 }
 
-bool RecordStore::has_record(const std::string& hyhash, const std::string& chartmode,
-                             const CapQuery& cap) {
+bool RecordStore::has_record(const RecordKey& key) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     std::string sql = "SELECT 1 FROM records WHERE hyhash=? AND chartmode=? AND hyversion=?";
-    if (cap.exact) sql += " AND sp_cap=?";
+    if (key.cap.exact) sql += " AND sp_cap=?";
     else sql += " AND sp_cap>" + std::to_string(kCloneHeroSpCap);
     Stmt s = prepare(db_, sql.c_str());
-    bind_text(s, 1, hyhash);
-    bind_text(s, 2, chartmode);
+    bind_text(s, 1, key.hyhash);
+    bind_text(s, 2, key.chartmode);
     bind_text(s, 3, current_record_version());
-    if (cap.exact) sqlite3_bind_int(s, 4, *cap.exact);
+    if (key.cap.exact) sqlite3_bind_int(s, 4, *key.cap.exact);
     return sqlite3_step(s) == SQLITE_ROW;
 }
 

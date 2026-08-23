@@ -25,7 +25,8 @@ The search that computes a chart's paths and stores the result as a record.
 The stored result of one analysis: the kept paths, their scores, and the
 settings the analysis ran with. A chart keeps one record per SP cap. A record
 is stale when an older Hydra version produced it. A lookup reports it as one
-of three statuses: not analyzed, stale, or ready.
+of three statuses: not analyzed, stale, or ready. Its key is the chart, the
+chart mode, and the SP cap.
 
 **SP cap**:
 The Star Power meter ceiling an analysis runs under, in bars. 4 is Clone

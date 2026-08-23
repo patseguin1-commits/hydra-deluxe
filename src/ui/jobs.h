@@ -212,19 +212,19 @@ private:
 // before the first tick (parse + graph build) can't be interrupted.
 class AnalyzeJob : public ResultJobBase {
 public:
-    // The job snapshots the song's identity and the chartmode at start so the
+    // The job snapshots the song and the record's RecordKey at start so the
     // finished result is always stored against the song it was started for —
     // storing against "whatever is selected when the job finishes" wrote
     // records under the wrong song if the user closed the details modal
     // mid-analysis and clicked another row.
-    AnalyzeJob(store::ChartLibraryEntry song, std::string chartmode,
+    AnalyzeJob(store::ChartLibraryEntry song, store::RecordKey key,
                app::AnalysisSettings settings);
     ~AnalyzeJob() { shutdown(); }
 
     void start();
 
     const store::ChartLibraryEntry& song() const { return song_; }
-    const std::string& chartmode() const { return chartmode_; }
+    const store::RecordKey& key() const { return key_; }
 
     // Monotonic 0..1 search progress, or a negative value before the first
     // report (i.e. show an indeterminate spinner until then).
@@ -235,7 +235,7 @@ public:
 
 private:
     store::ChartLibraryEntry song_;
-    std::string chartmode_;
+    store::RecordKey key_;
     app::AnalysisSettings settings_;
     std::atomic<float> progress_{-1.0f};
     std::optional<app::AnalysisResult> result_;

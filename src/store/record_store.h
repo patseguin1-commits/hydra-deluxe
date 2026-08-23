@@ -50,6 +50,37 @@ struct PathSummary {
 PathSummary summarize_path(const Path& path);
 PathSummary summarize_record(const HydraRecord& record);
 
+// Which cap's record a lookup wants. at(N): the record analyzed at exactly N
+// bars. automatic(): the chart's highest cap above Clone Hero's 4 -- what an
+// Auto run would reuse -- preferring current-version rows over stale ones.
+struct CapQuery {
+    std::optional<int> exact;
+    static CapQuery at(int cap) { return CapQuery{cap}; }
+    static CapQuery automatic() { return CapQuery{std::nullopt}; }
+    // The user's SP cap setting as a query: a set cap asks for exactly that
+    // one, "Auto" (unset) asks for whatever an Auto run would reuse.
+    static CapQuery from_setting(std::optional<int> sp_cap) {
+        return sp_cap ? at(*sp_cap) : automatic();
+    }
+    bool is_auto() const { return !exact.has_value(); }
+    // Spelled out rather than defaulted: this project builds as C++17.
+    bool operator==(const CapQuery& other) const { return exact == other.exact; }
+    bool operator!=(const CapQuery& other) const { return !(*this == other); }
+};
+
+// One record's identity (ADR-0003): the chart, the chart mode, and the SP
+// cap. `cap` is a query because a caller may ask for "whatever Auto would
+// reuse"; a row itself always has an exact cap.
+struct RecordKey {
+    std::string hyhash;
+    std::string chartmode;
+    CapQuery cap;
+    bool operator==(const RecordKey& other) const {
+        return hyhash == other.hyhash && chartmode == other.chartmode && cap == other.cap;
+    }
+    bool operator!=(const RecordKey& other) const { return !(*this == other); }
+};
+
 // A record's row, fully computed and ready to insert — the expensive half of
 // a save (summarizing + serializing), kept free of any db connection so a
 // worker thread can build it off the main store. Mirrors hystore.prepare_row.
@@ -64,9 +95,11 @@ struct PreparedRow {
 };
 
 // Throws std::invalid_argument if the record carries no sp_cap (every
-// analyzer result does).
-PreparedRow prepare_row(const std::string& hyhash, const std::string& chartmode,
-                        const HydraRecord& record);
+// analyzer result does), or if the key names an exact cap that isn't the cap
+// the record was analyzed at -- that mismatch would file the result under a
+// cap it doesn't belong to. An automatic key takes whatever cap the record
+// carries.
+PreparedRow prepare_row(const RecordKey& key, const HydraRecord& record);
 
 // hymisc.RECORD_VERSION equivalent: the app version that produced a row. For
 // the store and its own tests only -- production callers must not compare
@@ -92,16 +125,6 @@ struct RecordLookup {
 struct SummaryLookup {
     RecordStatus status = RecordStatus::NotAnalyzed;
     std::string bestpath;  // meaningful only when status == Ready
-};
-
-// Which cap's record a lookup wants. at(N): the record analyzed at exactly N
-// bars. automatic(): the chart's highest cap above Clone Hero's 4 -- what an
-// Auto run would reuse -- preferring current-version rows over stale ones.
-struct CapQuery {
-    std::optional<int> exact;
-    static CapQuery at(int cap) { return CapQuery{cap}; }
-    static CapQuery automatic() { return CapQuery{std::nullopt}; }
-    bool is_auto() const { return !exact.has_value(); }
 };
 
 // One row of list_records()/library browsing.
@@ -169,23 +192,20 @@ public:
                  const std::string& ref_artist, const std::string& ref_charter,
                  const Song& song);
 
-    void add_record(const std::string& hyhash, const std::string& chartmode,
-                    const HydraRecord& record);
+    void add_record(const RecordKey& key, const HydraRecord& record);
     void add_row(const PreparedRow& row);
 
     // ---- reading ------------------------------------------------------
 
     // The row's status and best-path string, without touching the blob.
     // Always returns a value; bestpath is set only when status is Ready.
-    SummaryLookup get_summary(const std::string& hyhash, const std::string& chartmode,
-                              const CapQuery& cap);
+    SummaryLookup get_summary(const RecordKey& key);
 
     // The row's status and, when Ready, the full record -- inflated and with
     // its timecodes restored against the song's tempo map, which comes back
     // in `timing` so callers never have to re-decode it. Always returns a
     // value; a Stale row's blob is not decoded at all.
-    RecordLookup get_record(const std::string& hyhash, const std::string& chartmode,
-                            const CapQuery& cap);
+    RecordLookup get_record(const RecordKey& key);
 
     // The song's timing context (tick resolution + tempo/meter maps), needed
     // to restore a loaded record's timecodes. nullopt if the song isn't
@@ -194,8 +214,7 @@ public:
 
     // True when a current-version record exists for this key and cap -- the
     // "skip, already analyzed" test for a batch run. Stale rows don't count.
-    bool has_record(const std::string& hyhash, const std::string& chartmode,
-                    const CapQuery& cap);
+    bool has_record(const RecordKey& key);
 
     // One record's song identity, as yielded by for_each_blob. Mirrors the
     // songmeta dict hystore.iter_blobs builds per row, plus the row's

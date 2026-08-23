@@ -297,10 +297,10 @@ namespace {
 struct AnalysisCancelled {};
 }  // namespace
 
-AnalyzeJob::AnalyzeJob(store::ChartLibraryEntry song, std::string chartmode,
+AnalyzeJob::AnalyzeJob(store::ChartLibraryEntry song, store::RecordKey key,
                        app::AnalysisSettings settings)
     : song_(std::move(song)),
-      chartmode_(std::move(chartmode)),
+      key_(std::move(key)),
       settings_(std::move(settings)) {}
 
 void AnalyzeJob::start() {

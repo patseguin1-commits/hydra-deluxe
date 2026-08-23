@@ -34,12 +34,15 @@ int64_t fill_store(store::RecordStore& store) {
             if (result.song.is_empty() || result.record.paths.empty()) continue;
             store.add_song(kHash, "Stored Title", "Stored Artist",
                            "Stored Charter", result.song);
-            store.add_record(kHash, kMode, result.record);
+            store.add_record(
+                store::RecordKey{kHash, kMode, store::CapQuery::automatic()},
+                result.record);
             // A what-if record at 8 bars for the same chart: the comparison
             // must never pick it up (the leaderboard plays at 4 bars).
             HydraRecord whatif = result.record;
             whatif.sp_cap = 8;
-            store.add_record(kHash, kMode, whatif);
+            store.add_record(store::RecordKey{kHash, kMode, store::CapQuery::at(8)},
+                             whatif);
             return result.record.best_path().totalscore();
         } catch (const std::exception&) {
             continue;

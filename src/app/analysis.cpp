@@ -597,11 +597,10 @@ void run_batch(const std::vector<ScanItem>& items, const std::string& chartmode,
     // "Already has a result" means a current-version record at the cap this
     // run would produce (Auto: any record above 4 bars), so stale rows and
     // other caps' rows are re-run rather than skipped.
-    const store::CapQuery cap = settings.sp_cap ? store::CapQuery::at(*settings.sp_cap)
-                                                : store::CapQuery::automatic();
+    const store::CapQuery cap = store::CapQuery::from_setting(settings.sp_cap);
     std::vector<const ScanItem*> todo;
     for (const ScanItem& item : items) {
-        if (!redo && store.has_record(item.md5, chartmode, cap)) continue;
+        if (!redo && store.has_record(store::RecordKey{item.md5, chartmode, cap})) continue;
         todo.push_back(&item);
     }
 
@@ -630,7 +629,8 @@ void run_batch(const std::vector<ScanItem>& items, const std::string& chartmode,
                 wr.item = *item;
                 try {
                     AnalysisResult ar = analyze_chart_file(item->notespath, settings);
-                    wr.row = store::prepare_row(item->md5, chartmode, ar.record);
+                    wr.row = store::prepare_row(
+                        store::RecordKey{item->md5, chartmode, cap}, ar.record);
                     wr.analysis = std::move(ar);
                 } catch (const std::exception& e) {
                     wr.error = e.what();

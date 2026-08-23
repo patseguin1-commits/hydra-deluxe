@@ -113,6 +113,25 @@ TEST_CASE("chartmode_key names the view flags") {
     CHECK(s.chartmode_key() == "Expert Drums, 1x Bass");
 }
 
+TEST_CASE("record_key carries the chartmode and the SP cap setting") {
+    namespace store = hydra::store;
+
+    Settings s;
+    s.sp_cap = std::nullopt;
+    store::RecordKey auto_key = s.record_key("abc");
+    CHECK(auto_key.hyhash == "abc");
+    CHECK(auto_key.chartmode == s.chartmode_key());
+    CHECK(auto_key.cap == store::CapQuery::automatic());
+
+    // A fixed cap asks for exactly that cap, and the chartmode follows the
+    // view flags.
+    s.sp_cap = 32;
+    s.view_prodrums = false;
+    store::RecordKey exact_key = s.record_key("abc");
+    CHECK(exact_key.chartmode == "Expert Drums, 2x Bass");
+    CHECK(exact_key.cap == store::CapQuery::at(32));
+}
+
 TEST_CASE("sp_cap round-trips as a number or auto; pre-1.6 keys are ignored") {
     const std::string path = temp_ini("spcap");
 

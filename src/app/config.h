@@ -103,6 +103,10 @@ struct Settings {
 
     // Which stored record the current SP cap asks for (store::CapQuery).
     store::CapQuery cap_query() const;
+
+    // The identity of one chart's record under the current settings: this
+    // hash, the current chartmode, and the current SP cap.
+    store::RecordKey record_key(const std::string& hyhash) const;
 };
 
 }  // namespace hydra::app

@@ -83,7 +83,9 @@ static void folder_breakdown(const std::string& folder) {
 
         t = clk::now();
         store.add_song(it.md5, it.title, it.artist, it.charter, song);
-        store.add_record(it.md5, "Expert Pro Drums, 2x Bass", rec);
+        store.add_record(store::RecordKey{it.md5, "Expert Pro Drums, 2x Bass",
+                                          store::CapQuery::automatic()},
+                         rec);
         double store_s = secs_since(t);
 
         long long best = rec.paths.empty() ? 0 : rec.best_path().totalscore();

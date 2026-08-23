@@ -91,9 +91,9 @@ TEST_CASE("records round-trip through RecordStore across the corpus and config m
 
             const std::string hyhash = path + "|" + cfg.key;
             store.add_song(hyhash, "Title", "Artist", "Charter", song);
-            store.add_record(hyhash, "mode", *record);
+            store.add_record(RecordKey{hyhash, "mode", cap}, *record);
 
-            RecordLookup lookup = store.get_record(hyhash, "mode", cap);
+            RecordLookup lookup = store.get_record(RecordKey{hyhash, "mode", cap});
             ++checks;
             if (lookup.status != RecordStatus::Ready) {
                 if (++mismatches <= 8)
@@ -137,7 +137,7 @@ TEST_CASE("records round-trip through RecordStore across the corpus and config m
                     d = "restored transfer scales";
             }
 
-            SummaryLookup summary_row = store.get_summary(hyhash, "mode", cap);
+            SummaryLookup summary_row = store.get_summary(RecordKey{hyhash, "mode", cap});
             if (d.empty() && (summary_row.status != RecordStatus::Ready ||
                               summary_row.bestpath != bestpath))
                 d = "get_summary bestpath";
@@ -301,13 +301,13 @@ TEST_CASE("RecordStore maintenance: has_record, list_records, reindex, drop_stal
 
     const CapQuery at4 = CapQuery::at(4);
     RecordStore store(":memory:");
-    CHECK_FALSE(store.has_record("h1", "Expert Pro Drums, 2x Bass", at4));
+    CHECK_FALSE(store.has_record(RecordKey{"h1", "Expert Pro Drums, 2x Bass", at4}));
 
     store.add_song("h1", "Song A", "Artist A", "Charter A", *song);
-    store.add_record("h1", "Expert Pro Drums, 2x Bass", *record);
-    CHECK(store.has_record("h1", "Expert Pro Drums, 2x Bass", at4));
-    CHECK_FALSE(store.has_record("h1", "Expert Pro Drums, 2x Bass", CapQuery::at(8)));
-    CHECK_FALSE(store.has_record("h1", "Expert Pro Drums, 2x Bass", CapQuery::automatic()));
+    store.add_record(RecordKey{"h1", "Expert Pro Drums, 2x Bass", at4}, *record);
+    CHECK(store.has_record(RecordKey{"h1", "Expert Pro Drums, 2x Bass", at4}));
+    CHECK_FALSE(store.has_record(RecordKey{"h1", "Expert Pro Drums, 2x Bass", CapQuery::at(8)}));
+    CHECK_FALSE(store.has_record(RecordKey{"h1", "Expert Pro Drums, 2x Bass", CapQuery::automatic()}));
 
     std::vector<RecordListing> listing =
         store.list_records(std::nullopt, at4, SortColumn::Score, true);
@@ -328,11 +328,12 @@ TEST_CASE("RecordStore maintenance: has_record, list_records, reindex, drop_stal
 
     // A row stamped with a different version is stale for this store: it
     // doesn't count as "already analyzed", and drop_stale_records removes it.
-    PreparedRow stale = prepare_row("h2", "Expert Pro Drums, 2x Bass", *record);
+    PreparedRow stale =
+        prepare_row(RecordKey{"h2", "Expert Pro Drums, 2x Bass", at4}, *record);
     stale.hyversion = "0.0.0";
     store.add_row(stale);
     CHECK(store.counts().second == 2);
-    CHECK_FALSE(store.has_record("h2", "Expert Pro Drums, 2x Bass", at4));
+    CHECK_FALSE(store.has_record(RecordKey{"h2", "Expert Pro Drums, 2x Bass", at4}));
 
     int dropped = store.drop_stale_records();
     CHECK(dropped == 1);
@@ -409,7 +410,7 @@ void write_legacy_db(const std::string& path, const std::string& main_stamp,
          " PRIMARY KEY (hyhash, chartmode));");
 
     auto insert = [&](const char* hash, const std::string& stamp, const HydraRecord& rec) {
-        PreparedRow row = prepare_row(hash, "mode", rec);
+        PreparedRow row = prepare_row(RecordKey{hash, "mode", CapQuery::automatic()}, rec);
         sqlite3_stmt* s = nullptr;
         REQUIRE(sqlite3_prepare_v2(db,
                     "INSERT INTO records (hyhash, chartmode, hyversion, bestpath, blob, score)"
@@ -445,28 +446,28 @@ int user_version(const std::string& path) {
 TEST_CASE("records at different caps coexist; Auto picks the highest current one") {
     RecordStore store(":memory:");
     store.add_song("h", "Song", "Artist", "Charter", fixture().song);
-    store.add_record("h", "mode", at_cap(4));
-    store.add_record("h", "mode", at_cap(32));
+    store.add_record(RecordKey{"h", "mode", CapQuery::at(4)}, at_cap(4));
+    store.add_record(RecordKey{"h", "mode", CapQuery::at(32)}, at_cap(32));
     CHECK(store.counts().second == 2);
 
     // Exact lookups see exactly their cap.
-    CHECK(store.get_record("h", "mode", CapQuery::at(4)).record->sp_cap == 4);
-    CHECK(store.get_record("h", "mode", CapQuery::at(32)).record->sp_cap == 32);
-    CHECK(store.get_record("h", "mode", CapQuery::at(8)).status ==
+    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::at(4)}).record->sp_cap == 4);
+    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::at(32)}).record->sp_cap == 32);
+    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::at(8)}).status ==
           RecordStatus::NotAnalyzed);
 
     // Auto takes the highest cap above 4 and counts it as already analyzed.
-    CHECK(store.get_record("h", "mode", CapQuery::automatic()).record->sp_cap == 32);
-    CHECK(store.has_record("h", "mode", CapQuery::automatic()));
-    CHECK(store.get_summary("h", "mode", CapQuery::automatic()).status ==
+    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic()}).record->sp_cap == 32);
+    CHECK(store.has_record(RecordKey{"h", "mode", CapQuery::automatic()}));
+    CHECK(store.get_summary(RecordKey{"h", "mode", CapQuery::automatic()}).status ==
           RecordStatus::Ready);
 
     // A stale 64-bar row does not outrank a current 32-bar one -- for single
     // lookups and for the set queries alike.
-    PreparedRow stale = prepare_row("h", "mode", at_cap(64));
+    PreparedRow stale = prepare_row(RecordKey{"h", "mode", CapQuery::at(64)}, at_cap(64));
     stale.hyversion = "0.0.0";
     store.add_row(stale);
-    CHECK(store.get_record("h", "mode", CapQuery::automatic()).record->sp_cap == 32);
+    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic()}).record->sp_cap == 32);
     std::vector<RecordListing> listed =
         store.list_records(std::nullopt, CapQuery::automatic(), SortColumn::Score, true);
     REQUIRE(listed.size() == 1);
@@ -481,11 +482,11 @@ TEST_CASE("records at different caps coexist; Auto picks the highest current one
 
     // Asked for cap 64 exactly, that stale row is reported as stale: no
     // record comes back and its blob is never decoded.
-    RecordLookup stale_lookup = store.get_record("h", "mode", CapQuery::at(64));
+    RecordLookup stale_lookup = store.get_record(RecordKey{"h", "mode", CapQuery::at(64)});
     CHECK(stale_lookup.status == RecordStatus::Stale);
     CHECK_FALSE(stale_lookup.record.has_value());
     CHECK(stale_lookup.hyversion == "0.0.0");
-    CHECK(store.get_summary("h", "mode", CapQuery::at(64)).status == RecordStatus::Stale);
+    CHECK(store.get_summary(RecordKey{"h", "mode", CapQuery::at(64)}).status == RecordStatus::Stale);
 
     // for_each_blob still yields the stale row (at its own cap), with a null
     // record pointer.
@@ -501,10 +502,10 @@ TEST_CASE("records at different caps coexist; Auto picks the highest current one
     // With only a 4-bar row, Auto has nothing to reuse.
     RecordStore only4(":memory:");
     only4.add_song("h", "Song", "Artist", "Charter", fixture().song);
-    only4.add_record("h", "mode", at_cap(4));
-    CHECK(only4.get_record("h", "mode", CapQuery::automatic()).status ==
+    only4.add_record(RecordKey{"h", "mode", CapQuery::at(4)}, at_cap(4));
+    CHECK(only4.get_record(RecordKey{"h", "mode", CapQuery::automatic()}).status ==
           RecordStatus::NotAnalyzed);
-    CHECK_FALSE(only4.has_record("h", "mode", CapQuery::automatic()));
+    CHECK_FALSE(only4.has_record(RecordKey{"h", "mode", CapQuery::automatic()}));
 
     // reindex touches each cap's own row.
     CHECK(store.reindex() == 3);
@@ -512,23 +513,51 @@ TEST_CASE("records at different caps coexist; Auto picks the highest current one
               .summary.score == fixture().record.best_path().totalscore());
 }
 
+TEST_CASE("prepare_row refuses a key whose exact cap isn't the record's") {
+    HydraRecord rec = at_cap(4);
+
+    // An exact key that disagrees with the record would file the result under
+    // a cap it was never analyzed at.
+    CHECK_THROWS_AS(prepare_row(RecordKey{"h", "mode", CapQuery::at(8)}, rec),
+                    std::invalid_argument);
+
+    // An automatic key takes whatever cap the record carries.
+    PreparedRow row = prepare_row(RecordKey{"h", "mode", CapQuery::automatic()}, rec);
+    CHECK(row.sp_cap == 4);
+
+    // So does the matching exact key.
+    CHECK(prepare_row(RecordKey{"h", "mode", CapQuery::at(4)}, rec).sp_cap == 4);
+}
+
+TEST_CASE("RecordKey compares on all three parts of the identity") {
+    const RecordKey key{"h", "mode", CapQuery::at(4)};
+    CHECK(key == RecordKey{"h", "mode", CapQuery::at(4)});
+    CHECK_FALSE(key == RecordKey{"other", "mode", CapQuery::at(4)});
+    CHECK_FALSE(key == RecordKey{"h", "other mode", CapQuery::at(4)});
+    CHECK_FALSE(key == RecordKey{"h", "mode", CapQuery::at(8)});
+    CHECK_FALSE(key == RecordKey{"h", "mode", CapQuery::automatic()});
+    CHECK(CapQuery::at(4) != CapQuery::automatic());
+    CHECK(CapQuery::automatic() == CapQuery::from_setting(std::nullopt));
+    CHECK(CapQuery::at(8) == CapQuery::from_setting(8));
+}
+
 TEST_CASE("a current-version record with no paths is Ready, not Stale") {
     RecordStore store(":memory:");
     store.add_song("h", "Song", "Artist", "Charter", fixture().song);
     HydraRecord empty = at_cap(4);
     empty.paths.clear();
-    store.add_record("h", "mode", empty);
+    store.add_record(RecordKey{"h", "mode", CapQuery::at(4)}, empty);
 
     // "Analyzed, and nothing survived" is a real result, so it reads back as
     // Ready with an empty record -- the status, not the path count, is what
     // says whether a row is usable.
-    RecordLookup lookup = store.get_record("h", "mode", CapQuery::at(4));
+    RecordLookup lookup = store.get_record(RecordKey{"h", "mode", CapQuery::at(4)});
     CHECK(lookup.status == RecordStatus::Ready);
     REQUIRE(lookup.record.has_value());
     CHECK(lookup.record->paths.empty());
     CHECK(lookup.hyversion == current_record_version());
-    CHECK(store.get_summary("h", "mode", CapQuery::at(4)).status == RecordStatus::Ready);
-    CHECK(store.has_record("h", "mode", CapQuery::at(4)));
+    CHECK(store.get_summary(RecordKey{"h", "mode", CapQuery::at(4)}).status == RecordStatus::Ready);
+    CHECK(store.has_record(RecordKey{"h", "mode", CapQuery::at(4)}));
 }
 
 TEST_CASE("a pre-1.6 database migrates to the cap key on open") {
@@ -541,13 +570,13 @@ TEST_CASE("a pre-1.6 database migrates to the cap key on open") {
         // Both rows survive, each under the cap its blob records, and the
         // Uncapped stamp is gone.
         CHECK(store.counts().second == 2);
-        RecordLookup main_row = store.get_record("legacy", "mode", CapQuery::at(4));
+        RecordLookup main_row = store.get_record(RecordKey{"legacy", "mode", CapQuery::at(4)});
         REQUIRE(main_row.status == RecordStatus::Ready);
         CHECK_FALSE(main_row.record->paths.empty());
-        RecordLookup unc_row = store.get_record("legacy_unc", "mode", CapQuery::at(16));
+        RecordLookup unc_row = store.get_record(RecordKey{"legacy_unc", "mode", CapQuery::at(16)});
         REQUIRE(unc_row.status == RecordStatus::Ready);  // restamped: reads as current
         CHECK_FALSE(unc_row.record->paths.empty());
-        CHECK(store.has_record("legacy_unc", "mode", CapQuery::automatic()));
+        CHECK(store.has_record(RecordKey{"legacy_unc", "mode", CapQuery::automatic()}));
     }
     CHECK(user_version(path) == 1);
 
@@ -573,11 +602,11 @@ TEST_CASE("import_legacy_uncapped copies current-version rows once, under their 
         // A row this build already made at the same key must win.
         HydraRecord mine = at_cap(64);
         mine.paths.clear();
-        store.add_record("legacy_unc", "mode", mine);
+        store.add_record(RecordKey{"legacy_unc", "mode", CapQuery::at(64)}, mine);
 
         CHECK(store.import_legacy_uncapped(unc_path) == 0);  // same-key row kept
         // An empty-paths record this build wrote is a real result, not stale.
-        RecordLookup kept = store.get_record("legacy_unc", "mode", CapQuery::at(64));
+        RecordLookup kept = store.get_record(RecordKey{"legacy_unc", "mode", CapQuery::at(64)});
         CHECK(kept.status == RecordStatus::Ready);
         CHECK(kept.record->paths.empty());
         // Done once: a second call copies nothing even with the row gone.
@@ -588,12 +617,12 @@ TEST_CASE("import_legacy_uncapped copies current-version rows once, under their 
     {
         RecordStore store(main_path);
         CHECK(store.import_legacy_uncapped(unc_path) == 1);
-        RecordLookup row = store.get_record("legacy_unc", "mode", CapQuery::at(64));
+        RecordLookup row = store.get_record(RecordKey{"legacy_unc", "mode", CapQuery::at(64)});
         REQUIRE(row.status == RecordStatus::Ready);  // restamped to the current version
         CHECK_FALSE(row.record->paths.empty());
         CHECK(store.counts().first == 1);  // its song came along (not the stale one's)
         // The stale row (0.0.0) stayed behind.
-        CHECK(store.get_record("legacy", "mode", CapQuery::at(4)).status ==
+        CHECK(store.get_record(RecordKey{"legacy", "mode", CapQuery::at(4)}).status ==
               RecordStatus::NotAnalyzed);
         CHECK(store.import_legacy_uncapped(unc_path) == 0);
         // A missing file is not an error and does not mark the import done.

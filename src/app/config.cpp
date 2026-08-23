@@ -157,7 +157,11 @@ AnalysisSettings Settings::to_analysis_settings() const {
 }
 
 store::CapQuery Settings::cap_query() const {
-    return sp_cap ? store::CapQuery::at(*sp_cap) : store::CapQuery::automatic();
+    return store::CapQuery::from_setting(sp_cap);
+}
+
+store::RecordKey Settings::record_key(const std::string& hyhash) const {
+    return store::RecordKey{hyhash, chartmode_key(), cap_query()};
 }
 
 }  // namespace hydra::app

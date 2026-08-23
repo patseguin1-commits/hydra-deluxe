@@ -44,12 +44,10 @@ void AppState::refresh_page() {
     // Resolve each row's Best Path summary once here instead of per row per
     // frame in the render loop (a SQLite query at 60fps x 200 rows, on the
     // render thread, against the same mutex the batch workers hold).
-    const store::CapQuery cap = settings.cap_query();
     current_page.summaries.clear();
     current_page.summaries.reserve(current_page.rows.size());
     for (const store::ChartLibraryEntry& row : current_page.rows) {
-        store::SummaryLookup summary =
-            store->get_summary(row.md5, settings.chartmode_key(), cap);
+        store::SummaryLookup summary = store->get_summary(settings.record_key(row.md5));
         LibraryPage::RowSummary rs;
         rs.state = summary.status;
         rs.bestpath = std::move(summary.bestpath);
@@ -81,8 +79,7 @@ void AppState::refresh_viewed_record() {
         viewed = store::RecordLookup{};
         return;
     }
-    viewed =
-        store->get_record(selected->md5, settings.chartmode_key(), settings.cap_query());
+    viewed = store->get_record(settings.record_key(selected->md5));
     record_generation.bump();
 }
 
@@ -107,7 +104,7 @@ void AppState::start_batch(bool redo) {
 void AppState::start_analyze() {
     if (!selected) return;
     if (analyze_job && !analyze_job->finished()) return;
-    analyze_job = std::make_unique<AnalyzeJob>(*selected, settings.chartmode_key(),
+    analyze_job = std::make_unique<AnalyzeJob>(*selected, settings.record_key(selected->md5),
                                                settings.to_analysis_settings());
     analyze_generation.bump();
     analyze_job->start();
@@ -123,7 +120,7 @@ std::string AppState::store_finished_analysis() {
         app::AnalysisResult result = analyze_job->take_result();
         store->add_song(song.md5, song.title, song.artist, song.charter,
                         result.song);
-        store->add_record(song.md5, analyze_job->chartmode(), result.record);
+        store->add_record(analyze_job->key(), result.record);
         refresh_viewed_record();
         refresh_page();  // the library row's Best Path cell is cached per page
         return "";

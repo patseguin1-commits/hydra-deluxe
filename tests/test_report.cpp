@@ -35,7 +35,9 @@ int fill_store(store::RecordStore& store, std::optional<int> cap, int want) {
             const std::string hyhash = "h" + std::to_string(added);
             store.add_song(hyhash, "Title " + std::to_string(added), "Artist",
                            "Charter", result.song);
-            store.add_record(hyhash, "mode", result.record);
+            store.add_record(
+                store::RecordKey{hyhash, "mode", store::CapQuery::from_setting(cap)},
+                result.record);
             ++added;
         } catch (const std::exception&) {
             continue;
@@ -93,7 +95,8 @@ TEST_CASE("report lists only the wanted cap and names it") {
         try {
             AnalysisResult result = analyze_chart_file(path, settings);
             if (result.song.is_empty() || result.record.paths.empty()) continue;
-            store.add_record("h0", "mode", result.record);
+            store.add_record(store::RecordKey{"h0", "mode", store::CapQuery::at(8)},
+                             result.record);
             break;
         } catch (const std::exception&) {
             continue;
