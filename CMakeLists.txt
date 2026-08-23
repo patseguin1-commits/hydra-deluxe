@@ -311,13 +311,17 @@ add_executable(hydra_tests
     tests/test_report.cpp
     tests/test_config.cpp
     tests/test_dm_report.cpp
+    tests/test_app_state.cpp
 )
 # hydra_dm: test_dm_report exercises the leaderboards join and JSON parsers.
 # hydra_audio: test_audio_decode exercises the stem decoders and mixer.
 # hydra_render: the highway geometry, meshes, and a WARP offscreen-render test —
 # hence d3d11/dxgi (a headless WARP device) and d3dcompiler (runtime HLSL).
+# hydra_ui: test_app_state builds a real AppState on a scratch store. Only the
+# window-independent half is exercised; nothing here opens a window or a device.
 target_link_libraries(hydra_tests PRIVATE
-    hydra_dm hydra_audio hydra_render hydra_image d3d11 dxgi d3dcompiler hydra_warnings)
+    hydra_ui hydra_dm hydra_audio hydra_render hydra_image d3d11 dxgi d3dcompiler
+    hydra_warnings)
 target_include_directories(hydra_tests PRIVATE
     third_party/doctest
     third_party/json

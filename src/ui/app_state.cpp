@@ -7,8 +7,14 @@
 
 namespace hydra::ui {
 
-AppState::AppState() : settings(Settings::load()) {
-    store = app::open_store(app::db_path());
+AppState::AppState() : AppState(Settings::load(), app::open_store(app::db_path())) {}
+
+AppState::AppState(app::Settings initial_settings,
+                   std::unique_ptr<store::RecordStore> initial_store)
+    : settings(std::move(initial_settings)),
+      store(std::move(initial_store)),
+      committed_chartmode_(settings.chartmode_key()),
+      committed_cap_(settings.cap_query()) {
     refresh_page();
 }
 
@@ -143,7 +149,7 @@ void AppState::start_dm_report(const std::string& discord_id, const std::string&
                                                   settings.auto_open_report);
     // Remember the choice so the picker can pre-select it next time.
     settings.dm_last_user = discord_id;
-    save_settings();
+    commit_settings();
     dm_report_job->start();
 }
 
@@ -152,10 +158,30 @@ void AppState::set_status(std::string message) {
     status_generation.bump();
 }
 
-void AppState::save_settings() {
+void AppState::commit_settings() {
     if (!settings.save())
         set_status("Settings could not be saved — " + app::ini_path() +
                    " is not writable.");
+
+    // Which record a chart shows is (chart, chart mode, SP cap). When either
+    // of the last two moves, every cached lookup is answering the old
+    // question and has to be re-asked.
+    std::string chartmode = settings.chartmode_key();
+    store::CapQuery cap = settings.cap_query();
+    if (chartmode != committed_chartmode_) {
+        // A different chart mode is a different library listing, so the user
+        // starts over at page one.
+        table_viewpage = 0;
+        refresh_page();
+        refresh_viewed_record();
+    } else if (cap != committed_cap_) {
+        // The cap box lives in the details modal. Resetting the page here
+        // would yank the library out from under a user who never touched it.
+        refresh_page();
+        refresh_viewed_record();
+    }
+    committed_chartmode_ = std::move(chartmode);
+    committed_cap_ = cap;
 }
 
 }  // namespace hydra::ui

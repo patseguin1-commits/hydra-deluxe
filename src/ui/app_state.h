@@ -79,6 +79,10 @@ struct DetailsViewState {
 class AppState {
 public:
     AppState();
+    // Injecting form, for tests and harnesses: same startup work as the
+    // default constructor, but on a caller-supplied settings struct and store
+    // instead of the user's INI and database.
+    AppState(app::Settings settings, std::unique_ptr<store::RecordStore> store);
     ~AppState();  // out-of-line: PreviewController is only forward-declared here
 
     Settings settings;
@@ -177,13 +181,27 @@ public:
     Generation status_generation;
     void set_status(std::string message);
 
-    // settings.save() + a status message when the INI can't be written —
-    // save() failing silently made changes look persisted when they weren't.
-    void save_settings();
+    // The one way to finish a settings change: write the INI (with a status
+    // message when it can't be written — a silent failure made changes look
+    // persisted when they weren't) and then refresh whatever the change
+    // invalidated.
+    //
+    // This is the single place that knows which settings change a record's
+    // identity — the chart mode and the SP cap. Every widget just mutates
+    // `settings` and calls this, so none of them can forget a refresh. That
+    // forgetting is exactly the bug class here: the 1.5.1 SP-cap crash came
+    // from this path, and the Pro Drums / 2x Bass checkboxes used to refresh
+    // the library page while leaving `viewed` pointing at the old record.
+    void commit_settings();
 
 private:
     ID3D11Device* render_device_ = nullptr;
     ID3D11DeviceContext* render_context_ = nullptr;
+
+    // The identity-relevant settings as of the last commit, so commit_settings
+    // can tell an identity change from any other settings edit.
+    std::string committed_chartmode_;
+    store::CapQuery committed_cap_;
 };
 
 }  // namespace hydra::ui

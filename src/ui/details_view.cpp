@@ -114,7 +114,7 @@ void render_controls(AppState& app) {
     ImGui::SetNextItemWidth(px(140));
     if (ImGui::InputInt("##depthvalue", &app.settings.depth_value)) {
         if (app.settings.depth_value < 0) app.settings.depth_value = 0;
-        app.save_settings();
+        app.commit_settings();
     }
     ImGui::SameLine();
     ImGui::SetNextItemWidth(px(80));
@@ -122,19 +122,19 @@ void render_controls(AppState& app) {
     const char* modes[] = {"scores", "points"};
     if (ImGui::Combo("##depthmode", &mode_idx, modes, 2)) {
         app.settings.depth_mode = mode_idx;
-        app.save_settings();
+        app.commit_settings();
     }
 
     ImGui::TextUnformatted("Limit timings:");
     ImGui::SameLine(px(100));
-    if (ImGui::Checkbox("##mslimit", &app.settings.mslimit_enabled)) app.save_settings();
+    if (ImGui::Checkbox("##mslimit", &app.settings.mslimit_enabled)) app.commit_settings();
     ImGui::SameLine();
     bool mslimit_disabled = !app.settings.mslimit_enabled;
     begin_disabled_input(mslimit_disabled);
     ImGui::SetNextItemWidth(px(100));
     if (ImGui::InputInt("##mslimitvalue", &app.settings.mslimit_value)) {
         app.settings.mslimit_value = std::clamp(app.settings.mslimit_value, -200, 200);
-        app.save_settings();
+        app.commit_settings();
     }
     ImGui::SameLine();
     // "mslimit_mstext" binds disabled_text ((50,50,50), same gray as the
@@ -158,9 +158,7 @@ void render_controls(AppState& app) {
         if (ImGui::InputInt("##spcapvalue", &last_cap)) {
             if (last_cap < 1) last_cap = 1;
             app.settings.sp_cap = last_cap;
-            app.save_settings();
-            app.refresh_page();
-            app.refresh_viewed_record();
+            app.commit_settings();
         }
         ImGui::SameLine();
         ImGui::TextUnformatted("bars");
@@ -168,9 +166,7 @@ void render_controls(AppState& app) {
         ImGui::SameLine();
         if (ImGui::Checkbox("Auto##spcapauto", &spcap_auto)) {
             app.settings.sp_cap = spcap_auto ? std::nullopt : std::optional<int>(last_cap);
-            app.save_settings();
-            app.refresh_page();
-            app.refresh_viewed_record();
+            app.commit_settings();
         }
         hint("4 bars is Clone Hero's rule. Higher caps are what-ifs; Auto raises the "
              "cap until the score stops improving.");
@@ -582,7 +578,7 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
         app.settings.preview_volume = volume;
         pc->set_volume(volume);
     }
-    if (ImGui::IsItemDeactivatedAfterEdit()) app.save_settings();
+    if (ImGui::IsItemDeactivatedAfterEdit()) app.commit_settings();
 
     // Highway viewport: size the offscreen target to the remaining region.
     ImVec2 avail = ImGui::GetContentRegionAvail();

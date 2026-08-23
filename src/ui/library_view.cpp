@@ -90,7 +90,7 @@ void render_folder_manager(AppState& app) {
             } else {
                 app.settings.chartfolders.push_back(*folder);
                 app.settings.is_rescan = false;
-                app.save_settings();
+                app.commit_settings();
             }
         } else if (dialog_failed) {
             app.set_status("The folder picker could not be opened.");
@@ -117,7 +117,7 @@ void render_folder_manager(AppState& app) {
                 app.settings.chartfolders.erase(app.settings.chartfolders.begin() +
                                                 (long)*confirm_remove);
                 app.settings.is_rescan = false;
-                app.save_settings();
+                app.commit_settings();
                 confirm_remove.reset();
                 ImGui::CloseCurrentPopup();
             }
@@ -208,17 +208,9 @@ void render_view_controls(AppState& app) {
     hint("Only Expert difficulty is supported right now.");
 
     ImGui::SameLine();
-    if (ImGui::Checkbox("Pro Drums", &app.settings.view_prodrums)) {
-        app.save_settings();
-        app.table_viewpage = 0;
-        app.refresh_page();
-    }
+    if (ImGui::Checkbox("Pro Drums", &app.settings.view_prodrums)) app.commit_settings();
     ImGui::SameLine();
-    if (ImGui::Checkbox("2x Bass", &app.settings.view_bass2x)) {
-        app.save_settings();
-        app.table_viewpage = 0;
-        app.refresh_page();
-    }
+    if (ImGui::Checkbox("2x Bass", &app.settings.view_bass2x)) app.commit_settings();
 }
 
 void render_search_box(AppState& app) {
@@ -409,7 +401,7 @@ void render_scan_modal(AppState& app) {
             }
             if (ImGui::Button("Continue")) {
                 app.settings.is_rescan = true;
-                app.save_settings();
+                app.commit_settings();
                 app.table_viewpage = 0;
                 app.refresh_page();
                 app.scan_job.reset();
@@ -494,7 +486,7 @@ void render_batch_modal(AppState& app) {
             if (ImGui::Button("Open path report")) open_report_in_browser();
             ImGui::SameLine();
             if (ImGui::Checkbox("Open automatically", &app.settings.auto_open_report))
-                app.save_settings();
+                app.commit_settings();
             hint("Open the report in the browser whenever a batch finishes");
         }
 
