@@ -548,7 +548,13 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
         return;
     }
     if (pc->loading()) {
-        ImGui::TextUnformatted("Loading preview...");
+        // A big chart decodes for several seconds; the step label and bar
+        // are what tell the user it is still moving.
+        PreviewController::LoadProgress lp = pc->load_progress();
+        ImGui::Text("Loading preview: %s", lp.label.c_str());
+        char overlay[16];
+        std::snprintf(overlay, sizeof(overlay), "%.0f%%", lp.fraction * 100.0f);
+        ImGui::ProgressBar(lp.fraction, ImVec2(-1.0f, 0.0f), overlay);
         return;
     }
 

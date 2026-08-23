@@ -76,15 +76,20 @@ DecodedAudio mix_stems(const std::vector<DecodedAudio>& stems, int out_rate,
 }
 
 DecodedAudio decode_and_mix(const std::vector<app::PreviewAudioStem>& stems,
-                            int out_rate, int out_channels) {
+                            int out_rate, int out_channels,
+                            const DecodeProgress& on_progress) {
+    const int total = static_cast<int>(stems.size());
+    if (on_progress) on_progress(0, total);
     std::vector<DecodedAudio> decoded;
     decoded.reserve(stems.size());
+    int done = 0;
     for (const app::PreviewAudioStem& s : stems) {
         try {
             decoded.push_back(decode_stem(s));
         } catch (const std::exception&) {
             // Skip a stem we cannot decode; the rest of the chart still plays.
         }
+        if (on_progress) on_progress(++done, total);
     }
     return mix_stems(decoded, out_rate, out_channels);
 }

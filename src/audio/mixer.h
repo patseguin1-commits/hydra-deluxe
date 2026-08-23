@@ -11,6 +11,7 @@
 #ifndef HYDRA_AUDIO_MIXER_H
 #define HYDRA_AUDIO_MIXER_H
 
+#include <functional>
 #include <vector>
 
 #include "audio/decode.h"
@@ -26,8 +27,15 @@ DecodedAudio mix_stems(const std::vector<DecodedAudio>& stems, int out_rate,
 // format. A stem that fails to decode is skipped, so one unreadable or corrupt
 // stem never silences the rest of the chart. This is the bridge from a resolved
 // PreviewSource's stems (audio/../app/preview_source.h) to a playable buffer.
+//
+// `on_progress(done, total)` fires once before the first stem (done=0) and
+// once after each stem, skipped or not, so a caller can drive a loading bar
+// by stem count. Decoding is the long pole of a Preview load, and one stem is
+// the finest unit the decoders report at.
+using DecodeProgress = std::function<void(int done, int total)>;
 DecodedAudio decode_and_mix(const std::vector<app::PreviewAudioStem>& stems,
-                            int out_rate, int out_channels);
+                            int out_rate, int out_channels,
+                            const DecodeProgress& on_progress = nullptr);
 
 }  // namespace hydra::audio
 

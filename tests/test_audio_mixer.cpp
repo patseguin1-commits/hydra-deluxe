@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "app/preview_source.h"
@@ -116,7 +117,12 @@ TEST_CASE("decode_and_mix decodes each stem, skips undecodable ones") {
     junk.label = "broken";
     junk.bytes = {'n', 'o', 't', ' ', 'a', 'u', 'd', 'i', 'o'};
 
-    DecodedAudio out = decode_and_mix({ogg, mp3, junk}, 48000, 2);
+    // The progress callback fires once per stem, even for one that is skipped,
+    // so a loading bar can count stems without caring which ones decoded.
+    std::vector<std::pair<int, int>> ticks;
+    DecodedAudio out = decode_and_mix({ogg, mp3, junk}, 48000, 2,
+                                      [&](int done, int total) { ticks.emplace_back(done, total); });
+    CHECK(ticks == std::vector<std::pair<int, int>>{{0, 3}, {1, 3}, {2, 3}, {3, 3}});
     CHECK(out.channels == 2);
     CHECK(out.sample_rate == 48000);
     REQUIRE(out.frames() > 4800);  // both real 220 Hz stems mixed in

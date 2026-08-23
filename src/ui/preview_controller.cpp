@@ -34,6 +34,12 @@ void PreviewController::open(const store::ChartLibraryEntry& entry, bool pro,
     job_->start();
 }
 
+PreviewController::LoadProgress PreviewController::load_progress() const {
+    if (!job_) return {};
+    PreviewLoadJob::Progress p = job_->progress();
+    return {p.fraction(), p.label()};
+}
+
 void PreviewController::close() {
     // Stop the device before the audio it pulls from is destroyed.
     audio_device_.reset();

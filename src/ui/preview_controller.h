@@ -62,6 +62,12 @@ public:
     void poll();
 
     bool loading() const { return job_ != nullptr; }
+    // Only meaningful while loading(); the load's current step and stem count.
+    struct LoadProgress {
+        float fraction = 0.0f;  // 0..1 estimate
+        std::string label;      // "Decoding audio 2/5"
+    };
+    LoadProgress load_progress() const;
     bool has_error() const { return !error_.empty(); }
     const std::string& error() const { return error_; }
 

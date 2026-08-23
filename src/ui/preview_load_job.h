@@ -6,7 +6,9 @@
 #ifndef HYDRA_UI_PREVIEW_LOAD_JOB_H
 #define HYDRA_UI_PREVIEW_LOAD_JOB_H
 
+#include <atomic>
 #include <optional>
+#include <string>
 
 #include "app/preview_view.h"
 #include "audio/decode.h"
@@ -37,6 +39,22 @@ public:
     // Valid once finished() && ok(); moves the result out (call once).
     Result take_result();
 
+    // Where the load is, for the Preview tab's loading bar. The steps run in
+    // this order; Decoding is the long one on big charts, so it is the only
+    // step that reports a count (stems done / stems total).
+    enum class Step { Reading, Decoding, Mixing, Building };
+    struct Progress {
+        Step step = Step::Reading;
+        int stems_done = 0;
+        int stems_total = 0;
+        // Overall 0..1 estimate: the three fixed steps get a slice each and
+        // decoding spreads its slice across the stems.
+        float fraction() const;
+        // Short label for the current step ("Decoding audio 2/5").
+        std::string label() const;
+    };
+    Progress progress() const;
+
 private:
     void run();
 
@@ -45,6 +63,12 @@ private:
     bool bass2x_;
     std::optional<Path> path_;
     std::optional<Result> result_;
+
+    // Written by the worker, read by the render thread; each field is its own
+    // atomic so a torn read can only be one step stale, never garbage.
+    std::atomic<Step> step_{Step::Reading};
+    std::atomic<int> stems_done_{0};
+    std::atomic<int> stems_total_{0};
 };
 
 }  // namespace hydra::ui

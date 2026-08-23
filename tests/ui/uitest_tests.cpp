@@ -12,6 +12,7 @@
 #include "app/report_files.h"
 #include "ui/app_state.h"
 #include "ui/preview_controller.h"
+#include "ui/preview_load_job.h"
 
 namespace fs = std::filesystem;
 
@@ -146,8 +147,42 @@ void test_preview(ImGuiTestContext* ctx) {
     if (ctx->IsError()) return;
     open_details(ctx, 0);
     if (ctx->IsError()) return;
+    // The loading bar's numbers: reading sits at 0, decoding spreads stems
+    // over the middle, mixing and building fill the tail. The test charts
+    // load too fast to catch on screen, so pin the math down here.
+    {
+        using P = hydra::ui::PreviewLoadJob::Progress;
+        using S = hydra::ui::PreviewLoadJob::Step;
+        // Locals, not P{...} inline: the braces' commas split the IM_CHECK
+        // macro arguments.
+        const P reading{S::Reading, 0, 0};
+        const P decode0{S::Decoding, 0, 4};
+        const P decode2{S::Decoding, 2, 4};
+        const P decode4{S::Decoding, 4, 4};
+        const P mixing{S::Mixing, 4, 4};
+        const P building{S::Building, 4, 4};
+        IM_CHECK_EQ(reading.fraction(), 0.0f);
+        IM_CHECK_STR_EQ(reading.label().c_str(), "Reading chart");
+        IM_CHECK_FLOAT_EQ_EPS(decode0.fraction(), 0.10f, 1e-5f);
+        IM_CHECK_FLOAT_EQ_EPS(decode2.fraction(), 0.475f, 1e-5f);
+        IM_CHECK_STR_EQ(decode2.label().c_str(), "Decoding audio 3/4");
+        IM_CHECK_STR_EQ(decode4.label().c_str(), "Decoding audio 4/4");
+        IM_CHECK_FLOAT_EQ_EPS(mixing.fraction(), 0.85f, 1e-5f);
+        IM_CHECK_FLOAT_EQ_EPS(building.fraction(), 0.95f, 1e-5f);
+        IM_CHECK_STR_EQ(building.label().c_str(), "Building scene");
+    }
+
     ctx->ItemClick("**/Preview");
     IM_CHECK(wait_until(ctx, [&] { return h.app->preview && h.app->preview->active(); }, 10));
+    // While the load is in flight the tab shows a step label and a progress
+    // bar, not a bare "Loading..." (a big chart decodes for seconds). The
+    // test charts load fast, so only check when we actually caught it loading.
+    if (h.app->preview->loading()) {
+        std::string text = visible_text(h);
+        IM_CHECK(text.find("Loading preview:") != std::string::npos);
+        IM_CHECK(text.find('%') != std::string::npos);
+        IM_CHECK(!h.app->preview->load_progress().label.empty());
+    }
     IM_CHECK(wait_until(ctx, [&] { return !h.app->preview->loading(); }, 120));
     IM_CHECK_STR_EQ(h.app->preview->error().c_str(), "");
     IM_CHECK(!h.app->preview->playing());
