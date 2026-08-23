@@ -28,7 +28,7 @@ int count_sp_phrases(const Song& song) {
     return n;
 }
 
-HydraRecord read(const ScoreGraph& graph, int depth_mode, int depth_value,
+HydraRecord read(const ScoreGraph& graph, DepthMode depth_mode, int depth_value,
                  std::optional<double> ms_filter,
                  const std::function<void(float)>& on_progress) {
     HydraRecord record;
@@ -87,7 +87,7 @@ std::vector<Path> search_allzero(const ScoreGraph& graph,
     // group) meant the section routinely showed a path needing hundreds of ms.
     std::vector<Path> paths;
     try {
-        paths = run_search(graph, /*depth_mode=*/0, /*depth_value=*/0,
+        paths = run_search(graph, DepthMode::Scores, /*depth_value=*/0,
                            /*ms_filter=*/0.0,
                            /*no_skips=*/true, /*hard_ms_filter=*/true,
                            on_progress);
@@ -107,10 +107,17 @@ std::vector<Path> search_allzero(const ScoreGraph& graph,
     return paths;
 }
 
-HydraRecord analyze_at_cap(const Song& song, int sp_cap, int depth_mode,
+namespace {
+
+// One pathing run with a given SP meter ceiling. build_cap, when set, is the
+// ceiling the graph is actually built at (the record still reports sp_cap).
+// want_allzero also runs search_allzero over the same graph and stores it in
+// the record's allzero_paths.
+// Mirrors hyutil._analyze_at_cap.
+HydraRecord analyze_at_cap(const Song& song, int sp_cap, DepthMode depth_mode,
                            int depth_value, std::optional<double> ms_filter,
-                           std::optional<int> build_cap, bool want_allzero,
-                           const std::function<void(float)>& on_progress) {
+                           std::optional<int> build_cap, bool want_allzero = false,
+                           const std::function<void(float)>& on_progress = {}) {
     std::optional<int> cap = build_cap.has_value() ? build_cap
                                                    : std::optional<int>(sp_cap);
     ScoreGraph graph(song, cap);
@@ -128,10 +135,19 @@ HydraRecord analyze_at_cap(const Song& song, int sp_cap, int depth_mode,
     return record;
 }
 
-HydraRecord analyze_auto_cap(const Song& song, int depth_mode, int depth_value,
-                             std::optional<double> ms_filter, bool want_allzero,
-                             const std::function<void(float)>& on_progress,
-                             std::optional<double> time_budget_s) {
+// Auto cap: raise the ceiling up the SP-cap ladder until the score settles,
+// approximating "no ceiling at all".
+// time_budget_s, if set, abandons a ladder rung that overruns it (the first
+// rung always finishes), keeping the best rung so far and flagging it
+// unsettled. nullopt runs every rung to completion — what the tests use, so
+// their results stay deterministic.
+// want_allzero runs the all-0 pass once, after the ladder settles, at the
+// settled ceiling -- never per rung.
+HydraRecord analyze_auto_cap(const Song& song, DepthMode depth_mode, int depth_value,
+                             std::optional<double> ms_filter,
+                             bool want_allzero = false,
+                             const std::function<void(float)>& on_progress = {},
+                             std::optional<double> time_budget_s = std::nullopt) {
     int sp_phrases = count_sp_phrases(song);
     const int ladder_n = static_cast<int>(std::size(kSpCapLadder));
 
@@ -212,12 +228,17 @@ HydraRecord analyze_auto_cap(const Song& song, int depth_mode, int depth_value,
     return std::move(*record);
 }
 
-HydraRecord analyze_chart(const Song& song, std::optional<int> sp_cap, int depth_mode,
-                          int depth_value, std::optional<double> ms_filter,
-                          const std::function<void(float)>& on_progress,
-                          std::optional<double> time_budget_s) {
+}  // namespace
+
+HydraRecord analyze_chart(const Song& song, const SearchSettings& settings,
+                          const std::function<void(float)>& on_progress) {
     if (song.is_empty())
         throw ChartFileError("No Expert pro drums notes in this chart.");
+
+    const std::optional<int> sp_cap = settings.sp_cap;
+    const DepthMode depth_mode = settings.depth_mode;
+    const int depth_value = settings.depth_value;
+    const std::optional<double> ms_filter = settings.ms_filter;
 
     // Clone Hero's 4-bar rule is the classic single pass, kept exactly as it
     // always was so a fresh 4-bar record matches every stored one.
@@ -235,7 +256,8 @@ HydraRecord analyze_chart(const Song& song, std::optional<int> sp_cap, int depth
                               build_cap, /*want_allzero=*/true, on_progress);
     }
     return analyze_auto_cap(song, depth_mode, depth_value, ms_filter,
-                            /*want_allzero=*/true, on_progress, time_budget_s);
+                            /*want_allzero=*/true, on_progress,
+                            settings.time_budget_s);
 }
 
 }  // namespace hydra

@@ -75,7 +75,7 @@ Song make_hand_song() {
 const AnalysisResult& analyzed() {
     static const AnalysisResult result = [] {
         AnalysisSettings settings;
-        settings.depth_mode = 0;
+        settings.depth_mode = DepthMode::Scores;
         settings.depth_value = 10;
         settings.ms_filter = 10.0;
         for (const std::string& path : corpus::chart_paths()) {

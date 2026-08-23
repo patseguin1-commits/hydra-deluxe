@@ -21,7 +21,7 @@ namespace {
 // store and return how many records landed.
 int fill_store(store::RecordStore& store, std::optional<int> cap, int want) {
     AnalysisSettings settings;
-    settings.depth_mode = 0;
+    settings.depth_mode = DepthMode::Scores;
     settings.depth_value = 10;
     settings.sp_cap = cap;
     settings.time_budget_s = std::nullopt;

@@ -21,6 +21,7 @@
 
 #include "core/model.h"
 #include "parse/song.h"
+#include "search/pather.h"
 #include "store/record_store.h"
 
 namespace hydra::app {
@@ -78,19 +79,11 @@ std::pair<std::vector<ScanItem>, std::vector<std::string>> discover_charts(
 std::map<std::string, int> count_chart_chords(const std::string& filepath);
 
 // The settings a batch run applies uniformly, mirroring the `settings` tuple
-// hybatch.analyze_for_store's job carries.
-struct AnalysisSettings {
+// hybatch.analyze_for_store's job carries. Everything the search itself reads
+// lives on the SearchSettings base; the two flags here are parse-time only.
+struct AnalysisSettings : SearchSettings {
     bool prodrums = true;
     bool bass2x = true;
-    int depth_mode = 0;   // matches search/graph.h's DepthMode
-    int depth_value = 4;
-    std::optional<double> ms_filter;
-    // The SP meter ceiling in bars (4 = Clone Hero's rule). nullopt is Auto:
-    // the ladder that raises the ceiling until the score settles.
-    std::optional<int> sp_cap = 4;
-    // Auto only: seconds before a too-slow ladder rung is abandoned
-    // (hymisc.SP_CAP_TIME_BUDGET). nullopt runs every rung to completion.
-    std::optional<double> time_budget_s;
 };
 
 // Loads and analyzes one chart file (.mid/.chart/.sng/.srb), producing a record and

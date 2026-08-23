@@ -34,9 +34,16 @@ TEST_CASE("search invariants hold across the corpus and config knobs") {
             // Depth asks for more alternate paths and must not move the
             // optimum; the ms filter is a constraint, so its best can only
             // be at or below the unconstrained best.
-            HydraRecord shallow = analyze_chart(song, 4, 0, 0, std::nullopt);
-            HydraRecord deep = analyze_chart(song, 4, 0, 200, std::nullopt);
-            HydraRecord filtered = analyze_chart(song, 4, 0, 200, 20.0);
+            SearchSettings cfg;
+            cfg.sp_cap = 4;
+            cfg.depth_mode = DepthMode::Scores;
+            cfg.depth_value = 0;
+            cfg.ms_filter = std::nullopt;
+            HydraRecord shallow = analyze_chart(song, cfg);
+            cfg.depth_value = 200;
+            HydraRecord deep = analyze_chart(song, cfg);
+            cfg.ms_filter = 20.0;
+            HydraRecord filtered = analyze_chart(song, cfg);
 
             if (shallow.paths.empty()) {
                 d = "no paths";
@@ -97,7 +104,12 @@ TEST_CASE("stored transfer scales match the display-layer recomputation") {
 
         std::optional<HydraRecord> record;
         try {
-            record = analyze_chart(song, 4, 0, 4, std::nullopt);
+            SearchSettings cfg;
+            cfg.sp_cap = 4;
+            cfg.depth_mode = DepthMode::Scores;
+            cfg.depth_value = 4;
+            cfg.ms_filter = std::nullopt;
+            record = analyze_chart(song, cfg);
         } catch (const ChartFileError&) {
             continue;
         }
@@ -161,7 +173,9 @@ TEST_CASE("search_allzero returns only all-0 paths inside the 0 ms limit") {
         HydraRecord holder;
         holder.allzero_paths = allzero;
         const int64_t optimum =
-            run_search(graph, 0, 0, std::nullopt, false).front().totalscore();
+            run_search(graph, DepthMode::Scores, 0, std::nullopt, false)
+                .front()
+                .totalscore();
 
         std::string d;
         for (const Path* p : holder.all_allzero_paths()) {

@@ -145,7 +145,7 @@ AnalysisSettings Settings::to_analysis_settings() const {
     AnalysisSettings s;
     s.prodrums = view_prodrums;
     s.bass2x = view_bass2x;
-    s.depth_mode = depth_mode;
+    s.depth_mode = depth_mode == 1 ? DepthMode::Points : DepthMode::Scores;
     s.depth_value = depth_value;
     s.ms_filter = mslimit_enabled ? std::optional<double>(mslimit_value) : std::nullopt;
     s.sp_cap = sp_cap;

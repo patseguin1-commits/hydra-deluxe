@@ -560,9 +560,7 @@ AnalysisResult analyze_chart_file(const std::string& filepath,
                                   const AnalysisSettings& settings,
                                   const std::function<void(float)>& on_progress) {
     Song song = load_songpath(filepath, settings.prodrums, settings.bass2x);
-    HydraRecord record = analyze_chart(song, settings.sp_cap, settings.depth_mode,
-                                       settings.depth_value, settings.ms_filter,
-                                       on_progress, settings.time_budget_s);
+    HydraRecord record = analyze_chart(song, settings, on_progress);
     return AnalysisResult{std::move(record), std::move(song)};
 }
 

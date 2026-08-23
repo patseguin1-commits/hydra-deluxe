@@ -26,9 +26,6 @@ inline bool has_value(double v) { return !std::isnan(v); }
 const int64_t NO_TIME = -1;
 const int32_t SQ_IN = 0;
 const int32_t SQ_OUT = 1;
-const int32_t DEPTH_SCORES = 0;
-const int32_t DEPTH_POINTS = 1;
-
 const int32_t DEACT_NONE = 0;
 const int32_t DEACT_NORMAL = 1;
 const int32_t DEACT_SQINOUT = 2;
@@ -237,7 +234,7 @@ private:
 
 class Engine {
 public:
-    Engine(const Enum& en, bool has_sp_cap, int32_t sp_cap, int32_t depth_mode,
+    Engine(const Enum& en, bool has_sp_cap, int32_t sp_cap, DepthMode depth_mode,
            int32_t depth_value, bool has_ms_filter, double ms_filter,
            bool no_skips, bool hard_ms_filter)
         : en_(en),
@@ -345,7 +342,7 @@ private:
     const Enum& en_;
     bool has_sp_cap_;
     int32_t sp_cap_;
-    int32_t depth_mode_;
+    DepthMode depth_mode_;
     int32_t depth_value_;
     bool has_ms_filter_;
     double ms_filter_;
@@ -654,7 +651,7 @@ bool Engine::passes_ms_filter(const Path& p) const {
 
 // --- reduce_group --------------------------------------------------------
 void Engine::reduce_group(const int32_t* members, int32_t n) {
-    if (depth_mode_ == DEPTH_SCORES &&
+    if (depth_mode_ == DepthMode::Scores &&
         (int64_t)n <= (int64_t)depth_value_ + 1) {
         bool any_filtered = false;
         for (int32_t i = 0; i < n; ++i) {
@@ -764,9 +761,9 @@ void Engine::reduce_group(const int32_t* members, int32_t n) {
         if (filtered_[(size_t)idx]) {
             if (outscored_by) {
                 removed_[(size_t)idx] = 1;
-            } else if (depth_mode_ == DEPTH_POINTS) {
+            } else if (depth_mode_ == DepthMode::Points) {
                 if (score + depth_value_ < best_all) removed_[(size_t)idx] = 1;
-            } else if (depth_mode_ == DEPTH_SCORES) {
+            } else if (depth_mode_ == DepthMode::Scores) {
                 const int32_t outscored_by_all =
                     n_dominating - (int32_t)(std::upper_bound(
                                         dominating_.begin(), dominating_.end(),
@@ -774,9 +771,9 @@ void Engine::reduce_group(const int32_t* members, int32_t n) {
                                     dominating_.begin());
                 if (outscored_by_all > depth_value_) removed_[(size_t)idx] = 1;
             }
-        } else if (depth_mode_ == DEPTH_POINTS) {
+        } else if (depth_mode_ == DepthMode::Points) {
             if (score + depth_value_ < best) removed_[(size_t)idx] = 1;
-        } else if (depth_mode_ == DEPTH_SCORES) {
+        } else if (depth_mode_ == DepthMode::Scores) {
             if (outscored_by > depth_value_) removed_[(size_t)idx] = 1;
         }
     }
@@ -1162,7 +1159,7 @@ std::vector<MPath> rebuild(const Enum& en, const std::vector<OutPath>& out_paths
 
 }  // namespace
 
-std::vector<MPath> run_search(const ScoreGraph& graph, int depth_mode,
+std::vector<MPath> run_search(const ScoreGraph& graph, DepthMode depth_mode,
                               int depth_value, std::optional<double> ms_filter,
                               bool no_skips, bool hard_ms_filter,
                               const std::function<void(float)>& on_progress) {

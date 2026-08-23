@@ -58,7 +58,10 @@ struct Settings {
     bool view_bass2x = true;
 
     int depth_value = 4;
-    int depth_mode = 0;  // 0 = scores, 1 = points (search/engine.h convention)
+    // 0 = scores, 1 = points. Stays an int: it is what the INI stores and what
+    // the details view's Combo binds to; to_analysis_settings maps it to
+    // search/engine.h's DepthMode.
+    int depth_mode = 0;
 
     bool mslimit_enabled = true;
     int mslimit_value = 10;

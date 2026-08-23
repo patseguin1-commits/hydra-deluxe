@@ -180,7 +180,7 @@ TEST_CASE("to_analysis_settings maps the cap and its Auto budget") {
     // A fixed cap: single run, no time budget.
     s.sp_cap = 16;
     AnalysisSettings a = s.to_analysis_settings();
-    CHECK(a.depth_mode == 1);
+    CHECK(a.depth_mode == hydra::DepthMode::Points);
     CHECK(a.depth_value == 5000);
     CHECK(a.ms_filter == 20.0);
     CHECK(a.sp_cap == 16);
@@ -196,4 +196,20 @@ TEST_CASE("to_analysis_settings maps the cap and its Auto budget") {
     s.mslimit_enabled = false;
     a = s.to_analysis_settings();
     CHECK_FALSE(a.ms_filter.has_value());
+}
+
+// The INI keeps depth_mode as a plain int, so the mapping to the search's
+// enum is where a stray value has to land somewhere safe: anything that isn't
+// 1 means the default, scores.
+TEST_CASE("to_analysis_settings maps depth_mode onto the search's enum") {
+    Settings s;
+
+    s.depth_mode = 1;
+    CHECK(s.to_analysis_settings().depth_mode == hydra::DepthMode::Points);
+
+    s.depth_mode = 0;
+    CHECK(s.to_analysis_settings().depth_mode == hydra::DepthMode::Scores);
+
+    s.depth_mode = 7;  // out of range: falls back to scores, never a bad enum
+    CHECK(s.to_analysis_settings().depth_mode == hydra::DepthMode::Scores);
 }

@@ -14,8 +14,12 @@
 
 namespace hydra {
 
+// How the search decides which losing paths to keep: Scores keeps the top
+// depth_value + 1 distinct scores, Points everything within depth_value points.
+enum class DepthMode { Scores, Points };
+
 // Run the BFS over the graph and return finished, best-score-first,
-// variant-prepared Paths. depth_mode: 0 = scores, 1 = points.
+// variant-prepared Paths.
 // Throws std::runtime_error if the search reaches a broken state.
 // on_progress, if set, receives a monotonic 0..1 fraction as the BFS frontier
 // sweeps the chart. Lets the UI show a real progress bar for a heavy chart
@@ -28,7 +32,7 @@ namespace hydra {
 // default an over-limit path still survives while nothing outscores it, so the
 // best path a search reports can need more timing than the limit allows; with
 // this set, an over-limit path is dropped outright.
-std::vector<Path> run_search(const ScoreGraph& graph, int depth_mode,
+std::vector<Path> run_search(const ScoreGraph& graph, DepthMode depth_mode,
                              int depth_value, std::optional<double> ms_filter,
                              bool no_skips = false,
                              bool hard_ms_filter = false,

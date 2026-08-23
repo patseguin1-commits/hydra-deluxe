@@ -82,7 +82,7 @@ std::vector<uint8_t> render_chart(const std::string& chart, double time_ms, int 
 
     // Analyze so the path overlay (active SP windows, fills) is present.
     app::AnalysisSettings settings;
-    settings.depth_mode = 0;
+    settings.depth_mode = DepthMode::Scores;
     settings.depth_value = 10;
     settings.ms_filter = 10.0;
     settings.prodrums = pro;

@@ -34,7 +34,7 @@ namespace {
 struct Config {
     const char* key;
     std::optional<int> cap;  // nullopt = Auto
-    int dmode;
+    DepthMode dmode;
     int dvalue;
     std::optional<double> ms;
 };
@@ -42,16 +42,16 @@ struct Config {
 // The config matrix the GUI/CLI expose: score depth, points depth, the ms
 // filter, a fixed what-if cap, and Auto.
 const std::vector<Config> kMatrix = {
-    {"cap4.scores.10", 4, 0, 10, std::nullopt},
-    {"cap4.scores.200", 4, 0, 200, std::nullopt},
-    {"cap4.scores.0", 4, 0, 0, std::nullopt},
-    {"cap4.scores.1", 4, 0, 1, std::nullopt},
-    {"cap4.scores.3", 4, 0, 3, std::nullopt},
-    {"cap4.points.5000", 4, 1, 5000, std::nullopt},
-    {"cap4.scores.200.ms5", 4, 0, 200, 5.0},
-    {"cap4.scores.200.ms20", 4, 0, 200, 20.0},
-    {"cap8.scores.200", 8, 0, 200, std::nullopt},
-    {"auto.scores.200", std::nullopt, 0, 200, std::nullopt},
+    {"cap4.scores.10", 4, DepthMode::Scores, 10, std::nullopt},
+    {"cap4.scores.200", 4, DepthMode::Scores, 200, std::nullopt},
+    {"cap4.scores.0", 4, DepthMode::Scores, 0, std::nullopt},
+    {"cap4.scores.1", 4, DepthMode::Scores, 1, std::nullopt},
+    {"cap4.scores.3", 4, DepthMode::Scores, 3, std::nullopt},
+    {"cap4.points.5000", 4, DepthMode::Points, 5000, std::nullopt},
+    {"cap4.scores.200.ms5", 4, DepthMode::Scores, 200, 5.0},
+    {"cap4.scores.200.ms20", 4, DepthMode::Scores, 200, 20.0},
+    {"cap8.scores.200", 8, DepthMode::Scores, 200, std::nullopt},
+    {"auto.scores.200", std::nullopt, DepthMode::Scores, 200, std::nullopt},
 };
 
 // First field where two summaries differ, empty when equal.
@@ -82,7 +82,12 @@ TEST_CASE("records round-trip through RecordStore across the corpus and config m
         for (const Config& cfg : kMatrix) {
             std::optional<HydraRecord> record;
             try {
-                record = analyze_chart(song, cfg.cap, cfg.dmode, cfg.dvalue, cfg.ms);
+                SearchSettings settings;
+                settings.sp_cap = cfg.cap;
+                settings.depth_mode = cfg.dmode;
+                settings.depth_value = cfg.dvalue;
+                settings.ms_filter = cfg.ms;
+                record = analyze_chart(song, settings);
             } catch (const ChartFileError&) {
                 continue;  // charts the engine rejects have no row to store
             }
@@ -180,7 +185,12 @@ TEST_CASE("record blob: v3 carries transfer scales, v1/v2 still read") {
         Song song = load_songpath(path, true, true);
         if (song.is_empty()) continue;
         try {
-            HydraRecord r = analyze_chart(song, /*sp_cap=*/4, 0, 4, 10.0);
+            SearchSettings settings;
+            settings.sp_cap = 4;
+            settings.depth_mode = DepthMode::Scores;
+            settings.depth_value = 4;
+            settings.ms_filter = 10.0;
+            HydraRecord r = analyze_chart(song, settings);
             if (!r.allzero_paths.empty()) {
                 record = std::move(r);
                 break;
@@ -290,7 +300,12 @@ TEST_CASE("RecordStore maintenance: has_record, list_records, reindex, drop_stal
         Song s = load_songpath(path, true, true);
         if (s.is_empty()) continue;
         try {
-            record = analyze_chart(s, 4, 0, 10, std::nullopt);
+            SearchSettings settings;
+            settings.sp_cap = 4;
+            settings.depth_mode = DepthMode::Scores;
+            settings.depth_value = 10;
+            settings.ms_filter = std::nullopt;
+            record = analyze_chart(s, settings);
         } catch (const ChartFileError&) {
             continue;
         }
@@ -353,7 +368,12 @@ const Fixture& fixture() {
             Song s = load_songpath(path, true, true);
             if (s.is_empty()) continue;
             try {
-                HydraRecord r = analyze_chart(s, 4, 0, 0, std::nullopt);
+                SearchSettings settings;
+                settings.sp_cap = 4;
+                settings.depth_mode = DepthMode::Scores;
+                settings.depth_value = 0;
+                settings.ms_filter = std::nullopt;
+                HydraRecord r = analyze_chart(s, settings);
                 if (r.paths.empty()) continue;
                 return Fixture{std::move(s), std::move(r)};
             } catch (const ChartFileError&) {

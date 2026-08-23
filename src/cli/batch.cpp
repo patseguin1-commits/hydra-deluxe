@@ -72,6 +72,7 @@ int main(int argc, char** argv) {
     }
 
     hydra::app::Settings settings = hydra::app::Settings::load();
+    const hydra::app::AnalysisSettings analysis = settings.to_analysis_settings();
     std::string chartmode = settings.chartmode_key();
     std::string db = dbpath ? *dbpath : hydra::app::db_path();
 
@@ -94,8 +95,12 @@ int main(int argc, char** argv) {
 
     std::printf("Database   : %s\n", db.c_str());
     std::printf("Chart mode : %s\n", chartmode.c_str());
-    std::printf("Depth      : %s %d\n", settings.depth_mode == 0 ? "scores" : "points",
-                settings.depth_value);
+    const char* depth_name = "scores";
+    switch (analysis.depth_mode) {
+        case hydra::DepthMode::Scores: depth_name = "scores"; break;
+        case hydra::DepthMode::Points: depth_name = "points"; break;
+    }
+    std::printf("Depth      : %s %d\n", depth_name, settings.depth_value);
     if (settings.sp_cap) std::printf("SP cap     : %d bars\n", *settings.sp_cap);
     else std::printf("SP cap     : Auto\n");
     if (settings.mslimit_enabled)
@@ -118,7 +123,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> failures;
 
     hydra::app::run_batch(
-        scanitems, chartmode, settings.to_analysis_settings(), store, redo,
+        scanitems, chartmode, analysis, store, redo,
         hydra::app::batch_worker_count(),
         [&](const hydra::app::BatchProgress& p) {
             if (!total_known) {

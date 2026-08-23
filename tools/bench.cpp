@@ -75,10 +75,13 @@ static void folder_breakdown(const std::string& folder) {
 
         // Uncapped ladder, score range 4, 10ms limit -- the exact default.
         t = clk::now();
-        HydraRecord rec = analyze_chart(song, /*sp_cap=*/std::nullopt, /*dmode=*/0,
-                                        /*dvalue=*/4, /*ms_filter=*/10.0,
-                                        /*on_progress=*/{},
-                                        /*time_budget=*/std::nullopt);
+        SearchSettings settings;
+        settings.sp_cap = std::nullopt;
+        settings.depth_mode = DepthMode::Scores;
+        settings.depth_value = 4;
+        settings.ms_filter = 10.0;
+        settings.time_budget_s = std::nullopt;
+        HydraRecord rec = analyze_chart(song, settings);
         double search_s = secs_since(t);
 
         t = clk::now();
@@ -194,12 +197,17 @@ static void corpus_bench() {
     std::printf("Test corpus: %zu charts. Engine = src/search/engine.cpp.\n\n",
                 songs.size());
     auto bench = [&](const char* name, std::optional<int> cap, int dvalue) {
+        SearchSettings settings;
+        settings.sp_cap = cap;
+        settings.depth_mode = DepthMode::Scores;
+        settings.depth_value = dvalue;
+        settings.ms_filter = std::nullopt;
         double best = 1e30;
         for (int rep = 0; rep < 3; ++rep) {
             auto t0 = clk::now();
             for (const Song& s : songs)
                 try {
-                    analyze_chart(s, cap, 0, dvalue, std::nullopt);
+                    analyze_chart(s, settings);
                 } catch (const std::exception&) {
                 }
             best = std::min(best, secs_since(t0));
