@@ -267,8 +267,10 @@ private:
             sp_start_tick_.reset();
             return;
         }
-        if (song_->sequence.back().timecode.ticks() >= *sp_start_tick_)
+        if (song_->sequence.back().timecode.ticks() >= *sp_start_tick_) {
             song_->sequence.back().flag_sp = true;
+            song_->sequence.back().sp_phrase_start = *sp_start_tick_;
+        }
         sp_start_tick_.reset();
     }
     void op_tom(NoteColor color, NoteCymbalType cymbal) {
@@ -668,8 +670,10 @@ private:
             sp_end_tick_.reset();
             return;
         }
-        if (song_->sequence.back().timecode.ticks() >= starttick)
+        if (song_->sequence.back().timecode.ticks() >= starttick) {
             song_->sequence.back().flag_sp = true;
+            song_->sequence.back().sp_phrase_start = starttick;
+        }
         sp_end_tick_.reset();
     }
     void op_solo(bool on) { flag_solo_ = on; }

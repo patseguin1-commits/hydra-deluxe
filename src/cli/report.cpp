@@ -6,7 +6,6 @@
 //     hydra_report --all-paths       # everything stored
 //     hydra_report --out report.html
 //     hydra_report --db <path>       # a specific database
-//     hydra_report --uncapped        # the uncapped edition's records
 //     hydra_report --no-open         # don't launch the page when done
 //
 // The page is self-contained: open it anywhere, click any column to sort,
@@ -35,7 +34,6 @@ int main(int argc, char** argv) {
     int64_t max_paths = 5;
     std::string out = "hydra_paths.html";
     std::optional<std::string> dbpath;
-    bool uncapped = false;
     bool open_when_done = true;
 
     for (int i = 1; i < argc; ++i) {
@@ -44,7 +42,6 @@ int main(int argc, char** argv) {
         else if (arg == "--paths" && i + 1 < argc) max_paths = std::atoll(argv[++i]);
         else if (arg == "--out" && i + 1 < argc) out = argv[++i];
         else if (arg == "--db" && i + 1 < argc) dbpath = argv[++i];
-        else if (arg == "--uncapped") uncapped = true;
         else if (arg == "--no-open") open_when_done = false;
         else {
             std::fprintf(stderr, "Unknown option: %s\n", arg.c_str());
@@ -52,34 +49,27 @@ int main(int argc, char** argv) {
         }
     }
 
-    // The hit window drives the timing-tier bands; read it from the same INI
-    // the GUI writes so the two report entry points agree.
-    const int hit_window_ms =
-        hydra::app::Settings::load(uncapped).hit_window_ms;
-    const double w = static_cast<double>(hit_window_ms);
+    // One seam for the whole page — rows, counts, and framing come from
+    // generate_report, the same call the GUI's ReportJob makes. The hit
+    // window is read from the same INI the GUI writes so the two report
+    // entry points agree.
+    std::string db = dbpath ? *dbpath : hydra::app::db_path();
+    hydra::app::Settings settings = hydra::app::Settings::load();
+    hydra::app::report::ReportOptions options;
+    options.max_paths = max_paths;
+    options.cap = settings.cap_query();
+    options.hit_window_ms = settings.hit_window_ms;
+    options.db_path = db;
 
-    std::string db = dbpath ? *dbpath : hydra::app::db_path(uncapped);
-    hydra::store::RecordStore store(db, uncapped);
-    auto [songs, records] = store.counts();
-    std::vector<hydra::app::report::ReportRow> rows =
-        hydra::app::report::collect_rows(store, max_paths, uncapped, w);
-    store.close();
+    std::unique_ptr<hydra::store::RecordStore> store = hydra::app::open_store(db);
+    hydra::app::report::GeneratedReport report =
+        hydra::app::report::generate_report(*store, options);
+    store->close();
 
-    if (rows.empty()) {
+    if (report.rows == 0) {
         std::printf("No records stored yet. Run hydra_batch first.\n");
         return 1;
     }
-
-    std::string shown = max_paths > 100000000
-                            ? "every path"
-                            : "top " + std::to_string(max_paths) + " paths per chart";
-    std::string subtitle = hydra::group_thousands(records) + " records across " +
-                           hydra::group_thousands(songs) + " songs — " + shown;
-    std::string dbname = std::filesystem::u8path(db).filename().u8string();
-    std::string footer = "Generated from " + dbname +
-                         ". Timing tiers match Hydra's squeeze ratings; "
-                         "'Beyond' is past the " +
-                         std::to_string(2 * hit_window_ms) + " ms window.";
 
     // Make the folder rather than throwing away the work: collecting the rows
     // means inflating every stored record, which is the slow part.
@@ -92,11 +82,11 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "Cannot write %s\n", out.c_str());
         return 1;
     }
-    f << hydra::app::report::build_html(rows, subtitle, footer, w);
+    f << report.html;
     f.close();
 
-    std::printf("Wrote %s path rows to %s\n", hydra::group_thousands(
-                    static_cast<int64_t>(rows.size())).c_str(), out.c_str());
+    std::printf("Wrote %s path rows to %s\n",
+                hydra::group_thousands(report.rows).c_str(), out.c_str());
 
     if (open_when_done) {
         // Hand the page to the default browser. ShellExecuteW returns > 32 on

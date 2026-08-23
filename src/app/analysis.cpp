@@ -560,10 +560,9 @@ AnalysisResult analyze_chart_file(const std::string& filepath,
                                   const AnalysisSettings& settings,
                                   const std::function<void(float)>& on_progress) {
     Song song = load_songpath(filepath, settings.prodrums, settings.bass2x);
-    HydraRecord record = analyze_chart(song, /*capped=*/!settings.uncapped,
-                                       settings.depth_mode, settings.depth_value,
-                                       settings.ms_filter, settings.sp_cap, on_progress,
-                                       settings.uncapped_time_budget_s);
+    HydraRecord record = analyze_chart(song, settings.sp_cap, settings.depth_mode,
+                                       settings.depth_value, settings.ms_filter,
+                                       on_progress, settings.time_budget_s);
     return AnalysisResult{std::move(record), std::move(song)};
 }
 
@@ -595,9 +594,14 @@ void run_batch(const std::vector<ScanItem>& items, const std::string& chartmode,
               const std::function<void(const std::string&, const std::string&)>& on_error,
               const std::function<void(const ScanItem&, const store::PreparedRow&)>& on_result,
               const std::atomic<bool>* cancel) {
+    // "Already has a result" means a current-version record at the cap this
+    // run would produce (Auto: any record above 4 bars), so stale rows and
+    // other caps' rows are re-run rather than skipped.
+    const store::CapQuery cap = settings.sp_cap ? store::CapQuery::at(*settings.sp_cap)
+                                                : store::CapQuery::automatic();
     std::vector<const ScanItem*> todo;
     for (const ScanItem& item : items) {
-        if (!redo && store.has_record(item.md5, chartmode)) continue;
+        if (!redo && store.has_record(item.md5, chartmode, cap)) continue;
         todo.push_back(&item);
     }
 
@@ -626,8 +630,7 @@ void run_batch(const std::vector<ScanItem>& items, const std::string& chartmode,
                 wr.item = *item;
                 try {
                     AnalysisResult ar = analyze_chart_file(item->notespath, settings);
-                    wr.row = store::prepare_row(item->md5, chartmode, ar.record,
-                                                settings.uncapped);
+                    wr.row = store::prepare_row(item->md5, chartmode, ar.record);
                     wr.analysis = std::move(ar);
                 } catch (const std::exception& e) {
                     wr.error = e.what();

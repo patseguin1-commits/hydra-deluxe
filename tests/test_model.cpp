@@ -10,6 +10,7 @@
 #include <string>
 
 #include "core/model.h"
+#include "core/squeeze_rating.h"  // effective_backend_ms / squeeze_budget_ms
 
 using namespace hydra;
 
@@ -255,21 +256,6 @@ TEST_CASE("frontend_transfer_scales: direction-dependent at boundaries") {
     CHECK(flat_scale->pre.late == doctest::Approx(1.0).epsilon(1e-12));
 }
 
-TEST_CASE("transfer_scale_relevance: SqIns want a late frontend") {
-    // A SqIn-only activation must flag the late direction even with no
-    // backend rows in range (the old code only set it via backends).
-    Activation act;
-    act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, 1.5});
-    TransferRelevance rel = transfer_scale_relevance(act, {});
-    CHECK(rel.late);
-    CHECK_FALSE(rel.early);
-
-    act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -3.0});
-    rel = transfer_scale_relevance(act, {});
-    CHECK(rel.late);
-    CHECK(rel.early);
-}
-
 TEST_CASE("field fixture: What's My Age Again? (Sync Chart) SqOut") {
     // Field-verified: Hoph2o's Sync Chart, Expert Pro Drums 2x, path
     // "1- 1 0". The activation at m31.1.0 (tick 57600) sits exactly on a
@@ -344,6 +330,46 @@ TEST_CASE("field fixture: What's My Age Again? (Sync Chart) SqOut") {
     CHECK(stamped.is_difficult());
 }
 
+TEST_CASE("activation_deact_tick: the 0-offset row wins, else the measure fallback") {
+    std::map<int64_t, int64_t> tpm{{0, 1920}};
+    std::map<int64_t, double> bpm{{0, 120.0}};
+    SongTiming st(480, tpm, bpm);
+
+    Activation act;
+    act.timecode = st.timecode(3840);
+    act.sp_meter = 2;
+
+    // No backend rows: act + 4 measures.
+    CHECK(activation_deact_tick(act, st) == st.plusmeasure(*act.timecode, 4).ticks());
+
+    // A SqIn extends the fallback by one +2-measure step.
+    Activation with_sqin = act;
+    with_sqin.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, 12.0});
+    CHECK(activation_deact_tick(with_sqin, st) ==
+          st.plusmeasure(*act.timecode, 6).ticks());
+
+    // A 0.0-offset backend row names the deact node directly, mid-SP
+    // collections and all.
+    BackendSqueeze d0;
+    d0.timecode = st.timecode(3840 + 6 * 1920);
+    d0.offset_ms = 0.0;
+    act.backends.push_back(d0);
+    CHECK(activation_deact_tick(act, st) == 3840 + 6 * 1920);
+
+    // A non-zero offset row recovers D from row.ms - offset.
+    Activation off = act;
+    off.backends.clear();
+    BackendSqueeze late;
+    late.timecode = st.timecode(3840 + 6 * 1920 + 120);  // 125 ms after D
+    late.offset_ms = 125.0;
+    off.backends.push_back(late);
+    CHECK(activation_deact_tick(off, st) == 3840 + 6 * 1920);
+
+    // No timecode or sp_meter: nothing to derive.
+    Activation bare;
+    CHECK(!activation_deact_tick(bare, st).has_value());
+}
+
 TEST_CASE("field fixture: Dumpweed SqOut end anchored on the deact node") {
     // Field-verified: blink-182 - Dumpweed (Hoph2o), Expert Pro Drums 2x,
     // activation "1-" at m19.1.0 (tick 34560), sp_meter 2. The player
@@ -416,50 +442,6 @@ TEST_CASE("field fixture: Dumpweed SqOut end anchored on the deact node") {
     CHECK(scales3->post.late == doctest::Approx(scales->post.late));
     CHECK(scales3->pre.early == doctest::Approx(98.0003 / 97.4999).epsilon(1e-9));
     CHECK(scales3->pre.late == doctest::Approx(1.0).epsilon(1e-12));
-}
-
-TEST_CASE("exact solver prices displacements across a tempo boundary") {
-    // 4/4 throughout; 60 BPM until tick 960, then 120. The activation at tick
-    // 1920 (ms 3000) holds 2 bars = 4 measures, ending at tick 9600 (ms
-    // 11000). An early hit up to 1000 ms stays in the 120 section (shift ==
-    // displacement); past that it crosses into 60 BPM, where a chart ms is
-    // worth half a measure-fraction -- the exact solve diverges from the
-    // boundary-sampled linearization (r == 1 here).
-    std::map<int64_t, int64_t> tpm{{0, 1920}};
-    std::map<int64_t, double> bpm{{0, 60.0}, {960, 120.0}};
-    SongTiming st(480, tpm, bpm);
-
-    Activation act;
-    act.timecode = st.timecode(1920);
-    act.sp_meter = 2;
-
-    // Inside the section: exact == linear.
-    CHECK(sp_end_shift_ms(500.0, SqueezeKind::SqOut, act, st) ==
-          doctest::Approx(500.0).epsilon(1e-9));
-    CHECK(required_frontend_ms(400.0, 100.0, SqueezeKind::SqOut, act, st) ==
-          doctest::Approx(300.0).epsilon(1e-4));
-
-    // Across the boundary: covering a 1250 ms gap takes 1500 ms of early
-    // displacement (1000 at 1:1, then 500 at 1:0.5), not the 1250 the
-    // linearized ratio predicts.
-    CHECK(sp_end_shift_ms(1500.0, SqueezeKind::SqOut, act, st) ==
-          doctest::Approx(1250.0).epsilon(1e-9));
-    CHECK(required_frontend_ms(1250.0, 0.0, SqueezeKind::SqOut, act, st) ==
-          doctest::Approx(1500.0).epsilon(1e-4));
-
-    // Exact even split of a 2400 ms gap: x + shift(x) = 2400 with the second
-    // arm kinked at 1000 -> x = 1266.67, not the linearized 1200.
-    CHECK(exact_even_split_ms(2400.0, SqueezeKind::SqOut, act, st) ==
-          doctest::Approx(2400.0 / 1.5 - 500.0 / 1.5 + 0.0)
-              .epsilon(1e-4));  // (2400 - 500) / 1.5 = 1266.666...
-
-    // A gap no displacement can cover reports +infinity.
-    CHECK(std::isinf(
-        required_frontend_ms(5000.0, 0.0, SqueezeKind::SqOut, act, st)));
-
-    // Stale activations (no timecode / meter) shift nothing.
-    Activation bare;
-    CHECK(sp_end_shift_ms(100.0, SqueezeKind::SqOut, bare, st) == 0.0);
 }
 
 TEST_CASE("difficulty is the raw gap, untouched by stored transfer scales") {

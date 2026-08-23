@@ -86,7 +86,7 @@ using Reader = BinaryReader;
 
 // ---- Path tree --------------------------------------------------------
 
-void write_activation(Writer& w, const Activation& act) {
+void write_activation(Writer& w, const Activation& act, uint32_t version) {
     w.opt_i32(act.skips);
 
     if (!act.timecode) throw SerializeError("activation has no timecode");
@@ -119,10 +119,13 @@ void write_activation(Writer& w, const Activation& act) {
 
     // Format version 3 and later: the frontend transfer scales, so per-hit
     // difficulty is computable straight off the blob (no SongTiming needed).
-    w.f64(act.transfer_pre.early);
-    w.f64(act.transfer_pre.late);
-    w.f64(act.transfer_post.early);
-    w.f64(act.transfer_post.late);
+    // The gate mirrors read_activation's, in the same file, on purpose.
+    if (version >= 3) {
+        w.f64(act.transfer_pre.early);
+        w.f64(act.transfer_pre.late);
+        w.f64(act.transfer_post.early);
+        w.f64(act.transfer_post.late);
+    }
 }
 
 Activation read_activation(Reader& r, uint32_t version) {
@@ -168,7 +171,7 @@ Activation read_activation(Reader& r, uint32_t version) {
     return act;
 }
 
-void write_path(Writer& w, const Path& path) {
+void write_path(Writer& w, const Path& path, uint32_t version) {
     w.u32(static_cast<uint32_t>(path.multsqueezes.size()));
     for (const MultSqueeze& m : path.multsqueezes) {
         w.str(m.chord().code());
@@ -176,7 +179,7 @@ void write_path(Writer& w, const Path& path) {
     }
 
     w.u32(static_cast<uint32_t>(path.activations.size()));
-    for (const Activation& a : path.activations) write_activation(w, a);
+    for (const Activation& a : path.activations) write_activation(w, a, version);
 
     w.i64(path.score_base);
     w.i64(path.score_combo);
@@ -191,7 +194,7 @@ void write_path(Writer& w, const Path& path) {
     w.i32(path.skipped_accents);
 
     w.u32(static_cast<uint32_t>(path.variants.size()));
-    for (const Path& v : path.variants) write_path(w, v);
+    for (const Path& v : path.variants) write_path(w, v, version);
 
     w.opt_i32(path.var_point);
 }
@@ -239,21 +242,38 @@ Path read_path(Reader& r, uint32_t version) {
 
 }  // namespace
 
-std::vector<uint8_t> write_record(const HydraRecord& record) {
+std::vector<uint8_t> write_record(const HydraRecord& record, uint32_t version) {
+    if (version < 1 || version > kBlobFormatVersion)
+        throw SerializeError("unsupported record blob format version");
+
     BinaryWriter w;
-    w.u32(kBlobFormatVersion);
+    w.u32(version);
     w.opt_f64(record.ms_limit);
     w.opt_i32(record.sp_cap);
     w.boolean(record.sp_cap_converged);
 
     w.u32(static_cast<uint32_t>(record.paths.size()));
-    for (const Path& p : record.paths) write_path(w, p);
+    for (const Path& p : record.paths) write_path(w, p, version);
 
     // Format version 2 and later.
-    w.u32(static_cast<uint32_t>(record.allzero_paths.size()));
-    for (const Path& p : record.allzero_paths) write_path(w, p);
+    if (version >= 2) {
+        w.u32(static_cast<uint32_t>(record.allzero_paths.size()));
+        for (const Path& p : record.allzero_paths) write_path(w, p, version);
+    }
 
     return std::move(w.bytes);
+}
+
+std::optional<int> peek_sp_cap(const std::vector<uint8_t>& head) {
+    try {
+        BinaryReader r(head);
+        uint32_t version = r.u32();
+        if (version < 1 || version > kBlobFormatVersion) return std::nullopt;
+        r.opt_f64();  // ms_limit
+        return r.opt_i32();
+    } catch (const SerializeError&) {
+        return std::nullopt;
+    }
 }
 
 HydraRecord read_record(const std::vector<uint8_t>& blob) {
@@ -299,6 +319,13 @@ void restore_path(Path& path, const SongTiming& timing) {
 }
 
 }  // namespace
+
+HydraRecord read_record(const std::vector<uint8_t>& blob,
+                        const SongTiming& timing) {
+    HydraRecord record = read_record(blob);
+    restore_timecodes(record, timing);
+    return record;
+}
 
 void restore_timecodes(HydraRecord& record, const SongTiming& timing) {
     for (Path& p : record.paths) restore_path(p, timing);

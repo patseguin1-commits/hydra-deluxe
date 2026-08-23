@@ -13,129 +13,16 @@ using html::json_escape_into;
 
 namespace {
 
-// The page shell. The CSS block is lifted verbatim from app/report.cpp's kPage
-// (theme-neutral, light/dark aware); the body, columns, and script are this
-// report's own. __SUBTITLE__/__FOOTER__/__DATA__ are filled by build_dm_html.
-const char* const kPage = R"page(<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Hydra vs dmleaderboards</title>
+// The per-page pieces of the comparison page; the shared skeleton (theme +
+// chrome + table CSS, the sort machinery, the deferred first render) lives
+// in app/html_page.cpp (html::kSortable*), canon from the path report. The
+// columns, chip colors, body, and script below are this report's own.
+// __SUBTITLE__/__FOOTER__/__DATA__ are filled by build_dm_html.
+const char* const kTitle = R"page(<title>Hydra vs dmleaderboards</title>
 <style>
-:root {
-  color-scheme: light dark;
-  --paper: #faf9f7;
-  --surface: #ffffff;
-  --raised: #f2f0ec;
-  --ink: #15171d;
-  --muted: #6a6e79;
-  --rule: #e3e1db;
-  --sp: #b07d0a;
-  --sp-soft: #f6e7c2;
-  --t0: #2c7a5e; --t1: #9a7a1e; --t2: #b85f2c; --t3: #b23c3c; --t4: #8e3070; --t5: #5b3fa8;
-  --tn: #9aa0ab;
-  --shadow: 0 1px 2px rgba(20,22,28,.06), 0 8px 24px rgba(20,22,28,.05);
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --paper: #101219; --surface: #171a22; --raised: #1e222c;
-    --ink: #e9e7e2; --muted: #8f95a1; --rule: #282d39;
-    --sp: #f0b429; --sp-soft: #3a2e12;
-    --t0: #4fbf94; --t1: #e0b13f; --t2: #f0894e; --t3: #f2686b; --t4: #e07ac0; --t5: #a78bfa;
-    --tn: #5c626e;
-    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
-  }
-}
-:root[data-theme="dark"] {
-  --paper: #101219; --surface: #171a22; --raised: #1e222c;
-  --ink: #e9e7e2; --muted: #8f95a1; --rule: #282d39;
-  --sp: #f0b429; --sp-soft: #3a2e12;
-  --t0: #4fbf94; --t1: #e0b13f; --t2: #f0894e; --t3: #f2686b; --t4: #e07ac0; --t5: #a78bfa;
-  --tn: #5c626e;
-  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
-}
-:root[data-theme="light"] {
-  --paper: #faf9f7; --surface: #ffffff; --raised: #f2f0ec;
-  --ink: #15171d; --muted: #6a6e79; --rule: #e3e1db;
-  --sp: #b07d0a; --sp-soft: #f6e7c2;
-  --t0: #2c7a5e; --t1: #9a7a1e; --t2: #b85f2c; --t3: #b23c3c; --t4: #8e3070; --t5: #5b3fa8;
-  --tn: #9aa0ab;
-  --shadow: 0 1px 2px rgba(20,22,28,.06), 0 8px 24px rgba(20,22,28,.05);
-}
+)page";
 
-* { box-sizing: border-box; }
-body {
-  margin: 0;
-  background: var(--paper);
-  color: var(--ink);
-  font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  font-size: 14px;
-  line-height: 1.5;
-}
-.mono, td.num, .stat-v {
-  font-family: ui-monospace, "Cascadia Mono", "Consolas", "SF Mono", Menlo, monospace;
-  font-variant-numeric: tabular-nums;
-}
-
-.wrap { max-width: 1760px; margin: 0 auto; padding: 28px 20px 64px; display: flex; flex-direction: column; gap: 20px; }
-
-header { display: flex; flex-direction: column; gap: 6px; }
-h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -.01em; }
-h1 .accent { color: var(--sp); }
-.sub { color: var(--muted); font-size: 13px; }
-
-.stats { display: flex; flex-wrap: wrap; gap: 10px; }
-.stat {
-  background: var(--surface); border: 1px solid var(--rule); border-radius: 8px;
-  padding: 10px 14px; min-width: 116px; box-shadow: var(--shadow);
-}
-.stat-k { font-size: 10px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); }
-.stat-v { font-size: 19px; font-weight: 600; margin-top: 3px; }
-
-.controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-input[type="search"], select, button {
-  font: inherit; color: var(--ink); background: var(--surface);
-  border: 1px solid var(--rule); border-radius: 7px; padding: 8px 11px;
-}
-input[type="search"] { min-width: 220px; flex: 1 1 220px; }
-button { cursor: pointer; }
-button:hover, select:hover { border-color: var(--sp); }
-
-.sorter { display: inline-flex; align-items: center; gap: 6px; }
-.sorter label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
-#sortdir { min-width: 108px; text-align: left; }
-input:focus-visible, select:focus-visible, th:focus-visible, button:focus-visible {
-  outline: 2px solid var(--sp); outline-offset: 2px;
-}
-.count { color: var(--muted); font-size: 13px; margin-left: auto; }
-
-.tablewrap {
-  overflow-x: auto; background: var(--surface);
-  border: 1px solid var(--rule); border-radius: 10px; box-shadow: var(--shadow);
-  scrollbar-color: var(--muted) transparent;
-}
-.tablewrap::-webkit-scrollbar { height: 12px; }
-.tablewrap::-webkit-scrollbar-thumb { background: var(--rule); border-radius: 6px; }
-.tablewrap::-webkit-scrollbar-thumb:hover { background: var(--muted); }
-table { border-collapse: separate; border-spacing: 0; width: 100%; }
-thead th {
-  position: sticky; top: 0; z-index: 2;
-  background: var(--raised); color: var(--muted);
-  font-size: 10px; text-transform: uppercase; letter-spacing: .08em; font-weight: 600;
-  text-align: left; padding: 9px 10px; white-space: nowrap;
-  border-bottom: 1px solid var(--rule); cursor: pointer;
-}
-thead th.num, td.num { text-align: right; }
-thead th:hover { color: var(--ink); background: var(--surface); }
-thead th .arrow { opacity: .35; margin-left: 4px; }
-thead th[aria-sort] { color: var(--ink); }
-thead th[aria-sort] .arrow { opacity: 1; color: var(--sp); }
-tbody td { padding: 7px 10px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
-tbody tr:last-child td { border-bottom: 0; }
-tbody tr:hover td { background: var(--raised); }
-
-thead th:first-child { left: 0; z-index: 4; }
-tbody td:first-child { position: sticky; left: 0; z-index: 1; background: var(--surface); }
-tbody tr:hover td:first-child { background: var(--raised); }
-
+const char* const kCssColumns = R"page(
 td.trunc { overflow: hidden; text-overflow: ellipsis; }
 .song { font-weight: 550; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 td.artist { max-width: 170px; }
@@ -144,18 +31,12 @@ td.charter { max-width: 150px; }
 .pos { color: var(--t0); }
 .neg { color: var(--t3); }
 
-.chip {
-  display: inline-block; padding: 1px 7px; border-radius: 999px;
-  font-size: 11px; font-weight: 600; letter-spacing: .01em;
-  border: 1px solid currentColor;
-}
-.s-matched{color:var(--t0)} .s-above{color:var(--t1)} .s-unmatched{color:var(--tn); border-color:transparent}
+)page";
 
-.empty { padding: 40px; text-align: center; color: var(--muted); }
-footer { color: var(--muted); font-size: 12px; }
-</style>
+const char* const kChipColors = R"page(.s-matched{color:var(--t0)} .s-above{color:var(--t1)} .s-unmatched{color:var(--tn); border-color:transparent}
+)page";
 
-<div class="wrap">
+const char* const kBody = R"page(<div class="wrap">
   <header>
     <h1>Hydra <span class="accent">vs dmleaderboards</span></h1>
     <div class="sub">__SUBTITLE__</div>
@@ -190,7 +71,9 @@ footer { color: var(--muted); font-size: 12px; }
   <footer>__FOOTER__</footer>
 </div>
 
-<script id="data" type="application/json">__DATA__</script>
+)page";
+
+const char* const kDataJs = R"page(<script id="data" type="application/json">__DATA__</script>
 <script>
 const ROWS = JSON.parse(document.getElementById('data').textContent);
 
@@ -212,55 +95,9 @@ const COLS = [
 
 let sortKey = 'delta', sortDir = -1;
 
-const sortby = document.getElementById('sortby');
-const sortdir = document.getElementById('sortdir');
+)page";
 
-COLS.forEach(c => {
-  const opt = document.createElement('option');
-  opt.value = c.k;
-  opt.textContent = c.t;
-  sortby.appendChild(opt);
-});
-
-function setSort(key, dir) {
-  sortKey = key;
-  sortDir = dir;
-  sortby.value = key;
-  const numeric = COLS.find(c => c.k === key).num;
-  sortdir.textContent = dir === -1
-    ? (numeric ? '↓ Highest' : '↓ Z → A')
-    : (numeric ? '↑ Lowest' : '↑ A → Z');
-  render();
-}
-
-sortby.addEventListener('change', () => {
-  setSort(sortby.value, COLS.find(c => c.k === sortby.value).num ? -1 : 1);
-});
-sortdir.addEventListener('click', () => setSort(sortKey, -sortDir));
-
-const head = document.getElementById('head');
-COLS.forEach(c => {
-  const th = document.createElement('th');
-  th.textContent = c.t;
-  th.tabIndex = 0;
-  th.title = 'Sort by ' + c.t;
-  if (c.num) th.className = 'num';
-  const arrow = document.createElement('span');
-  arrow.className = 'arrow';
-  th.appendChild(arrow);
-  const activate = () => {
-    if (sortKey === c.k) setSort(c.k, -sortDir);
-    else setSort(c.k, c.num ? -1 : 1);
-  };
-  th.addEventListener('click', activate);
-  th.addEventListener('keydown', e => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); }
-  });
-  head.appendChild(th);
-});
-
-const fmt = n => n === null || n === undefined ? '—' : n.toLocaleString();
-const STATUS_CLASS = {'matched':'s-matched', 'above optimal':'s-above', 'unmatched':'s-unmatched'};
+const char* const kPageJs = R"page(const STATUS_CLASS = {'matched':'s-matched', 'above optimal':'s-above', 'unmatched':'s-unmatched'};
 
 function visible() {
   const q = document.getElementById('q').value.trim().toLowerCase();
@@ -377,9 +214,20 @@ function renderStats(rows) {
 document.getElementById('q').addEventListener('input', render);
 document.getElementById('status').addEventListener('change', render);
 
-requestAnimationFrame(() => setTimeout(() => setSort(sortKey, sortDir), 0));
-</script>
 )page";
+
+// The page shell, concatenated once on first use.
+const std::string& page_template() {
+    static const std::string page = std::string(html::kSortableHead) + kTitle +
+                                    html::kSortableCssCore +
+                                    html::kSortableCssTable + kCssColumns +
+                                    html::kSortableCssChip + kChipColors +
+                                    html::kSortableCssTail + kBody + kDataJs +
+                                    html::kSortableJsSorter + kPageJs +
+                                    html::kSortableJsBoot;
+    return page;
+}
+
 
 std::string lower_hex(std::string s) {
     for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -392,9 +240,12 @@ std::vector<DmReportRow> collect_dm_rows(store::RecordStore& store,
                                          const std::vector<net::DmScore>& scores,
                                          const std::string& chartmode) {
     // One query for every stored record in this chartmode, indexed by hash.
+    // Only 4-bar records: the leaderboard plays by Clone Hero's rules, and a
+    // what-if cap's score would read as "above optimal" nonsense.
     std::unordered_map<std::string, store::RecordListing> by_hash;
     for (store::RecordListing& r :
-         store.list_records(chartmode, store::SortColumn::Score, /*descending=*/true)) {
+         store.list_records(chartmode, store::CapQuery::at(kCloneHeroSpCap),
+                            store::SortColumn::Score, /*descending=*/true)) {
         by_hash.emplace(lower_hex(r.hyhash), std::move(r));
     }
 
@@ -482,7 +333,41 @@ std::string build_dm_html(const std::vector<DmReportRow>& rows, const std::strin
         data.push_back('}');
     }
     data.push_back(']');
-    return html::render_page(kPage, std::move(data), subtitle, footer);
+    return html::render_page(page_template().c_str(), std::move(data), subtitle,
+                             footer);
+}
+
+DmReportStats tally_dm_rows(const std::vector<DmReportRow>& rows) {
+    DmReportStats stats;
+    stats.total = static_cast<int>(rows.size());
+    for (const DmReportRow& r : rows) {
+        if (r.status == "matched") ++stats.matched;
+        else if (r.status == "above optimal") ++stats.above;
+        else ++stats.unmatched;
+    }
+    return stats;
+}
+
+GeneratedDmReport generate_dm_report(store::RecordStore& store,
+                                     const std::vector<net::DmScore>& scores,
+                                     const std::string& chartmode,
+                                     const std::string& username) {
+    GeneratedDmReport out;
+    std::vector<DmReportRow> rows = collect_dm_rows(store, scores, chartmode);
+    out.stats = tally_dm_rows(rows);
+    if (rows.empty()) return out;
+
+    std::string subtitle =
+        username + " — " + group_thousands(out.stats.total) + " scores: " +
+        group_thousands(out.stats.matched) + " matched, " +
+        group_thousands(out.stats.above) + " above optimal, " +
+        group_thousands(out.stats.unmatched) + " not in your library";
+    std::string footer =
+        "Actual scores from dmleaderboards.com against Hydra's optimal for " + chartmode +
+        ". Above-optimal scores are expected — Hydra's optimal excludes several score "
+        "backends, and older Clone Hero versions allowed fills that are impossible now.";
+    out.html = build_dm_html(rows, subtitle, footer);
+    return out;
 }
 
 }  // namespace hydra::app::dm_report

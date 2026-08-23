@@ -17,6 +17,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -66,6 +67,14 @@ std::vector<DmUser> fetch_users(const std::string& api_base = kDefaultApiBase,
 std::vector<DmScore> fetch_scores(const std::string& discord_id,
                                   const std::string& api_base = kDefaultApiBase,
                                   const std::atomic<bool>* cancel = nullptr);
+
+// The transport seam: GET `url`, return the body, throw std::runtime_error on
+// failure. The default is WinHTTP (set_fetcher with an empty function restores
+// it). A harness with no network (the GUI test runner) installs one that
+// returns canned JSON; the parse_* functions below then run unchanged.
+using Fetcher = std::function<std::string(const std::string& url,
+                                          const std::atomic<bool>* cancel)>;
+void set_fetcher(Fetcher fetcher);
 
 // The JSON halves of the two fetches, separated from the WinHTTP transport so
 // tests can exercise them with canned payloads. Throw std::runtime_error with

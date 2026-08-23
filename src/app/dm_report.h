@@ -52,6 +52,29 @@ std::vector<DmReportRow> collect_dm_rows(store::RecordStore& store,
 std::string build_dm_html(const std::vector<DmReportRow>& rows, const std::string& subtitle,
                           const std::string& footer);
 
+// ---- generate_dm_report ----------------------------------------------------
+// The whole comparison in one call: join + tally + the standard page framing.
+// The GUI's DmReportJob is an adapter over this seam; the tally previously
+// lived in the job layer, comparing the status literals the tests pin.
+
+struct DmReportStats {
+    int total = 0;
+    int matched = 0;
+    int above = 0;      // "above optimal"
+    int unmatched = 0;  // not in the library
+};
+DmReportStats tally_dm_rows(const std::vector<DmReportRow>& rows);
+
+struct GeneratedDmReport {
+    std::string html;  // empty when the user had no scores to compare
+    DmReportStats stats;
+};
+
+GeneratedDmReport generate_dm_report(store::RecordStore& store,
+                                     const std::vector<net::DmScore>& scores,
+                                     const std::string& chartmode,
+                                     const std::string& username);
+
 }  // namespace hydra::app::dm_report
 
 #endif  // HYDRA_APP_DM_REPORT_H

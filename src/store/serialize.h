@@ -89,11 +89,33 @@ private:
     size_t pos_ = 0;
 };
 
-std::vector<uint8_t> write_record(const HydraRecord& record);
+// Writes a blob in the given format version (1..kBlobFormatVersion; throws
+// SerializeError otherwise). Production always writes the newest layout (the
+// default); the version parameter exists so the migration tests can produce a
+// genuine old blob through the same writer the readers are gated against —
+// the write and read gates live side by side in serialize.cpp and cannot
+// drift apart.
+std::vector<uint8_t> write_record(const HydraRecord& record,
+                                  uint32_t version = kBlobFormatVersion);
+
+// The SP cap a blob was analyzed at, read from its fixed header alone (the
+// first 18 bytes are enough for every format version). nullopt if the header
+// is malformed or the cap was never recorded. Lets the store key rows by cap
+// without inflating the paths.
+std::optional<int> peek_sp_cap(const std::vector<uint8_t>& head);
 
 // Throws SerializeError if the blob's format version doesn't match, or the
-// bytes are truncated/malformed.
+// bytes are truncated/malformed. The single-argument form returns a record
+// whose Timecodes carry raw ticks only (see the header comment) — use the
+// timing-taking overload wherever a fully restored record is wanted.
 HydraRecord read_record(const std::vector<uint8_t>& blob);
+
+// read_record + restore_timecodes in one call: the record comes back with
+// full Timecodes, ready for the display layer. This closes the two-call load
+// seam; the raw form above stays for callers that deliberately skip the
+// restore (RecordStore::for_each_blob).
+HydraRecord read_record(const std::vector<uint8_t>& blob,
+                        const SongTiming& timing);
 
 // Rebuilds every Timecode in the record (activations and their backends) from
 // raw ticks into full Timecodes derived from `timing`. Call once after

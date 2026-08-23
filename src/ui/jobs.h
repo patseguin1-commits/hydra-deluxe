@@ -20,6 +20,9 @@
 #include <vector>
 
 #include "app/analysis.h"
+#include "app/preview_view.h"
+#include "audio/decode.h"
+#include "core/model.h"
 #include "net/dmbot_client.h"
 #include "store/record_store.h"
 
@@ -160,17 +163,22 @@ private:
 
 // ---- ReportJob --------------------------------------------------------
 
-// Where the batch path report lives on disk (next to the db, edition-suffixed
-// so the two editions never overwrite each other's page).
-std::wstring report_html_path(bool uncapped);
+// Where the batch path report lives on disk (next to the db).
+std::wstring report_html_path();
 
 // Opens the report page in the default browser. Returns false when the shell
 // refuses (e.g. the file doesn't exist yet).
-bool open_report_in_browser(bool uncapped);
+bool open_report_in_browser();
+
+// The "open a file in the browser" seam behind every report open (ShellExecute
+// by default). A harness with no desktop (the GUI test runner) installs one
+// that just records the path; an empty function restores the default.
+using OpenInBrowserFn = std::function<bool(const std::wstring& path)>;
+void set_open_in_browser(OpenInBrowserFn fn);
 
 // Whether a previously built report page exists on disk (gates the library
 // view's "Open path report" button).
-bool report_file_exists(bool uncapped);
+bool report_file_exists();
 
 // Builds the sortable HTML path report from everything in the store — the
 // same page src/cli/report.cpp writes. Kicked off automatically when a
@@ -181,8 +189,9 @@ bool report_file_exists(bool uncapped);
 class ReportJob : public ResultJobBase {
 public:
     // hit_window_ms feeds the page's timing-tier bands (settings.hit_window_ms).
-    ReportJob(store::RecordStore& store, bool uncapped, bool open_when_done,
-              int hit_window_ms = 85);
+    // cap: which records the page lists (the user's current SP cap).
+    ReportJob(store::RecordStore& store, store::CapQuery cap, bool open_when_done,
+              int hit_window_ms = static_cast<int>(kDefaultHitWindowMs));
     ~ReportJob() { shutdown(); }
 
     void start();
@@ -191,7 +200,7 @@ private:
     void run();
 
     store::RecordStore& store_;
-    bool uncapped_;
+    store::CapQuery cap_;
     bool open_when_done_;
     int hit_window_ms_;
 };
@@ -199,7 +208,7 @@ private:
 // ---- AnalyzeJob -------------------------------------------------------
 
 // cancel() interrupts the search at its next progress tick (the same unwind
-// path the uncapped time budget uses); the result is discarded. The stretch
+// path the Auto cap time budget uses); the result is discarded. The stretch
 // before the first tick (parse + graph build) can't be interrupted.
 class AnalyzeJob : public ResultJobBase {
 public:
@@ -232,6 +241,39 @@ private:
     std::optional<app::AnalysisResult> result_;
 };
 
+// ---- PreviewLoadJob ---------------------------------------------------
+
+// Prepares a chart for the 3D Preview off the render thread, mirroring
+// AnalyzeJob: re-parse the notes and gather audio (resolve_preview_source),
+// decode and mix every stem to one buffer, and build the PreviewScene. The
+// controller pulls the finished scene + mixed audio and hands the buffer to a
+// PreviewTransport. Parse + decode are heavy, so none of it runs on-frame.
+class PreviewLoadJob : public ResultJobBase {
+public:
+    PreviewLoadJob(store::ChartLibraryEntry entry, bool pro, bool bass2x,
+                   std::optional<Path> path);
+    ~PreviewLoadJob() { shutdown(); }
+
+    void start();
+
+    struct Result {
+        app::PreviewScene scene;
+        audio::DecodedAudio mixed;
+    };
+
+    // Valid once finished() && ok(); moves the result out (call once).
+    Result take_result();
+
+private:
+    void run();
+
+    store::ChartLibraryEntry entry_;
+    bool pro_;
+    bool bass2x_;
+    std::optional<Path> path_;
+    std::optional<Result> result_;
+};
+
 // ---- DmFetchUsersJob --------------------------------------------------
 
 // Fetches the dmleaderboards ladder (GET /api/all-users) for the searchable
@@ -254,17 +296,19 @@ private:
 
 // ---- DmReportJob ------------------------------------------------------
 
-// Where the comparison page lives on disk (next to the db, edition-suffixed).
-std::wstring dm_report_html_path(bool uncapped);
-bool open_dm_report_in_browser(bool uncapped);
+// Where the comparison page lives on disk (next to the db).
+std::wstring dm_report_html_path();
+bool open_dm_report_in_browser();
 
 // Fetches one user's scores (GET /api/user/{id}/scores), joins them against the
 // store by chart hash, writes the HTML comparison report and opens it. Same
 // off-thread + cold-start handling as DmFetchUsersJob.
 class DmReportJob : public ResultJobBase {
 public:
+    // open_when_done: the user's "Open report automatically" setting, same as
+    // ReportJob (the finished modal offers an "Open report again" button).
     DmReportJob(store::RecordStore& store, std::string discord_id, std::string username,
-                std::string chartmode, bool uncapped);
+                std::string chartmode, bool open_when_done);
     ~DmReportJob() { shutdown(); }
 
     void start();
@@ -281,7 +325,7 @@ private:
     std::string discord_id_;
     std::string username_;
     std::string chartmode_;
-    bool uncapped_;
+    bool open_when_done_;
     int total_ = 0, matched_ = 0, above_ = 0, unmatched_ = 0;
 };
 

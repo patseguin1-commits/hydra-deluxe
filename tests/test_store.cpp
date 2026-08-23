@@ -4,12 +4,22 @@
 
 #include "doctest.h"
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+#include <sqlite3.h>
+
 #include <cstdint>
+#include <cstdio>
+#include <stdexcept>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "core/model.h"
+#include "core/winstr.h"
 #include "corpus_util.h"
 #include "parse/song.h"
 #include "search/pather.h"
@@ -23,24 +33,25 @@ namespace {
 
 struct Config {
     const char* key;
-    bool capped;
+    std::optional<int> cap;  // nullopt = Auto
     int dmode;
     int dvalue;
     std::optional<double> ms;
 };
 
 // The config matrix the GUI/CLI expose: score depth, points depth, the ms
-// filter, and the uncapped edition.
+// filter, a fixed what-if cap, and Auto.
 const std::vector<Config> kMatrix = {
-    {"capped.scores.10", true, 0, 10, std::nullopt},
-    {"capped.scores.200", true, 0, 200, std::nullopt},
-    {"capped.scores.0", true, 0, 0, std::nullopt},
-    {"capped.scores.1", true, 0, 1, std::nullopt},
-    {"capped.scores.3", true, 0, 3, std::nullopt},
-    {"capped.points.5000", true, 1, 5000, std::nullopt},
-    {"capped.scores.200.ms5", true, 0, 200, 5.0},
-    {"capped.scores.200.ms20", true, 0, 200, 20.0},
-    {"uncapped.scores.200", false, 0, 200, std::nullopt},
+    {"cap4.scores.10", 4, 0, 10, std::nullopt},
+    {"cap4.scores.200", 4, 0, 200, std::nullopt},
+    {"cap4.scores.0", 4, 0, 0, std::nullopt},
+    {"cap4.scores.1", 4, 0, 1, std::nullopt},
+    {"cap4.scores.3", 4, 0, 3, std::nullopt},
+    {"cap4.points.5000", 4, 1, 5000, std::nullopt},
+    {"cap4.scores.200.ms5", 4, 0, 200, 5.0},
+    {"cap4.scores.200.ms20", 4, 0, 200, 20.0},
+    {"cap8.scores.200", 8, 0, 200, std::nullopt},
+    {"auto.scores.200", std::nullopt, 0, 200, std::nullopt},
 };
 
 // First field where two summaries differ, empty when equal.
@@ -60,8 +71,7 @@ std::string diff_summary(const PathSummary& a, const PathSummary& b) {
 }  // namespace
 
 TEST_CASE("records round-trip through RecordStore across the corpus and config matrix") {
-    RecordStore capped_store(":memory:", /*uncapped=*/false);
-    RecordStore uncapped_store(":memory:", /*uncapped=*/true);
+    RecordStore store(":memory:");
 
     int checks = 0, mismatches = 0;
 
@@ -72,18 +82,18 @@ TEST_CASE("records round-trip through RecordStore across the corpus and config m
         for (const Config& cfg : kMatrix) {
             std::optional<HydraRecord> record;
             try {
-                record = analyze_chart(song, cfg.capped, cfg.dmode, cfg.dvalue,
-                                       cfg.ms);
+                record = analyze_chart(song, cfg.cap, cfg.dmode, cfg.dvalue, cfg.ms);
             } catch (const ChartFileError&) {
                 continue;  // charts the engine rejects have no row to store
             }
-            RecordStore& store = cfg.capped ? capped_store : uncapped_store;
+            REQUIRE(record->sp_cap.has_value());
+            const CapQuery cap = CapQuery::at(*record->sp_cap);
 
             const std::string hyhash = path + "|" + cfg.key;
             store.add_song(hyhash, "Title", "Artist", "Charter", song);
             store.add_record(hyhash, "mode", *record);
 
-            std::optional<HydraRecord> reloaded = store.get_record(hyhash, "mode");
+            std::optional<HydraRecord> reloaded = store.get_record(hyhash, "mode", cap);
             ++checks;
             if (!reloaded.has_value()) {
                 if (++mismatches <= 8)
@@ -126,7 +136,7 @@ TEST_CASE("records round-trip through RecordStore across the corpus and config m
                     d = "restored transfer scales";
             }
 
-            auto summary_row = store.get_summary(hyhash, "mode");
+            auto summary_row = store.get_summary(hyhash, "mode", cap);
             if (d.empty() && (!summary_row.has_value() ||
                               summary_row->second != bestpath))
                 d = "get_summary bestpath";
@@ -169,7 +179,7 @@ TEST_CASE("record blob: v3 carries transfer scales, v1/v2 still read") {
         Song song = load_songpath(path, true, true);
         if (song.is_empty()) continue;
         try {
-            HydraRecord r = analyze_chart(song, /*capped=*/true, 0, 4, 10.0);
+            HydraRecord r = analyze_chart(song, /*sp_cap=*/4, 0, 4, 10.0);
             if (!r.allzero_paths.empty()) {
                 record = std::move(r);
                 break;
@@ -196,11 +206,11 @@ TEST_CASE("record blob: v3 carries transfer scales, v1/v2 still read") {
     CHECK(again_act.transfer_post.early == orig_act.transfer_post.early);
     CHECK(again_act.transfer_post.late == orig_act.transfer_post.late);
 
-    // Pre-v3 blobs have no per-activation transfer scales, so a synthetic old
-    // blob is hand-rolled with the primitives (a current write_record output
-    // can't be relabeled: its activations embed the four extra doubles).
-    // Layout mirrors write_record/write_path/write_activation minus the
-    // version-gated parts.
+    // Pre-v3 blobs have no per-activation transfer scales. This synthetic old
+    // blob is hand-rolled with the primitives on purpose — an independent
+    // spelling of the v2 layout, so a symmetric bug in the versioned writer
+    // and reader can't hide. The versioned-writer round-trip below
+    // cross-checks write_record(record, 2) against the same reader.
     BinaryWriter w;
     w.u32(2);                 // version
     w.opt_f64(std::nullopt);  // ms_limit
@@ -252,6 +262,20 @@ TEST_CASE("record blob: v3 carries transfer scales, v1/v2 still read") {
     CHECK(old1.paths.size() == 1);
     CHECK(old1.best_path().pathstring() == old2.best_path().pathstring());
 
+    // The versioned writer produces byte-for-byte what the hand-rolled
+    // spelling produced: the write and read gates cannot drift apart.
+    HydraRecord same = old2;
+    CHECK(write_record(same, 2) == w.bytes);
+
+    // A v1 write drops the all-0 tail; reading it back keeps the paths.
+    HydraRecord old1w = read_record(write_record(same, 1));
+    CHECK(old1w.allzero_paths.empty());
+    CHECK(old1w.paths.size() == 1);
+
+    // The writer refuses versions outside 1..kBlobFormatVersion.
+    CHECK_THROWS_AS(write_record(same, 0), SerializeError);
+    CHECK_THROWS_AS(write_record(same, kBlobFormatVersion + 1), SerializeError);
+
     // A blob from a future format is still refused.
     std::vector<uint8_t> future = write_record(*record);
     future[0] = kBlobFormatVersion + 1;
@@ -265,7 +289,7 @@ TEST_CASE("RecordStore maintenance: has_record, list_records, reindex, drop_stal
         Song s = load_songpath(path, true, true);
         if (s.is_empty()) continue;
         try {
-            record = analyze_chart(s, true, 0, 10, std::nullopt);
+            record = analyze_chart(s, 4, 0, 10, std::nullopt);
         } catch (const ChartFileError&) {
             continue;
         }
@@ -274,15 +298,18 @@ TEST_CASE("RecordStore maintenance: has_record, list_records, reindex, drop_stal
     }
     REQUIRE(song.has_value());
 
-    RecordStore store(":memory:", /*uncapped=*/false);
-    CHECK_FALSE(store.has_record("h1", "Expert Pro Drums, 2x Bass"));
+    const CapQuery at4 = CapQuery::at(4);
+    RecordStore store(":memory:");
+    CHECK_FALSE(store.has_record("h1", "Expert Pro Drums, 2x Bass", at4));
 
     store.add_song("h1", "Song A", "Artist A", "Charter A", *song);
     store.add_record("h1", "Expert Pro Drums, 2x Bass", *record);
-    CHECK(store.has_record("h1", "Expert Pro Drums, 2x Bass"));
+    CHECK(store.has_record("h1", "Expert Pro Drums, 2x Bass", at4));
+    CHECK_FALSE(store.has_record("h1", "Expert Pro Drums, 2x Bass", CapQuery::at(8)));
+    CHECK_FALSE(store.has_record("h1", "Expert Pro Drums, 2x Bass", CapQuery::automatic()));
 
     std::vector<RecordListing> listing =
-        store.list_records(std::nullopt, SortColumn::Score, true);
+        store.list_records(std::nullopt, at4, SortColumn::Score, true);
     REQUIRE(listing.size() == 1);
     CHECK(listing[0].ref_name == "Song A");
     CHECK(listing[0].bestpath == record->best_path().pathstring());
@@ -294,17 +321,239 @@ TEST_CASE("RecordStore maintenance: has_record, list_records, reindex, drop_stal
     int touched = store.reindex();
     CHECK(touched == 1);
     std::vector<RecordListing> relisted =
-        store.list_records(std::nullopt, SortColumn::Score, true);
+        store.list_records(std::nullopt, at4, SortColumn::Score, true);
     REQUIRE(relisted.size() == 1);
     CHECK(relisted[0].summary.score == listing[0].summary.score);
 
-    // A row stamped with a different version is stale for this store.
-    PreparedRow stale = prepare_row("h2", "Expert Pro Drums, 2x Bass", *record, false);
+    // A row stamped with a different version is stale for this store: it
+    // doesn't count as "already analyzed", and drop_stale_records removes it.
+    PreparedRow stale = prepare_row("h2", "Expert Pro Drums, 2x Bass", *record);
     stale.hyversion = "0.0.0";
     store.add_row(stale);
     CHECK(store.counts().second == 2);
+    CHECK_FALSE(store.has_record("h2", "Expert Pro Drums, 2x Bass", at4));
 
     int dropped = store.drop_stale_records();
     CHECK(dropped == 1);
     CHECK(store.counts().second == 1);
+}
+
+namespace {
+
+// One analyzed corpus chart, for the cap-identity tests below.
+struct Fixture {
+    Song song;
+    HydraRecord record;  // at 4 bars
+};
+const Fixture& fixture() {
+    static Fixture f = [] {
+        for (const std::string& path : corpus::chart_paths()) {
+            Song s = load_songpath(path, true, true);
+            if (s.is_empty()) continue;
+            try {
+                HydraRecord r = analyze_chart(s, 4, 0, 0, std::nullopt);
+                if (r.paths.empty()) continue;
+                return Fixture{std::move(s), std::move(r)};
+            } catch (const ChartFileError&) {
+                continue;
+            }
+        }
+        throw std::runtime_error("no corpus chart analyzed");
+    }();
+    return f;
+}
+
+// The same record relabeled as if it had run at another cap. The paths are
+// the 4-bar paths, which is fine: these tests check which row a lookup picks,
+// not what is in it.
+HydraRecord at_cap(int cap) {
+    HydraRecord r = fixture().record;
+    r.sp_cap = cap;
+    return r;
+}
+
+std::string temp_db(const char* tag) {
+    wchar_t tmp[MAX_PATH];
+    GetTempPathW(MAX_PATH, tmp);
+    return hydra::wide_to_utf8(tmp) + "hydra_test_" + tag + "_" +
+           std::to_string(GetCurrentProcessId()) + ".db";
+}
+
+// Writes a pre-1.6 database by hand: records keyed without sp_cap, one row
+// stamped by the main edition and one by the Uncapped edition. The songmeta
+// rows come from the real store (that table's shape never changed); only the
+// records table is rebuilt in its old shape.
+void write_legacy_db(const std::string& path, const std::string& main_stamp,
+                     const std::string& uncapped_stamp, int uncapped_cap) {
+    std::remove(path.c_str());
+    {
+        RecordStore seed(path);
+        seed.add_song("legacy", "Legacy Song", "A", "C", fixture().song);
+        seed.add_song("legacy_unc", "Legacy Song", "A", "C", fixture().song);
+    }
+    sqlite3* db = nullptr;
+    REQUIRE(sqlite3_open(path.c_str(), &db) == SQLITE_OK);
+    auto exec = [&](const char* sql) {
+        char* err = nullptr;
+        int rc = sqlite3_exec(db, sql, nullptr, nullptr, &err);
+        std::string msg = err ? err : "";
+        INFO(msg);
+        REQUIRE(rc == SQLITE_OK);
+    };
+    exec("DROP TABLE records; DROP TABLE meta; PRAGMA user_version = 0;"
+         "CREATE TABLE records (hyhash TEXT NOT NULL, chartmode TEXT NOT NULL,"
+         " hyversion TEXT NOT NULL, bestpath TEXT NOT NULL, blob BLOB NOT NULL,"
+         " score INTEGER, actcount INTEGER, maxskip INTEGER, hardest_ms REAL, avgmult REAL,"
+         " notecount INTEGER, sqin_count INTEGER, sqout_count INTEGER, pathcount INTEGER,"
+         " PRIMARY KEY (hyhash, chartmode));");
+
+    auto insert = [&](const char* hash, const std::string& stamp, const HydraRecord& rec) {
+        PreparedRow row = prepare_row(hash, "mode", rec);
+        sqlite3_stmt* s = nullptr;
+        REQUIRE(sqlite3_prepare_v2(db,
+                    "INSERT INTO records (hyhash, chartmode, hyversion, bestpath, blob, score)"
+                    " VALUES (?,?,?,?,?,?)", -1, &s, nullptr) == SQLITE_OK);
+        sqlite3_bind_text(s, 1, hash, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(s, 2, "mode", -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(s, 3, stamp.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(s, 4, row.bestpath.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_blob(s, 5, row.blob.data(), (int)row.blob.size(), SQLITE_TRANSIENT);
+        sqlite3_bind_int64(s, 6, row.summary.score.value_or(0));
+        REQUIRE(sqlite3_step(s) == SQLITE_DONE);
+        sqlite3_finalize(s);
+    };
+    insert("legacy", main_stamp, at_cap(4));
+    insert("legacy_unc", uncapped_stamp, at_cap(uncapped_cap));
+    sqlite3_close(db);
+}
+
+int user_version(const std::string& path) {
+    sqlite3* db = nullptr;
+    REQUIRE(sqlite3_open(path.c_str(), &db) == SQLITE_OK);
+    sqlite3_stmt* s = nullptr;
+    REQUIRE(sqlite3_prepare_v2(db, "PRAGMA user_version", -1, &s, nullptr) == SQLITE_OK);
+    REQUIRE(sqlite3_step(s) == SQLITE_ROW);
+    int v = sqlite3_column_int(s, 0);
+    sqlite3_finalize(s);
+    sqlite3_close(db);
+    return v;
+}
+
+}  // namespace
+
+TEST_CASE("records at different caps coexist; Auto picks the highest current one") {
+    RecordStore store(":memory:");
+    store.add_song("h", "Song", "Artist", "Charter", fixture().song);
+    store.add_record("h", "mode", at_cap(4));
+    store.add_record("h", "mode", at_cap(32));
+    CHECK(store.counts().second == 2);
+
+    // Exact lookups see exactly their cap.
+    CHECK(store.get_record("h", "mode", CapQuery::at(4))->sp_cap == 4);
+    CHECK(store.get_record("h", "mode", CapQuery::at(32))->sp_cap == 32);
+    CHECK_FALSE(store.get_record("h", "mode", CapQuery::at(8)).has_value());
+
+    // Auto takes the highest cap above 4 and counts it as already analyzed.
+    CHECK(store.get_record("h", "mode", CapQuery::automatic())->sp_cap == 32);
+    CHECK(store.has_record("h", "mode", CapQuery::automatic()));
+    CHECK(store.get_summary("h", "mode", CapQuery::automatic()).has_value());
+
+    // A stale 64-bar row does not outrank a current 32-bar one -- for single
+    // lookups and for the set queries alike.
+    PreparedRow stale = prepare_row("h", "mode", at_cap(64));
+    stale.hyversion = "0.0.0";
+    store.add_row(stale);
+    CHECK(store.get_record("h", "mode", CapQuery::automatic())->sp_cap == 32);
+    std::vector<RecordListing> listed =
+        store.list_records(std::nullopt, CapQuery::automatic(), SortColumn::Score, true);
+    REQUIRE(listed.size() == 1);
+    CHECK(listed[0].sp_cap == 32);
+    int seen = 0;
+    store.for_each_blob(std::nullopt, CapQuery::automatic(),
+                        [&](const RecordStore::BlobRow& meta, const HydraRecord&) {
+                            CHECK(meta.sp_cap == 32);
+                            ++seen;
+                        });
+    CHECK(seen == 1);
+
+    // With only a 4-bar row, Auto has nothing to reuse.
+    RecordStore only4(":memory:");
+    only4.add_song("h", "Song", "Artist", "Charter", fixture().song);
+    only4.add_record("h", "mode", at_cap(4));
+    CHECK_FALSE(only4.get_record("h", "mode", CapQuery::automatic()).has_value());
+    CHECK_FALSE(only4.has_record("h", "mode", CapQuery::automatic()));
+
+    // reindex touches each cap's own row.
+    CHECK(store.reindex() == 3);
+    CHECK(store.list_records(std::nullopt, CapQuery::at(4), SortColumn::Score, true)[0]
+              .summary.score == fixture().record.best_path().totalscore());
+}
+
+TEST_CASE("a pre-1.6 database migrates to the cap key on open") {
+    const std::string path = temp_db("migrate");
+    const std::string current = current_record_version();
+    write_legacy_db(path, current, current + ".uncapped", 16);
+
+    {
+        RecordStore store(path);
+        // Both rows survive, each under the cap its blob records, and the
+        // Uncapped stamp is gone.
+        CHECK(store.counts().second == 2);
+        auto main_row = store.get_record("legacy", "mode", CapQuery::at(4));
+        REQUIRE(main_row.has_value());
+        CHECK_FALSE(main_row->paths.empty());
+        auto unc_row = store.get_record("legacy_unc", "mode", CapQuery::at(16));
+        REQUIRE(unc_row.has_value());
+        CHECK_FALSE(unc_row->paths.empty());  // restamped: reads as current
+        CHECK(store.has_record("legacy_unc", "mode", CapQuery::automatic()));
+    }
+    CHECK(user_version(path) == 1);
+
+    // A second open is a no-op (the column exists).
+    {
+        RecordStore again(path);
+        CHECK(again.counts().second == 2);
+    }
+    std::remove(path.c_str());
+}
+
+TEST_CASE("import_legacy_uncapped copies current-version rows once, under their cap") {
+    const std::string main_path = temp_db("import_main");
+    const std::string unc_path = temp_db("import_unc");
+    const std::string current = current_record_version();
+    std::remove(main_path.c_str());
+    // The old uncapped file: one current row (cap 64) and one stale row.
+    write_legacy_db(unc_path, "0.0.0.uncapped", current + ".uncapped", 64);
+
+    {
+        RecordStore store(main_path);
+        store.add_song("legacy_unc", "Song", "Artist", "Charter", fixture().song);
+        // A row this build already made at the same key must win.
+        HydraRecord mine = at_cap(64);
+        mine.paths.clear();
+        store.add_record("legacy_unc", "mode", mine);
+
+        CHECK(store.import_legacy_uncapped(unc_path) == 0);  // same-key row kept
+        CHECK(store.get_record("legacy_unc", "mode", CapQuery::at(64))->paths.empty());
+        // Done once: a second call copies nothing even with the row gone.
+        CHECK(store.import_legacy_uncapped(unc_path) == 0);
+    }
+    std::remove(main_path.c_str());
+
+    {
+        RecordStore store(main_path);
+        CHECK(store.import_legacy_uncapped(unc_path) == 1);
+        auto row = store.get_record("legacy_unc", "mode", CapQuery::at(64));
+        REQUIRE(row.has_value());
+        CHECK_FALSE(row->paths.empty());  // restamped to the current version
+        CHECK(store.counts().first == 1);  // its song came along (not the stale one's)
+        // The stale row (0.0.0) stayed behind.
+        CHECK_FALSE(store.get_record("legacy", "mode", CapQuery::at(4)).has_value());
+        CHECK(store.import_legacy_uncapped(unc_path) == 0);
+        // A missing file is not an error and does not mark the import done.
+        RecordStore fresh(":memory:");
+        CHECK(fresh.import_legacy_uncapped(unc_path + ".missing") == 0);
+    }
+    std::remove(main_path.c_str());
+    std::remove(unc_path.c_str());
 }

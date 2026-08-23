@@ -12,7 +12,7 @@ namespace {
 
 using bench_clock = std::chrono::steady_clock;
 
-// Ceilings the uncapped edition tries, in order. Mirrors hymisc.SP_CAP_LADDER.
+// Ceilings Auto tries, in order. Mirrors hymisc.SP_CAP_LADDER.
 const int kSpCapLadder[] = {16, 32, 64, 128, 256, 512};
 
 // Thrown out of the progress callback to abandon a ladder rung that has blown
@@ -128,7 +128,7 @@ HydraRecord analyze_at_cap(const Song& song, int sp_cap, int depth_mode,
     return record;
 }
 
-HydraRecord analyze_uncapped(const Song& song, int depth_mode, int depth_value,
+HydraRecord analyze_auto_cap(const Song& song, int depth_mode, int depth_value,
                              std::optional<double> ms_filter, bool want_allzero,
                              const std::function<void(float)>& on_progress,
                              std::optional<double> time_budget_s) {
@@ -138,7 +138,8 @@ HydraRecord analyze_uncapped(const Song& song, int depth_mode, int depth_value,
     std::optional<HydraRecord> record;
     std::optional<int64_t> previous_score;
     // The clock only starts once the first rung has finished, so there is always
-    // a result to report -- exactly like hyutil._analyze_uncapped.
+    // a result to report -- exactly like hyutil._analyze_uncapped (the
+    // Python-era name for this ladder).
     std::optional<bench_clock::time_point> deadline;
 
     // The ladder re-runs the search per ceiling, so no rung runs the all-0 pass:
@@ -211,28 +212,29 @@ HydraRecord analyze_uncapped(const Song& song, int depth_mode, int depth_value,
     return std::move(*record);
 }
 
-HydraRecord analyze_chart(const Song& song, bool capped, int depth_mode,
+HydraRecord analyze_chart(const Song& song, std::optional<int> sp_cap, int depth_mode,
                           int depth_value, std::optional<double> ms_filter,
-                          std::optional<int> sp_cap,
                           const std::function<void(float)>& on_progress,
                           std::optional<double> time_budget_s) {
     if (song.is_empty())
         throw ChartFileError("No Expert pro drums notes in this chart.");
 
-    if (capped)
-        return analyze_at_cap(song, 4, depth_mode, depth_value, ms_filter,
+    // Clone Hero's 4-bar rule is the classic single pass, kept exactly as it
+    // always was so a fresh 4-bar record matches every stored one.
+    if (sp_cap == kCloneHeroSpCap)
+        return analyze_at_cap(song, kCloneHeroSpCap, depth_mode, depth_value, ms_filter,
                               std::nullopt, /*want_allzero=*/true, on_progress);
-    // Uncapped edition. A manual SP cap (any bar count) runs a single pass at
-    // that ceiling instead of the auto-settling ladder. The graph is still only
-    // built as tall as the song has phrases to bank -- no run can exceed that --
-    // so a huge cap on a short song stays cheap and exact. A forced cap is the
-    // user's explicit choice, so the ladder's time budget doesn't apply to it.
+    // Any other fixed cap runs a single pass at that ceiling. The graph is
+    // still only built as tall as the song has phrases to bank -- no run can
+    // exceed that -- so a huge cap on a short song stays cheap and exact. A
+    // fixed cap is the user's explicit choice, so Auto's time budget doesn't
+    // apply to it.
     if (sp_cap.has_value()) {
         int build_cap = std::min(*sp_cap, std::max(count_sp_phrases(song), 1));
         return analyze_at_cap(song, *sp_cap, depth_mode, depth_value, ms_filter,
                               build_cap, /*want_allzero=*/true, on_progress);
     }
-    return analyze_uncapped(song, depth_mode, depth_value, ms_filter,
+    return analyze_auto_cap(song, depth_mode, depth_value, ms_filter,
                             /*want_allzero=*/true, on_progress, time_budget_s);
 }
 

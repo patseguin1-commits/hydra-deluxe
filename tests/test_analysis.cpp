@@ -126,7 +126,7 @@ TEST_CASE("rescan cache reproduces the scan without reading chart files") {
     REQUIRE(errors.empty());
     REQUIRE(!items.empty());
 
-    hydra::store::RecordStore store(":memory:", false);
+    hydra::store::RecordStore store(":memory:");
     std::vector<hydra::store::ChartLibraryEntry> entries;
     for (const ScanItem& it : items)
         entries.push_back({it.md5, it.title, it.artist, it.charter, it.notespath,

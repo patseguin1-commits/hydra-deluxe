@@ -12,6 +12,10 @@
 ;     stay writable for standard users.
 ;   * The uninstaller removes only the files it installed. Runtime-created
 ;     hydra*.db / *_settings.ini / *_ui.ini / hydra_*.html survive on purpose.
+;     That includes hydra_uncapped.db from the pre-1.6 Uncapped edition: the
+;     app imports it on first launch and never touches it again.
+;   * [InstallDelete] clears the pre-1.6 HydraUncapped.exe and its shortcut on
+;     upgrade, since the installer otherwise leaves files it no longer ships.
 ;   * AppId must never change across releases, or upgrades stop replacing
 ;     the existing install and Add/Remove gets duplicate entries.
 
@@ -47,11 +51,14 @@ Name: "{app}"; Permissions: users-modify
 Source: "{#HYDRA_STAGE}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 Source: "{#HYDRA_REDIST}\VC_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
+[InstallDelete]
+Type: files; Name: "{app}\HydraUncapped.exe"
+Type: files; Name: "{autoprograms}\Hydra Uncapped.lnk"
+
 [Icons]
-; AppUserModelIDs must match src/app/edition.h so taskbar pins group with the
-; running processes. CLI tools get no shortcuts.
+; The AppUserModelID must match src/core/version.h so taskbar pins group with
+; the running process. CLI tools get no shortcuts.
 Name: "{autoprograms}\Hydra"; Filename: "{app}\Hydra.exe"; AppUserModelID: "Hydra.Hydra"
-Name: "{autoprograms}\Hydra Uncapped"; Filename: "{app}\HydraUncapped.exe"; AppUserModelID: "Hydra.Uncapped"
 
 [Run]
 Filename: "{tmp}\VC_redist.x64.exe"; Parameters: "/install /quiet /norestart"; \

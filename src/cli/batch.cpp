@@ -6,12 +6,11 @@
 //     hydra_batch --redo             # re-analyze charts already stored
 //     hydra_batch --reindex          # only rebuild sort columns, no analysis
 //     hydra_batch --db <path>        # target a specific database
-//     hydra_batch --uncapped         # the uncapped edition's settings/db
 //
-// Reads difficulty / pro drums / 2x bass / depth from the app's settings INI
-// (app/config.h), so results match what the app would produce for the same
-// songs. Safe to interrupt and re-run: charts already stored for the current
-// chartmode are skipped unless --redo is given.
+// Reads difficulty / pro drums / 2x bass / depth / SP cap from the app's
+// settings INI (app/config.h), so results match what the app would produce
+// for the same songs. Safe to interrupt and re-run: charts already stored for
+// the current chartmode and SP cap are skipped unless --redo is given.
 //
 // Unlike the Python version this analyzes charts across a thread pool (the
 // same pool the GUI's "Analyze library" uses), so lines can complete out of
@@ -55,7 +54,7 @@ std::string clip_utf8(const std::string& s, size_t max_chars) {
 int main(int argc, char** argv) {
     SetConsoleOutputCP(CP_UTF8);  // chart titles/artists are UTF-8
 
-    bool redo = false, reindex_only = false, uncapped = false;
+    bool redo = false, reindex_only = false;
     std::optional<std::string> dbpath;
     std::vector<std::string> folder_args;
 
@@ -63,7 +62,6 @@ int main(int argc, char** argv) {
         std::string arg = argv[i];
         if (arg == "--redo") redo = true;
         else if (arg == "--reindex") reindex_only = true;
-        else if (arg == "--uncapped") uncapped = true;
         else if (arg == "--db" && i + 1 < argc) dbpath = argv[++i];
         else if (arg.rfind("--", 0) == 0) {
             std::fprintf(stderr, "Unknown option: %s\n", arg.c_str());
@@ -73,11 +71,12 @@ int main(int argc, char** argv) {
         }
     }
 
-    hydra::app::Settings settings = hydra::app::Settings::load(uncapped);
+    hydra::app::Settings settings = hydra::app::Settings::load();
     std::string chartmode = settings.chartmode_key();
-    std::string db = dbpath ? *dbpath : hydra::app::db_path(uncapped);
+    std::string db = dbpath ? *dbpath : hydra::app::db_path();
 
-    hydra::store::RecordStore store(db, uncapped);
+    std::unique_ptr<hydra::store::RecordStore> store_ptr = hydra::app::open_store(db);
+    hydra::store::RecordStore& store = *store_ptr;
 
     if (reindex_only) {
         std::printf("Rebuilding sort columns from stored records...\n");
@@ -97,6 +96,8 @@ int main(int argc, char** argv) {
     std::printf("Chart mode : %s\n", chartmode.c_str());
     std::printf("Depth      : %s %d\n", settings.depth_mode == 0 ? "scores" : "points",
                 settings.depth_value);
+    if (settings.sp_cap) std::printf("SP cap     : %d bars\n", *settings.sp_cap);
+    else std::printf("SP cap     : Auto\n");
     if (settings.mslimit_enabled)
         std::printf("Timing cap : %d ms\n", settings.mslimit_value);
     else

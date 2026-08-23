@@ -547,7 +547,7 @@ void Engine::create_deactivated_path(const Path& p, Path* child, bool is_sq_out)
         const int32_t be_sqout_points = beo.sqout_points;
 
         const bool is_already_counted = be_offset <= 0;
-        const bool is_leeway = be_offset > 0 && be_offset < 3;
+        const bool is_leeway = be_offset > 0 && be_offset < kBackendLeewayMs;
 
         if (is_sq_out) {
             const bool is_before_sqout = be_tick < e.sqinout_time;

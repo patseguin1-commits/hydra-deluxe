@@ -54,8 +54,8 @@ hydra_report --out report.html
 hydra_report --no-open         Write the file without opening the browser
 ```
 
-Both take `--uncapped` to operate on the uncapped edition's settings/records
-instead.
+Both read the app's settings file, so they analyze and report at the same
+chart mode and SP cap the app is set to.
 
 ## Building from source
 
@@ -87,7 +87,7 @@ The tests run against the checked-in chart corpus under `testdata/input/`;
 nothing else is needed. `hydra_tests` asserts structural invariants and
 lossless round-trips over that corpus.
 
-## Hydra Uncapped
+## The SP cap
 
 Every path Hydra finds rests on one rule taken from Clone Hero: the Star Power
 meter holds 4 bars and no more, so a phrase collected on a full meter is
@@ -95,28 +95,26 @@ thrown away. That rule is why banking SP has a ceiling, why the longest
 activation is 8 measures, and why a phrase collected late in an activation can
 be worth nothing at all.
 
-Hydra Uncapped is the same optimizer with that one rule removed, to answer what
-the paths would be if SP never overfilled. The meter banks as many bars as the
-song offers, an activation runs 2 measures per bar spent with no ceiling, and a
-phrase collected during SP is always worth its full 2 measures.
+The **SP cap** setting (in a song's details, next to the timing limit) lets you
+change that number, to answer what the paths would be if the meter held more.
+With a higher cap an activation runs 2 measures per bar spent up to that
+ceiling, and a phrase collected during SP is worth its full 2 measures more
+often. **Scores at any cap other than 4 are not achievable in Clone Hero.**
+They are a what-if for seeing how much the cap costs and where, not paths to
+play.
 
-**Its scores are not achievable in Clone Hero.** It is a what-if for seeing how
-much the cap costs and where, not a set of paths to play.
+Results are kept per cap. A chart's 4-bar record and its 64-bar record sit
+side by side in the same library; changing the cap just changes which one the
+app shows, and a chart only gets analyzed again when it has no record at the
+current cap. The path report and the leaderboard comparison follow the same
+rule (the comparison only runs at 4 bars, because that is what the leaderboard
+plays).
 
-Run `HydraUncapped.exe` (built and shipped alongside `Hydra.exe`), or pass
-`--uncapped` to the command line tools:
+Before 1.6 this shipped as a second program, Hydra Uncapped, with its own
+`hydra_uncapped.db`. The first time 1.6 opens it copies those records into
+`hydra.db` under the cap each ran at, and leaves the old file alone.
 
-```
-hydra_batch --uncapped
-hydra_report --uncapped
-```
-
-It keeps its own library, settings and records (`hydra_uncapped.db`,
-`hydra_uncapped_settings.ini`), so it runs alongside the normal app without
-either one disturbing the other. Charts have to be scanned and analyzed in it
-once: capped records aren't reusable, and it marks them `(Stale)`.
-
-### How "no ceiling" is actually reached
+### "Auto": how "no ceiling" is actually reached
 
 Searching with no ceiling at all is the honest way to ask the question and the
 wrong way to answer it. A path holding a different number of bars is a
@@ -126,9 +124,10 @@ several hundred, and the search doesn't finish.
 
 It doesn't need to. What a chart can do with SP is limited by the music, not by
 the meter: past some ceiling the optimizer runs out of things to spend it on
-and the score stops moving. So Hydra Uncapped raises the ceiling — 16, 32, 64,
-… — until two runs in a row agree, and reports that score along with the
-ceiling it settled on.
+and the score stops moving. So the **Auto** cap raises the ceiling — 16, 32,
+64, … — until two runs in a row agree, and reports that score along with the
+ceiling it settled on. When you pick Auto and a chart already has a record
+above 4 bars, that record is reused instead of running the ladder again.
 
 Two agreeing runs are strong evidence, not proof. A chart that runs out of
 ladder, or out of time (the 120s ladder budget), says so in the path details
@@ -138,7 +137,7 @@ Measured with the retired 1.3.1 build (Expert Pro Drums 2x, depth 4); the
 current build is faster, so read these as an upper bound and a shape, not
 exact numbers:
 
-| chart | capped | uncapped | settled at |
+| chart | 4 bars | Auto | settled at |
 |---|---|---|---|
 | Hail The Sun — Discography (961 SP phrases) | 3.7s | 36.4s | 64 bars |
 | Rise Against — Discography | 6.1s | 38.1s | 64 bars |

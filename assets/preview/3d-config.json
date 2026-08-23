@@ -1,0 +1,52 @@
+{
+  "_source": "Hand-converted from Onyx onyx-resources/3d-config.yml (release 20251011). Values unchanged; keys use _ instead of -. Drums-relevant sections only, plus the hydra section.",
+  "view": {
+    "background": "#1c1d2b",
+    "track_fade": { "bottom": 0.7734724292101341, "top": 0.8315946348733234 },
+    "height_width_ratio": 1.1666666666,
+    "camera": {
+      "position": { "x": 0, "y": 1.4, "z": 3 },
+      "rotate": 25,
+      "fov": 45,
+      "near": 0.1,
+      "far": 100
+    }
+  },
+  "track": {
+    "y": -1,
+    "note_area": { "x_left": -1, "x_right": 1 },
+    "time": { "z_past": 2, "z_now": 0, "z_future": -12, "secs_future": 1.35 },
+    "color": { "normal": "#333333", "solo": "#333399" },
+    "railings": { "color": "#737373", "x_width": 0.09, "y_top": -0.85, "y_bottom": -1.1 },
+    "beats": { "z_past": 0.05, "z_future": -0.05 },
+    "targets": { "z_past": 0.13, "z_future": -0.13, "secs_light": 0.1666666 },
+    "light": {
+      "position": { "x": 0, "y": -0.5, "z": 0.5 },
+      "ambient": "#333333",
+      "diffuse": "#FFFFFF",
+      "specular": "#FFFFFF"
+    }
+  },
+  "objects": {
+    "gems": {
+      "color_hit": "#FFFFFF",
+      "secs_fade": 0.1,
+      "light": {
+        "position": { "x": 0, "y": 1, "z": 0.2 },
+        "ambient": "#333333",
+        "diffuse": "#FFFFFF",
+        "specular": "#FFFFFF"
+      }
+    }
+  },
+  "text": {
+    "time_box": { "font": "diffusion-bold.ttf", "size": 15, "margin": 10 }
+  },
+  "hydra": {
+    "_comment": "Hydra-only additions, not in Onyx. msaa mirrors Onyx's prefMSAA default (Just 4).",
+    "msaa": 4,
+    "sp_active_color": "#6cf7c6",
+    "sp_active_darken": 0.2,
+    "fill_activation_lane_boost": 1.0
+  }
+}

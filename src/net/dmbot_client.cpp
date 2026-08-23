@@ -211,13 +211,23 @@ std::vector<DmScore> parse_scores_json(const std::string& body) {
     return scores;
 }
 
+namespace {
+Fetcher g_fetcher;
+
+std::string get(const std::string& url, const std::atomic<bool>* cancel) {
+    return g_fetcher ? g_fetcher(url, cancel) : http_get(url, cancel);
+}
+}  // namespace
+
+void set_fetcher(Fetcher fetcher) { g_fetcher = std::move(fetcher); }
+
 std::vector<DmUser> fetch_users(const std::string& api_base, const std::atomic<bool>* cancel) {
-    return parse_users_json(http_get(api_base + "/all-users", cancel));
+    return parse_users_json(get(api_base + "/all-users", cancel));
 }
 
 std::vector<DmScore> fetch_scores(const std::string& discord_id, const std::string& api_base,
                                   const std::atomic<bool>* cancel) {
-    return parse_scores_json(http_get(api_base + "/user/" + discord_id + "/scores", cancel));
+    return parse_scores_json(get(api_base + "/user/" + discord_id + "/scores", cancel));
 }
 
 }  // namespace hydra::net

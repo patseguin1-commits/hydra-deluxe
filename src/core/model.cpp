@@ -318,7 +318,7 @@ std::string BackendSqueeze::summarystr(double hit_window_ms) const {
     }
     if (off < -w) return "Free";
     if (off < -10) return "Easy";
-    if (off < 3) return "Standard";
+    if (off < kBackendLeewayMs) return "Standard";
     if (off < w) return "Hard (uncounted)";
     return "Insane (uncounted)";
 }
@@ -407,7 +407,7 @@ std::optional<double> Activation::difficulty() const {
 }
 
 bool Activation::is_difficult() const {
-    if (auto e = e_difficulty(); e && *e > 2.0) return true;
+    if (auto e = e_difficulty(); e && *e > kDifficultMs) return true;
     for (const SPSqueeze& sq : sqinouts)
         if (sq.is_difficult()) return true;
     return false;
@@ -451,6 +451,48 @@ std::optional<TransferScale> transfer_scale_between(int64_t act_tick,
     return scale;
 }
 
+namespace {
+
+// The true SP end is the deactivation node D, which sits one +2-measure
+// step past the plain 2*B-measure end for every SP phrase collected
+// during the activation. Ordinary mid-SP collections leave no trace on
+// the Activation itself, but every backend row encodes D exactly: its
+// offset_ms was measured against D (graph.cpp add_deact_edge), so
+// D = row.ms - offset. Prefer the smallest-|offset| row; the frequent
+// 0.0-offset row is the deact node itself. nullopt when no row carries an
+// offset (the activation never deactivates, or an old trimmed record).
+std::optional<int64_t> deact_tick_from_rows(const Activation& act,
+                                            const SongTiming& timing) {
+    const BackendSqueeze* d_row = nullptr;
+    for (const BackendSqueeze& bsq : act.backends) {
+        if (!bsq.offset_ms) continue;
+        if (!d_row || std::abs(*bsq.offset_ms) < std::abs(*d_row->offset_ms))
+            d_row = &bsq;
+    }
+    if (!d_row) return std::nullopt;
+    if (*d_row->offset_ms == 0.0) return d_row->timecode.ticks();
+    // tick_at_ms is display-layer math (never in the scoring path); its fp
+    // error is far below half a tick, so llround recovers the deact node's
+    // integer tick exactly.
+    return static_cast<int64_t>(std::llround(
+        timing.ms_index().tick_at_ms(d_row->timecode.ms() - *d_row->offset_ms)));
+}
+
+}  // namespace
+
+std::optional<int64_t> activation_deact_tick(const Activation& act,
+                                             const SongTiming& timing) {
+    if (!act.timecode || !act.sp_meter) return std::nullopt;
+    if (std::optional<int64_t> d = deact_tick_from_rows(act, timing)) return d;
+    // Fallback: the plain reconstruction, 2 measures per SP bar, plus the one
+    // +2-measure extension a SqIn records (same rule as frontend_transfer_scales).
+    bool has_sqin = false;
+    for (const SPSqueeze& sq : act.sqinouts)
+        if (sq.kind == SqueezeKind::SqIn) has_sqin = true;
+    int64_t end_measures = 2 * static_cast<int64_t>(*act.sp_meter) + (has_sqin ? 2 : 0);
+    return timing.plusmeasure(*act.timecode, end_measures).ticks();
+}
+
 std::optional<ActTransferScales> frontend_transfer_scales(const Activation& act,
                                                           const SongTiming& timing) {
     if (!act.timecode || !act.sp_meter) return std::nullopt;
@@ -464,31 +506,7 @@ std::optional<ActTransferScales> frontend_transfer_scales(const Activation& act,
         }
     }
 
-    // The true SP end is the deactivation node D, which sits one +2-measure
-    // step past the plain 2*B-measure end for every SP phrase collected
-    // during the activation. Ordinary mid-SP collections leave no trace on
-    // the Activation itself, but every backend row encodes D exactly: its
-    // offset_ms was measured against D (graph.cpp add_deact_edge), so
-    // D = row.ms - offset. Prefer the smallest-|offset| row; the frequent
-    // 0.0-offset row is the deact node itself.
-    std::optional<int64_t> d_tick;
-    const BackendSqueeze* d_row = nullptr;
-    for (const BackendSqueeze& bsq : act.backends) {
-        if (!bsq.offset_ms) continue;
-        if (!d_row || std::abs(*bsq.offset_ms) < std::abs(*d_row->offset_ms))
-            d_row = &bsq;
-    }
-    if (d_row) {
-        if (*d_row->offset_ms == 0.0) {
-            d_tick = d_row->timecode.ticks();
-        } else {
-            // tick_at_ms is display-layer math (never in the scoring path);
-            // its fp error is far below half a tick, so llround recovers the
-            // deact node's integer tick exactly.
-            d_tick = static_cast<int64_t>(std::llround(timing.ms_index().tick_at_ms(
-                d_row->timecode.ms() - *d_row->offset_ms)));
-        }
-    }
+    std::optional<int64_t> d_tick = deact_tick_from_rows(act, timing);
 
     int64_t pre_tick, post_tick;
     if (d_tick) {
@@ -523,83 +541,6 @@ std::optional<ActTransferScales> frontend_transfer_scales(const Activation& act,
             scales.pre = *pre;
     }
     return scales;
-}
-
-TransferRelevance transfer_scale_relevance(const Activation& act,
-                                           const std::vector<BackendSqueeze>& backends) {
-    TransferRelevance rel;
-    for (const BackendSqueeze& bsq : backends) {
-        if (!bsq.offset_ms) continue;
-        if (act.is_sqout_backend(bsq)) rel.early = true;
-        else if (*bsq.offset_ms > 2.0) rel.late = true;
-    }
-    for (const SPSqueeze& sq : act.sqinouts) {
-        if (sq.kind == SqueezeKind::SqOut) rel.early = true;
-        else rel.late = true;  // a SqIn needs a late (+) frontend hit
-    }
-    return rel;
-}
-
-namespace {
-
-// Bisection ceiling: displacements past this are far outside anything a
-// player can execute, so a target unreachable within it reports +infinity.
-constexpr double kSolverMaxMs = 8000.0;
-constexpr double kSolverToleranceMs = 1e-3;
-
-// Solves f(d) >= target for the smallest d in [0, kSolverMaxMs], where f is
-// monotone non-decreasing with f(0) == 0.
-template <typename F>
-double bisect_min(F f, double target) {
-    if (target <= 0.0) return 0.0;
-    double lo = 0.0, hi = kSolverMaxMs;
-    if (f(hi) < target) return std::numeric_limits<double>::infinity();
-    while (hi - lo > kSolverToleranceMs) {
-        double mid = (lo + hi) / 2.0;
-        if (f(mid) < target)
-            lo = mid;
-        else
-            hi = mid;
-    }
-    return hi;
-}
-
-}  // namespace
-
-// Prices the plain 2*B-measure SP end only: it does not model the +2-measure
-// extension per SP phrase collected mid-activation the way
-// frontend_transfer_scales does (no production caller needs that yet).
-double sp_end_shift_ms(double displaced_ms, SqueezeKind kind,
-                       const Activation& act, const SongTiming& timing) {
-    if (!act.timecode || !act.sp_meter) return 0.0;
-    const double h = act.timecode->ms();
-    const int64_t end_measures = 2 * static_cast<int64_t>(*act.sp_meter);
-    const double base = timing.sp_end_ms(h, end_measures);
-    if (kind == SqueezeKind::SqOut)
-        return base - timing.sp_end_ms(h - displaced_ms, end_measures);
-    return timing.sp_end_ms(h + displaced_ms, end_measures) - base;
-}
-
-double required_frontend_ms(double gap_ms, double backend_ms, SqueezeKind kind,
-                            const Activation& act, const SongTiming& timing) {
-    return bisect_min(
-        [&](double d) { return sp_end_shift_ms(d, kind, act, timing); },
-        gap_ms - backend_ms);
-}
-
-double exact_even_split_ms(double gap_ms, SqueezeKind kind,
-                           const Activation& act, const SongTiming& timing) {
-    return bisect_min(
-        [&](double d) { return d + sp_end_shift_ms(d, kind, act, timing); },
-        gap_ms);
-}
-
-double effective_backend_ms(double offset_ms, double transfer_r) {
-    return std::abs(offset_ms) * 2.0 / (1.0 + transfer_r);
-}
-
-double squeeze_budget_ms(double transfer_r, double hit_window_ms) {
-    return hit_window_ms * (1.0 + transfer_r);
 }
 
 // ---- Path ---------------------------------------------------------------

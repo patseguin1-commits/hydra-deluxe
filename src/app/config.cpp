@@ -6,6 +6,7 @@
 #include <windows.h>
 
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 
 #include "core/winstr.h"
@@ -21,8 +22,6 @@ std::string trim(const std::string& s) {
     return s.substr(a, b - a + 1);
 }
 
-std::string edition_suffix(bool uncapped) { return uncapped ? "_uncapped" : ""; }
-
 }  // namespace
 
 std::string exe_dir() {
@@ -34,21 +33,45 @@ std::string exe_dir() {
     return wide_to_utf8(dir);
 }
 
-std::string db_path(bool uncapped) {
-    return exe_dir() + "\\hydra" + edition_suffix(uncapped) + ".db";
+namespace {
+PathOverrides g_overrides;
 }
 
-std::string ini_path(bool uncapped) {
-    return exe_dir() + "\\hydra" + edition_suffix(uncapped) + "_settings.ini";
+void set_path_overrides(PathOverrides overrides) { g_overrides = std::move(overrides); }
+const PathOverrides& path_overrides() { return g_overrides; }
+
+std::string db_path() {
+    if (!g_overrides.db_path.empty()) return g_overrides.db_path;
+    return exe_dir() + "\\hydra.db";
 }
 
-Settings Settings::load(bool uncapped) {
-    return load_file(ini_path(uncapped), uncapped);
+std::string ini_path() {
+    if (!g_overrides.ini_path.empty()) return g_overrides.ini_path;
+    return exe_dir() + "\\hydra_settings.ini";
 }
 
-Settings Settings::load_file(const std::string& path, bool uncapped) {
+std::unique_ptr<store::RecordStore> open_store(const std::string& db) {
+    auto store = std::make_unique<store::RecordStore>(db);
+    // The legacy file is looked for beside the db being opened, not beside
+    // the exe: a test harness pointing at a scratch db must never swallow a
+    // developer's real library.
+    std::filesystem::path dir = std::filesystem::u8path(db).parent_path();
+    std::filesystem::path legacy = dir / "hydra_uncapped.db";
+    std::error_code ec;
+    if (std::filesystem::exists(legacy, ec))
+        store->import_legacy_uncapped(legacy.u8string());
+    return store;
+}
+
+std::string asset_dir() {
+    if (!g_overrides.asset_dir.empty()) return g_overrides.asset_dir;
+    return exe_dir() + "\\assets\\preview";
+}
+
+Settings Settings::load() { return load_file(ini_path()); }
+
+Settings Settings::load_file(const std::string& path) {
     Settings s;
-    s.uncapped = uncapped;
     std::ifstream f(path);
     if (!f) return s;  // defaults
 
@@ -70,19 +93,25 @@ Settings Settings::load_file(const std::string& path, bool uncapped) {
         else if (key == "depth_mode") s.depth_mode = std::atoi(value.c_str());
         else if (key == "mslimit_enabled") s.mslimit_enabled = (value == "1");
         else if (key == "mslimit_value") s.mslimit_value = std::atoi(value.c_str());
+        else if (key == "preview_volume") {
+            int v = std::atoi(value.c_str());
+            if (v >= 0 && v <= 100) s.preview_volume = v;
+        }
         else if (key == "hit_window_ms") {
             int v = std::atoi(value.c_str());
             if (v > 0) s.hit_window_ms = v;
         }
-        else if (key == "sp_cap_enabled") s.sp_cap_enabled = (value == "1");
-        else if (key == "sp_cap_value") s.sp_cap_value = std::atoi(value.c_str());
+        else if (key == "sp_cap") {
+            if (value == "auto") s.sp_cap = std::nullopt;
+            else if (int v = std::atoi(value.c_str()); v >= 1) s.sp_cap = v;
+        }
         else if (key == "auto_open_report") s.auto_open_report = (value == "1");
         else if (key == "dm_last_user") s.dm_last_user = value;
     }
     return s;
 }
 
-bool Settings::save() const { return save_file(ini_path(uncapped)); }
+bool Settings::save() const { return save_file(ini_path()); }
 
 bool Settings::save_file(const std::string& path) const {
     std::ofstream f(path, std::ios::trunc);
@@ -97,8 +126,9 @@ bool Settings::save_file(const std::string& path) const {
     f << "mslimit_enabled=" << (mslimit_enabled ? 1 : 0) << "\n";
     f << "mslimit_value=" << mslimit_value << "\n";
     f << "hit_window_ms=" << hit_window_ms << "\n";
-    f << "sp_cap_enabled=" << (sp_cap_enabled ? 1 : 0) << "\n";
-    f << "sp_cap_value=" << sp_cap_value << "\n";
+    f << "preview_volume=" << preview_volume << "\n";
+    if (sp_cap) f << "sp_cap=" << *sp_cap << "\n";
+    else f << "sp_cap=auto\n";
     f << "auto_open_report=" << (auto_open_report ? 1 : 0) << "\n";
     if (!dm_last_user.empty()) f << "dm_last_user=" << dm_last_user << "\n";
     for (const std::string& folder : chartfolders) f << "chartfolder=" << folder << "\n";
@@ -118,16 +148,16 @@ AnalysisSettings Settings::to_analysis_settings() const {
     s.depth_mode = depth_mode;
     s.depth_value = depth_value;
     s.ms_filter = mslimit_enabled ? std::optional<double>(mslimit_value) : std::nullopt;
-    s.uncapped = uncapped;
-    // The manual SP cap only applies in the uncapped edition; the capped edition
-    // is always 4 bars.
-    s.sp_cap =
-        (uncapped && sp_cap_enabled) ? std::optional<int>(sp_cap_value) : std::nullopt;
-    // Bound the uncapped ladder so a pathologically heavy chart can't hang the
-    // app for minutes (hymisc.SP_CAP_TIME_BUDGET). Capped analysis is a single
-    // fast run and needs no budget.
-    s.uncapped_time_budget_s = uncapped ? std::optional<double>(120.0) : std::nullopt;
+    s.sp_cap = sp_cap;
+    // Bound the Auto ladder so a pathologically heavy chart can't hang the
+    // app for minutes (hymisc.SP_CAP_TIME_BUDGET). A fixed cap is a single
+    // run and needs no budget.
+    s.time_budget_s = sp_cap ? std::nullopt : std::optional<double>(120.0);
     return s;
+}
+
+store::CapQuery Settings::cap_query() const {
+    return sp_cap ? store::CapQuery::at(*sp_cap) : store::CapQuery::automatic();
 }
 
 }  // namespace hydra::app

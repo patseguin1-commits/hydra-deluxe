@@ -13,17 +13,23 @@
 #include <shobjidl.h>
 #include <tchar.h>
 
+#include <cstdio>
+#include <memory>
 #include <string>
 
 #include "app/config.h"
-#include "app/edition.h"
+#include "core/version.h"
 #include "ui/resource.h"
+#include "ui/app_shell.h"
 #include "ui/app_state.h"
-#include "ui/details_view.h"
-#include "ui/fonts.h"
 #include "ui/icons.h"
-#include "ui/library_view.h"
-#include "ui/theme.h"
+
+// `Hydra.exe --uitest <test|all|script-file>`: run a GUI test inside the real
+// window at watchable speed (docs/agents/ui-testing.md).
+#ifdef HYDRA_UITEST_ATTACHED
+#include "imgui_te_ui.h"
+#include "uitest_harness.h"
+#endif
 
 // Direct3D state.
 static ID3D11Device*            g_pd3dDevice = nullptr;
@@ -39,15 +45,24 @@ void CreateRenderTarget();
 void CleanupRenderTarget();
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-int main(int, char**)
+int main(int argc, char** argv)
 {
+    // --uitest <what> [--uitest-log <file>]; everything else is ignored.
+    std::string uitest_what, uitest_log;
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string(argv[i]) == "--uitest") uitest_what = argv[++i];
+        else if (std::string(argv[i]) == "--uitest-log") uitest_log = argv[++i];
+    }
+#ifndef HYDRA_UITEST_ATTACHED
+    (void)uitest_what; (void)uitest_log;
+#endif
+
     // Make the process DPI aware and read the primary monitor's scale.
     ImGui_ImplWin32_EnableDpiAwareness();
     float main_scale = ImGui_ImplWin32_GetDpiScaleForMonitor(
         ::MonitorFromPoint(POINT{ 0, 0 }, MONITOR_DEFAULTTOPRIMARY));
 
-    // Give each edition its own taskbar identity so Hydra and HydraUncapped
-    // windows/pins never group together.
+    // An explicit taskbar identity, so pins survive a reinstall to a new path.
     ::SetCurrentProcessExplicitAppUserModelID(hydra::kAppUserModelIDW);
 
     // App icon, embedded in the exe by src/app/hydra.rc. The pinned-taskbar /
@@ -92,70 +107,53 @@ int main(int, char**)
     ::ShowWindow(hwnd, SW_SHOWDEFAULT);
     ::UpdateWindow(hwnd);
 
-    // Set up the Dear ImGui context.
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO(); (void)io;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    // No docking/viewports: Hydra is one primary window filling the OS
-    // window, like hydra_app.py's dpg.set_primary_window -- not a docking
-    // workspace with panels that can be torn into their own OS windows.
-
-    // Persist ImGui state (library table column widths) next to the exe,
-    // edition-suffixed so both editions can run at once without clobbering
-    // each other. The default cwd-relative "imgui.ini" landed wherever the
-    // app happened to be launched from.
-    static std::string ini_file =
-        hydra::app::exe_dir() + "\\hydra" + (hydra::kUncapped ? "_uncapped" : "") + "_ui.ini";
-    io.IniFilename = ini_file.c_str();
-
-    ImGui::StyleColorsDark();
-    hydra::ui::apply_theme();
-
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.ScaleAllSizes(main_scale);
-    style.FontScaleDpi = main_scale;
-    io.ConfigDpiScaleFonts = true;
-    io.ConfigDpiScaleViewports = true;
-    hydra::ui::g_ui_scale = main_scale;  // for the views' explicit pixel sizes
-
-    // Fonts (resource/ is copied beside the exe by the build; see
-    // CMakeLists.txt). exe-relative, not cwd-relative: the app may be
-    // launched with any working directory (e.g. a shortcut's Start-in).
-    // Falls back to ImGui's built-in font if the files aren't found,
-    // rather than asserting.
-    const std::string resource_dir = hydra::app::exe_dir() + "\\resource\\";
-    ImFont* main_font = io.Fonts->AddFontFromFileTTF(
-        (resource_dir + "ShipporiAntiqueB1-Regular.ttf").c_str(), 18.0f);
-    hydra::ui::g_mono_font = io.Fonts->AddFontFromFileTTF(
-        (resource_dir + "CourierPrime-Regular.ttf").c_str(), 18.0f);
-    if (main_font) io.FontDefault = main_font;
-
-    // CJK fallback: Clone Hero libraries are full of Japanese (and other
-    // non-Latin) titles, which rendered as ?/boxes with the Latin-only fonts.
-    // Merge the first available system font into the main font; ImGui's
-    // dynamic font loader rasterizes glyphs on demand, so this costs nothing
-    // until a non-Latin title is actually drawn.
-    if (main_font) {
-        const char* cjk_candidates[] = {
-            "C:\\Windows\\Fonts\\YuGothM.ttc",   // Yu Gothic Medium (Win 8.1+)
-            "C:\\Windows\\Fonts\\meiryo.ttc",    // Meiryo
-            "C:\\Windows\\Fonts\\msgothic.ttc",  // MS Gothic (bitmap-ish, last resort)
-        };
-        for (const char* path : cjk_candidates) {
-            if (::GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) continue;
-            ImFontConfig merge;
-            merge.MergeMode = true;
-            if (io.Fonts->AddFontFromFileTTF(path, 18.0f, &merge)) break;
-        }
-    }
+    // Set up the Dear ImGui context (context, theme, DPI, fonts live in
+    // app_shell.cpp, shared with the headless GUI test runner).
+    hydra::ui::ImGuiSetupOptions imgui_options;
+    imgui_options.dpi_scale = main_scale;
+    hydra::ui::setup_imgui(imgui_options);
+    ImGuiIO& io = ImGui::GetIO();
 
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
     const ImVec4 clear_color = ImVec4(0.10f, 0.11f, 0.13f, 1.00f);
 
-    hydra::ui::AppState app;
+    // The app state. Normally built here; under --uitest the harness owns it
+    // (each test starts from a fresh scratch library) and the frame loop
+    // re-reads the pointer every frame.
+    std::unique_ptr<hydra::ui::AppState> own_app;
+    hydra::ui::FrameText* frame_text = nullptr;
+#ifdef HYDRA_UITEST_ATTACHED
+    std::unique_ptr<uitest::Harness> uitest;
+    bool uitest_results_written = false;
+    bool uitest_windows_open = true;
+    if (!uitest_what.empty()) {
+        // All runner output (results, dump/state text) goes to the log file:
+        // a GUI-subsystem exe has no console. Opened shareable so it can be
+        // read (tail -f) while the window is still up.
+        if (uitest_log.empty()) uitest_log = hydra::app::exe_dir() + "\\hydra_uitest.log";
+        // (freopen, not freopen_s: the _s form opens without sharing; and a
+        // GUI exe has no stdout fd to _dup2 onto.)
+#pragma warning(suppress : 4996)
+        if (std::freopen(uitest_log.c_str(), "w", stdout)) setvbuf(stdout, nullptr, _IONBF, 0);
+        uitest = std::make_unique<uitest::Harness>();
+        uitest->init_attached(g_pd3dDevice, g_pd3dDeviceContext, g_pSwapChain);
+        uitest::register_tests(*uitest);
+        ImGuiTestEngine_Start(uitest->engine, ImGui::GetCurrentContext());
+        if (!uitest->queue(uitest_what)) {
+            std::printf("no test or script file \"%s\"\n", uitest_what.c_str());
+            uitest_results_written = true;
+        }
+        frame_text = &uitest->frame_text;
+    }
+#endif
+    if (!frame_text) {
+        own_app = std::make_unique<hydra::ui::AppState>();
+        // Hand the GUI's shared D3D11 device to AppState so the Preview tab
+        // can build its renderer on it (same pattern as load_icons above).
+        own_app->set_render_device(g_pd3dDevice, g_pd3dDeviceContext);
+    }
 
     bool done = false;
     while (!done)
@@ -196,8 +194,14 @@ int main(int, char**)
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        hydra::ui::render_main_window(app);
-        hydra::ui::render_details_modal(app);
+        hydra::ui::AppState* app = own_app.get();
+#ifdef HYDRA_UITEST_ATTACHED
+        if (uitest) {
+            app = uitest->app.get();
+            ImGuiTestEngine_ShowTestEngineWindows(uitest->engine, &uitest_windows_open);
+        }
+#endif
+        if (app) hydra::ui::run_frame(*app, frame_text);
 
         // Render.
         ImGui::Render();
@@ -218,11 +222,36 @@ int main(int, char**)
 
         HRESULT hr = g_pSwapChain->Present(1, 0);   // vsync
         g_SwapChainOccluded = (hr == DXGI_STATUS_OCCLUDED);
+
+#ifdef HYDRA_UITEST_ATTACHED
+        if (uitest) {
+            ImGuiTestEngine_PostSwap(uitest->engine);
+            // Once the queue drains, write the results and keep the window
+            // open so the end state can be inspected.
+            if (!uitest_results_written && ImGuiTestEngine_IsTestQueueEmpty(uitest->engine)) {
+                uitest_results_written = true;
+                uitest->print_results(stdout);
+                std::printf("scratch files in %s\n", uitest->temp_dir.c_str());
+                std::fflush(stdout);
+            }
+        }
+#endif
     }
+
+#ifdef HYDRA_UITEST_ATTACHED
+    if (uitest) uitest->stop();  // before ImGui's context goes away
+#endif
+    own_app.reset();
 
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
-    ImGui::DestroyContext();
+    hydra::ui::shutdown_imgui();
+#ifdef HYDRA_UITEST_ATTACHED
+    if (uitest) {
+        uitest->keep_temp = true;  // leave the scratch files for inspection
+        uitest->shutdown();        // the engine outlives the ImGui context
+    }
+#endif
 
     CleanupDeviceD3D();
     ::DestroyWindow(hwnd);

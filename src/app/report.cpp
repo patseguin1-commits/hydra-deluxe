@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 
 #include "app/html_page.h"
 
@@ -14,138 +15,16 @@ using html::json_escape_into;
 
 namespace {
 
-// The page shell, byte-identical to hydra_report.py's PAGE triple-quoted
-// string. The \uXXXX sequences below are literal JavaScript escapes (the
-// Python source wrote them as \\uXXXX); a raw string keeps them untouched.
-const char* const kPage = R"page(<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Hydra Path Index</title>
+// The per-page pieces of the sortable page shell; the shared skeleton lives
+// in app/html_page.cpp (html::kSortable*). Assembled, the page stays
+// byte-identical to hydra_report.py's PAGE triple-quoted string. The
+// \uXXXX sequences are literal JavaScript escapes (the Python source wrote
+// them as \uXXXX); raw strings keep them untouched.
+const char* const kTitle = R"page(<title>Hydra Path Index</title>
 <style>
-:root {
-  color-scheme: light dark;
-  --paper: #faf9f7;
-  --surface: #ffffff;
-  --raised: #f2f0ec;
-  --ink: #15171d;
-  --muted: #6a6e79;
-  --rule: #e3e1db;
-  --sp: #b07d0a;
-  --sp-soft: #f6e7c2;
-  --t0: #2c7a5e; --t1: #9a7a1e; --t2: #b85f2c; --t3: #b23c3c; --t4: #8e3070; --t5: #5b3fa8;
-  --tn: #9aa0ab;
-  --shadow: 0 1px 2px rgba(20,22,28,.06), 0 8px 24px rgba(20,22,28,.05);
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --paper: #101219; --surface: #171a22; --raised: #1e222c;
-    --ink: #e9e7e2; --muted: #8f95a1; --rule: #282d39;
-    --sp: #f0b429; --sp-soft: #3a2e12;
-    --t0: #4fbf94; --t1: #e0b13f; --t2: #f0894e; --t3: #f2686b; --t4: #e07ac0; --t5: #a78bfa;
-    --tn: #5c626e;
-    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
-  }
-}
-:root[data-theme="dark"] {
-  --paper: #101219; --surface: #171a22; --raised: #1e222c;
-  --ink: #e9e7e2; --muted: #8f95a1; --rule: #282d39;
-  --sp: #f0b429; --sp-soft: #3a2e12;
-  --t0: #4fbf94; --t1: #e0b13f; --t2: #f0894e; --t3: #f2686b; --t4: #e07ac0; --t5: #a78bfa;
-  --tn: #5c626e;
-  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
-}
-:root[data-theme="light"] {
-  --paper: #faf9f7; --surface: #ffffff; --raised: #f2f0ec;
-  --ink: #15171d; --muted: #6a6e79; --rule: #e3e1db;
-  --sp: #b07d0a; --sp-soft: #f6e7c2;
-  --t0: #2c7a5e; --t1: #9a7a1e; --t2: #b85f2c; --t3: #b23c3c; --t4: #8e3070; --t5: #5b3fa8;
-  --tn: #9aa0ab;
-  --shadow: 0 1px 2px rgba(20,22,28,.06), 0 8px 24px rgba(20,22,28,.05);
-}
+)page";
 
-* { box-sizing: border-box; }
-body {
-  margin: 0;
-  background: var(--paper);
-  color: var(--ink);
-  font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  font-size: 14px;
-  line-height: 1.5;
-}
-.mono, td.num, .path, .stat-v {
-  font-family: ui-monospace, "Cascadia Mono", "Consolas", "SF Mono", Menlo, monospace;
-  font-variant-numeric: tabular-nums;
-}
-
-.wrap { max-width: 1760px; margin: 0 auto; padding: 28px 20px 64px; display: flex; flex-direction: column; gap: 20px; }
-
-header { display: flex; flex-direction: column; gap: 6px; }
-h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -.01em; }
-h1 .accent { color: var(--sp); }
-.sub { color: var(--muted); font-size: 13px; }
-
-.stats { display: flex; flex-wrap: wrap; gap: 10px; }
-.stat {
-  background: var(--surface); border: 1px solid var(--rule); border-radius: 8px;
-  padding: 10px 14px; min-width: 116px; box-shadow: var(--shadow);
-}
-.stat-k { font-size: 10px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); }
-.stat-v { font-size: 19px; font-weight: 600; margin-top: 3px; }
-
-.controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-input[type="search"], select, button {
-  font: inherit; color: var(--ink); background: var(--surface);
-  border: 1px solid var(--rule); border-radius: 7px; padding: 8px 11px;
-}
-input[type="search"] { min-width: 220px; flex: 1 1 220px; }
-button { cursor: pointer; }
-button:hover, select:hover { border-color: var(--sp); }
-
-/* Sorting is the point of this page, so it gets a control of its own rather
-   than living only on column headers -- with fourteen columns, the ones worth
-   sorting by are usually scrolled off the right-hand side. */
-.sorter { display: inline-flex; align-items: center; gap: 6px; }
-.sorter label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
-#sortdir { min-width: 108px; text-align: left; }
-input:focus-visible, select:focus-visible, th:focus-visible, button:focus-visible {
-  outline: 2px solid var(--sp); outline-offset: 2px;
-}
-.toggle { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); cursor: pointer; user-select: none; }
-.count { color: var(--muted); font-size: 13px; margin-left: auto; }
-
-.tablewrap {
-  overflow-x: auto; background: var(--surface);
-  border: 1px solid var(--rule); border-radius: 10px; box-shadow: var(--shadow);
-  /* Always show the horizontal bar: the numeric columns live off to the
-     right, and a scroller you cannot see is a scroller nobody uses. */
-  scrollbar-color: var(--muted) transparent;
-}
-.tablewrap::-webkit-scrollbar { height: 12px; }
-.tablewrap::-webkit-scrollbar-thumb { background: var(--rule); border-radius: 6px; }
-.tablewrap::-webkit-scrollbar-thumb:hover { background: var(--muted); }
-table { border-collapse: separate; border-spacing: 0; width: 100%; }
-thead th {
-  position: sticky; top: 0; z-index: 2;
-  background: var(--raised); color: var(--muted);
-  font-size: 10px; text-transform: uppercase; letter-spacing: .08em; font-weight: 600;
-  text-align: left; padding: 9px 10px; white-space: nowrap;
-  border-bottom: 1px solid var(--rule); cursor: pointer;
-}
-thead th.num, td.num { text-align: right; }
-thead th:hover { color: var(--ink); background: var(--surface); }
-/* Every header carries its affordance, not just the active one. */
-thead th .arrow { opacity: .35; margin-left: 4px; }
-thead th[aria-sort] { color: var(--ink); }
-thead th[aria-sort] .arrow { opacity: 1; color: var(--sp); }
-tbody td { padding: 7px 10px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
-tbody tr:last-child td { border-bottom: 0; }
-tbody tr:hover td { background: var(--raised); }
-tbody tr.best td:first-child { box-shadow: inset 3px 0 0 var(--sp); }
-
-/* Keep the song visible while reading the numbers off to the right. */
-thead th:first-child { left: 0; z-index: 4; }
-tbody td:first-child { position: sticky; left: 0; z-index: 1; background: var(--surface); }
-tbody tr:hover td:first-child { background: var(--raised); }
-
+const char* const kCssColumns = R"page(
 /* Every text column is capped. Left to size themselves, a full-discography
    path string (hundreds of activations) or a charter credit carrying Clone
    Hero colour markup stretches its column to thousands of pixels and pushes
@@ -161,19 +40,13 @@ td.path { max-width: 230px; }
 .rank { color: var(--muted); font-size: 12px; }
 .delta { color: var(--muted); font-size: 12px; }
 
-.chip {
-  display: inline-block; padding: 1px 7px; border-radius: 999px;
-  font-size: 11px; font-weight: 600; letter-spacing: .01em;
-  border: 1px solid currentColor;
-}
-.t0{color:var(--t0)} .t1{color:var(--t1)} .t2{color:var(--t2)}
+)page";
+
+const char* const kChipColors = R"page(.t0{color:var(--t0)} .t1{color:var(--t1)} .t2{color:var(--t2)}
 .t3{color:var(--t3)} .t4{color:var(--t4)} .t5{color:var(--t5)} .tn{color:var(--tn); border-color:transparent}
+)page";
 
-.empty { padding: 40px; text-align: center; color: var(--muted); }
-footer { color: var(--muted); font-size: 12px; }
-</style>
-
-<div class="wrap">
+const char* const kBody = R"page(<div class="wrap">
   <header>
     <h1>Hydra <span class="accent">Path Index</span></h1>
     <div class="sub">__SUBTITLE__</div>
@@ -206,7 +79,9 @@ footer { color: var(--muted); font-size: 12px; }
   <footer>__FOOTER__</footer>
 </div>
 
-<script id="data" type="application/json">__DATA__</script>
+)page";
+
+const char* const kDataJs = R"page(<script id="data" type="application/json">__DATA__</script>
 <script>
 const DATA = JSON.parse(document.getElementById('data').textContent);
 const ROWS = DATA.rows;
@@ -244,57 +119,9 @@ const COLS = [
 
 let sortKey = 'score', sortDir = -1;
 
-const sortby = document.getElementById('sortby');
-const sortdir = document.getElementById('sortdir');
+)page";
 
-COLS.forEach(c => {
-  const opt = document.createElement('option');
-  opt.value = c.k;
-  opt.textContent = c.t;
-  sortby.appendChild(opt);
-});
-
-function setSort(key, dir) {
-  sortKey = key;
-  sortDir = dir;
-  sortby.value = key;
-  const numeric = COLS.find(c => c.k === key).num;
-  sortdir.textContent = dir === -1
-    ? (numeric ? '\u2193 Highest' : '\u2193 Z \u2192 A')
-    : (numeric ? '\u2191 Lowest' : '\u2191 A \u2192 Z');
-  render();
-}
-
-sortby.addEventListener('change', () => {
-  // A fresh column starts the way that column is usually wanted: biggest
-  // number first, but names from the top.
-  setSort(sortby.value, COLS.find(c => c.k === sortby.value).num ? -1 : 1);
-});
-sortdir.addEventListener('click', () => setSort(sortKey, -sortDir));
-
-const head = document.getElementById('head');
-COLS.forEach(c => {
-  const th = document.createElement('th');
-  th.textContent = c.t;
-  th.tabIndex = 0;
-  th.title = 'Sort by ' + c.t;
-  if (c.num) th.className = 'num';
-  const arrow = document.createElement('span');
-  arrow.className = 'arrow';
-  th.appendChild(arrow);
-  const activate = () => {
-    if (sortKey === c.k) setSort(c.k, -sortDir);
-    else setSort(c.k, c.num ? -1 : 1);
-  };
-  th.addEventListener('click', activate);
-  th.addEventListener('keydown', e => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); }
-  });
-  head.appendChild(th);
-});
-
-const fmt = n => n === null || n === undefined ? '—' : n.toLocaleString();
-const fmtMs = n => n === null || n === undefined ? '—' : n.toFixed(1);
+const char* const kPageJs = R"page(const fmtMs = n => n === null || n === undefined ? '—' : n.toFixed(1);
 
 function visible() {
   const q = document.getElementById('q').value.trim().toLowerCase();
@@ -416,12 +243,19 @@ document.getElementById('q').addEventListener('input', render);
 document.getElementById('tier').addEventListener('change', render);
 document.getElementById('bestonly').addEventListener('change', render);
 
-// Building tens of thousands of rows takes a moment, and doing it inline
-// leaves the window blank until it finishes - which reads as a broken page.
-// Let the shell paint first, placeholder and all, then fill the table.
-requestAnimationFrame(() => setTimeout(() => setSort(sortKey, sortDir), 0));
-</script>
 )page";
+
+// The page shell, concatenated once on first use.
+const std::string& page_template() {
+    static const std::string page = std::string(html::kSortableHead) + kTitle +
+                                    html::kSortableCssCore +
+                                    html::kSortableCssTable + kCssColumns +
+                                    html::kSortableCssChip + kChipColors +
+                                    html::kSortableCssTail + kBody + kDataJs +
+                                    html::kSortableJsSorter + kPageJs +
+                                    html::kSortableJsBoot;
+    return page;
+}
 
 }  // namespace
 
@@ -494,7 +328,7 @@ std::pair<std::string, std::string> tier_for(const std::optional<double>& ms,
     // the original 2/35/70/105/140 ladder.
     const double w = hit_window_ms;
     if (!ms) return {"None", "tn"};
-    if (*ms < 2) return {"Normal", "t0"};
+    if (*ms < kDifficultMs) return {"Normal", "t0"};
     if (*ms < w / 2) return {"Hard", "t1"};
     if (*ms < w) return {"Extreme", "t2"};
     if (*ms < 3 * w / 2) return {"Insane", "t3"};
@@ -503,12 +337,12 @@ std::pair<std::string, std::string> tier_for(const std::optional<double>& ms,
 }
 
 std::vector<ReportRow> collect_rows(store::RecordStore& store, int64_t max_paths,
-                                    bool uncapped, double hit_window_ms) {
+                                    const store::CapQuery& cap, double hit_window_ms) {
     std::vector<ReportRow> rows;
-    std::string current = store::current_record_version(uncapped);
+    std::string current = store::current_record_version();
 
-    store.for_each_blob(std::nullopt, [&](const store::RecordStore::BlobRow& meta,
-                                          const HydraRecord& record) {
+    store.for_each_blob(std::nullopt, cap, [&](const store::RecordStore::BlobRow& meta,
+                                               const HydraRecord& record) {
         // record.is_version_compatible() in Python; here the row's stamp.
         if (meta.hyversion != current) return;
 
@@ -566,7 +400,7 @@ std::string build_html(const std::vector<ReportRow>& rows, const std::string& su
         const double w = hit_window_ms;
         const struct { const char* name; const char* tok;
                        std::optional<double> cutoff; } tiers[] = {
-            {"Normal", "t0", 2.0},          {"Hard", "t1", w / 2},
+            {"Normal", "t0", kDifficultMs}, {"Hard", "t1", w / 2},
             {"Extreme", "t2", w},           {"Insane", "t3", 3 * w / 2},
             {"Insane+", "t4", 2 * w},       {"Beyond", "t5", std::nullopt},
             {"None", "tn", std::nullopt},
@@ -618,7 +452,41 @@ std::string build_html(const std::vector<ReportRow>& rows, const std::string& su
         data.push_back('}');
     }
     data += "]}";
-    return html::render_page(kPage, std::move(data), subtitle, footer);
+    return html::render_page(page_template().c_str(), std::move(data), subtitle,
+                             footer);
+}
+
+GeneratedReport generate_report(store::RecordStore& store,
+                                const ReportOptions& options) {
+    GeneratedReport out;
+    auto [songs, records] = store.counts();
+    out.songs = songs;
+    out.records = records;
+
+    const double w = static_cast<double>(options.hit_window_ms);
+    std::vector<ReportRow> rows =
+        collect_rows(store, options.max_paths, options.cap, w);
+    out.rows = static_cast<int64_t>(rows.size());
+    if (rows.empty()) return out;
+
+    std::string shown = options.max_paths > 100000000
+                            ? "every path"
+                            : "top " + std::to_string(options.max_paths) +
+                                  " paths per chart";
+    std::string cap_label = options.cap.exact
+                                ? "SP cap " + std::to_string(*options.cap.exact) + " bars"
+                                : "SP cap Auto";
+    std::string subtitle = group_thousands(records) + " records across " +
+                           group_thousands(songs) + " songs — " + shown + " — " + cap_label;
+    std::string dbname =
+        std::filesystem::u8path(options.db_path).filename().u8string();
+    std::string footer = "Generated from " + dbname +
+                         ". Timing tiers match Hydra's squeeze ratings; "
+                         "'Beyond' is past the " +
+                         std::to_string(2 * options.hit_window_ms) +
+                         " ms window.";
+    out.html = build_html(rows, subtitle, footer, w);
+    return out;
 }
 
 }  // namespace hydra::app::report

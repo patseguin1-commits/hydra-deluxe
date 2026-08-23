@@ -1,4 +1,4 @@
-// Timing harness for the GUI's analysis path. The Hydra/HydraUncapped GUIs call
+// Timing harness for the GUI's analysis path. The Hydra GUI calls
 // app::analyze_chart_file -> hydra::analyze_chart -> run_search, i.e. the
 // object-based C++ engine in src/search/engine.cpp, then serialize the record
 // into the RecordStore. This times exactly that.
@@ -57,7 +57,7 @@ static void folder_breakdown(const std::string& folder) {
                 errors.size());
     std::printf("Settings: UNCAPPED, score range 4, 10ms limit (the GUI default).\n\n");
 
-    store::RecordStore store(":memory:", /*uncapped=*/true);
+    store::RecordStore store(":memory:");
 
     for (const app::ScanItem& it : items) {
         std::printf("%s\n", it.notespath.c_str());
@@ -75,9 +75,9 @@ static void folder_breakdown(const std::string& folder) {
 
         // Uncapped ladder, score range 4, 10ms limit -- the exact default.
         t = clk::now();
-        HydraRecord rec = analyze_chart(song, /*capped=*/false, /*dmode=*/0,
+        HydraRecord rec = analyze_chart(song, /*sp_cap=*/std::nullopt, /*dmode=*/0,
                                         /*dvalue=*/4, /*ms_filter=*/10.0,
-                                        /*sp_cap=*/std::nullopt, /*on_progress=*/{},
+                                        /*on_progress=*/{},
                                         /*time_budget=*/std::nullopt);
         double search_s = secs_since(t);
 
@@ -107,7 +107,7 @@ static void scan_mode(const std::string& folder, const std::string& dbpath,
     std::printf("Scanning %s\n", folder.c_str());
 
     std::unique_ptr<store::RecordStore> store;
-    if (!dbpath.empty()) store = std::make_unique<store::RecordStore>(dbpath, false);
+    if (!dbpath.empty()) store = std::make_unique<store::RecordStore>(dbpath);
 
     // With --db, a prior scan's rows become the rescan cache — running the
     // same command twice measures cold full scan then warm rescan.
@@ -191,27 +191,27 @@ static void corpus_bench() {
     }
     std::printf("Test corpus: %zu charts. Engine = src/search/engine.cpp.\n\n",
                 songs.size());
-    auto bench = [&](const char* name, bool capped, int dvalue) {
+    auto bench = [&](const char* name, std::optional<int> cap, int dvalue) {
         double best = 1e30;
         for (int rep = 0; rep < 3; ++rep) {
             auto t0 = clk::now();
             for (const Song& s : songs)
                 try {
-                    analyze_chart(s, capped, 0, dvalue, std::nullopt);
+                    analyze_chart(s, cap, 0, dvalue, std::nullopt);
                 } catch (const std::exception&) {
                 }
             best = std::min(best, secs_since(t0));
         }
         std::printf("  %-16s : %7.2fs (best of 3)\n", name, best);
     };
-    bench("capped d4", true, 4);
-    bench("uncapped d4", false, 4);
+    bench("cap4 d4", 4, 4);
+    bench("auto d4", std::nullopt, 4);
 }
 
 // Dump a store's charts table as the same JSON shape --dump writes, so two
 // scans' results can be diffed even when one came from another build.
 static void dump_db(const std::string& dbpath, const std::string& outpath) {
-    store::RecordStore db(dbpath, false);
+    store::RecordStore db(dbpath);
     std::vector<store::ChartLibraryEntry> rows =
         db.list_chart_library(std::nullopt, 0, INT_MAX);
     std::sort(rows.begin(), rows.end(),

@@ -1,15 +1,12 @@
 #include "ui/icons.h"
 
-#define STB_IMAGE_IMPLEMENTATION
-#define STBI_ONLY_PNG
-#define STBI_NO_STDIO
-#include "stb_image.h"
-
+#include <cstdint>
 #include <cstdio>
 #include <string>
 #include <vector>
 
 #include "app/config.h"
+#include "image/decode.h"
 
 namespace hydra::ui {
 
@@ -30,19 +27,17 @@ ImTextureID load_png_texture(ID3D11Device* device, const char* path) {
         std::fclose(f);
         return 0;
     }
-    std::vector<unsigned char> buf((size_t)size);
+    std::vector<uint8_t> buf((size_t)size);
     size_t read = std::fread(buf.data(), 1, buf.size(), f);
     std::fclose(f);
     if (read != buf.size()) return 0;
 
-    int width = 0, height = 0, channels = 0;
-    unsigned char* pixels =
-        stbi_load_from_memory(buf.data(), (int)buf.size(), &width, &height, &channels, 4);
-    if (!pixels) return 0;
+    hydra::image::DecodedImage img = hydra::image::decode_image(buf);
+    if (img.empty()) return 0;
 
     D3D11_TEXTURE2D_DESC desc = {};
-    desc.Width = (UINT)width;
-    desc.Height = (UINT)height;
+    desc.Width = (UINT)img.width;
+    desc.Height = (UINT)img.height;
     desc.MipLevels = 1;
     desc.ArraySize = 1;
     desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -51,12 +46,11 @@ ImTextureID load_png_texture(ID3D11Device* device, const char* path) {
     desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
     D3D11_SUBRESOURCE_DATA sub = {};
-    sub.pSysMem = pixels;
-    sub.SysMemPitch = (UINT)width * 4;
+    sub.pSysMem = img.rgba.data();
+    sub.SysMemPitch = (UINT)img.width * 4;
 
     ID3D11Texture2D* texture = nullptr;
     HRESULT hr = device->CreateTexture2D(&desc, &sub, &texture);
-    stbi_image_free(pixels);
     if (FAILED(hr) || !texture) return 0;
 
     D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};

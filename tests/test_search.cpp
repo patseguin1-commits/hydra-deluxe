@@ -34,9 +34,9 @@ TEST_CASE("search invariants hold across the corpus and config knobs") {
             // Depth asks for more alternate paths and must not move the
             // optimum; the ms filter is a constraint, so its best can only
             // be at or below the unconstrained best.
-            HydraRecord shallow = analyze_chart(song, true, 0, 0, std::nullopt);
-            HydraRecord deep = analyze_chart(song, true, 0, 200, std::nullopt);
-            HydraRecord filtered = analyze_chart(song, true, 0, 200, 20.0);
+            HydraRecord shallow = analyze_chart(song, 4, 0, 0, std::nullopt);
+            HydraRecord deep = analyze_chart(song, 4, 0, 200, std::nullopt);
+            HydraRecord filtered = analyze_chart(song, 4, 0, 200, 20.0);
 
             if (shallow.paths.empty()) {
                 d = "no paths";
@@ -97,7 +97,7 @@ TEST_CASE("stored transfer scales match the display-layer recomputation") {
 
         std::optional<HydraRecord> record;
         try {
-            record = analyze_chart(song, true, 0, 4, std::nullopt);
+            record = analyze_chart(song, 4, 0, 4, std::nullopt);
         } catch (const ChartFileError&) {
             continue;
         }

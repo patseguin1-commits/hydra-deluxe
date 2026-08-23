@@ -57,6 +57,12 @@
 
 //---- Enable Test Engine / Automation features.
 //#define IMGUI_ENABLE_TEST_ENGINE                          // Enable imgui_test_engine hooks. Generally set automatically by include "imgui_te_imconfig.h", see Test Engine for details.
+// Hydra: the GUI test runner (docs/agents/ui-testing.md) drives the real UI
+// through the Dear ImGui Test Engine (third_party/imgui_test_engine). The hooks
+// cost one branch per item when no engine is bound, so they stay on in every
+// build; the std::thread coroutine impl needs no platform fibers.
+#define IMGUI_TEST_ENGINE_ENABLE_COROUTINE_STDTHREAD_IMPL 1
+#include "imgui_test_engine/imgui_te_imconfig.h"
 
 //---- Include imgui_user.h at the end of imgui.h as a convenience
 // May be convenient for some users to only explicitly include vanilla imgui.h and have extra stuff included.

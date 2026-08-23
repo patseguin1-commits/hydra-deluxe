@@ -1,6 +1,5 @@
 #include "ui/library_view.h"
 
-#include "app/edition.h"
 #include "imgui.h"
 #include "store/record_store.h"
 #include "ui/fonts.h"
@@ -26,8 +25,11 @@ HWND main_hwnd() {
 // seconds after the message changes. same_line appends it to the current
 // row (the main action bar); the folder manager renders it on its own line.
 void render_status_line(AppState& app, bool same_line) {
-    // seen starts at 0 (the counter's initial value), not the watcher's
-    // default -1: app startup must not count as a change and start a fade.
+    // seen starts at 0 (the first AppState's initial counter value), not the
+    // watcher's default -1: app startup must not count as a change and start
+    // a fade. A later AppState in the same process (UI test runner) starts
+    // higher and does register once, which the empty-message check below
+    // turns into a no-op.
     static GenerationWatcher generation{/*seen=*/0};
     static double shown_at = -1.0;
     if (generation.changed(app.status_generation)) shown_at = ImGui::GetTime();
@@ -173,13 +175,21 @@ void render_actions_row(AppState& app) {
 
     ImGui::SameLine();
     if (ImGui::Button("Compare dmleaderboards user...")) {
-        // Fresh picker: drop any finished report from a previous run, and only
-        // refetch the ladder if we don't already have it this session (the
-        // render.com backend cold-starts, so a cached list saves a long wait).
-        app.dm_report_job.reset();
-        app.dm_picker_open = true;
-        if (app.dm_users.empty()) app.start_dm_fetch();
-        ImGui::OpenPopup("Compare dmleaderboards user");
+        // The leaderboard plays by Clone Hero's rules, so the comparison only
+        // means anything against 4-bar records.
+        if (app.settings.sp_cap != kCloneHeroSpCap) {
+            app.set_status("Leaderboard comparison needs SP cap 4 (Clone Hero's rule). "
+                           "Set it in a song's details.");
+        } else {
+            // Fresh picker: drop any finished report from a previous run, and
+            // only refetch the ladder if we don't already have it this session
+            // (the render.com backend cold-starts, so a cached list saves a
+            // long wait).
+            app.dm_report_job.reset();
+            app.dm_picker_open = true;
+            if (app.dm_users.empty()) app.start_dm_fetch();
+            ImGui::OpenPopup("Compare dmleaderboards user");
+        }
     }
     hint("Compare a dmleaderboards.com player's scores against your library");
 
@@ -326,8 +336,8 @@ void render_library_table(AppState& app, int visible_rows) {
                 ImGui::SetTooltip("Not analyzed yet. Open the song and press \"Analyze "
                                   "paths!\", or use Analyze library.");
             else if (summary.state == LibraryPage::SummaryState::Stale)
-                ImGui::SetTooltip("Analyzed by an older Hydra version or a different "
-                                  "edition. Re-analyze to refresh it.");
+                ImGui::SetTooltip("Analyzed by an older Hydra version. "
+                                  "Re-analyze to refresh it.");
         }
 
         ImGui::PopID();
@@ -470,7 +480,7 @@ void render_batch_modal(AppState& app) {
         // otherwise the "Open path report" button below is the way in.
         if (!app.report_started && !app.batch_job->is_cancelled()) {
             app.report_started = true;
-            app.report_job = std::make_unique<ReportJob>(*app.store, app.settings.uncapped,
+            app.report_job = std::make_unique<ReportJob>(*app.store, app.settings.cap_query(),
                                                          app.settings.auto_open_report,
                                                          app.settings.hit_window_ms);
             app.report_job->start();
@@ -481,8 +491,7 @@ void render_batch_modal(AppState& app) {
             ImGui::TextColored(kWarningColor, "Path report failed: %s",
                                app.report_job->error().c_str());
         } else if (app.report_job) {
-            if (ImGui::Button("Open path report"))
-                open_report_in_browser(app.settings.uncapped);
+            if (ImGui::Button("Open path report")) open_report_in_browser();
             ImGui::SameLine();
             if (ImGui::Checkbox("Open automatically", &app.settings.auto_open_report))
                 app.save_settings();
@@ -533,10 +542,11 @@ void render_dm_picker_modal(AppState& app) {
             ImGui::Text("Done — %d matched, %d above optimal, %d not in your library.",
                         app.dm_report_job->matched(), app.dm_report_job->above(),
                         app.dm_report_job->unmatched());
-            ImGui::TextDisabled("The report opened in your browser.");
+            ImGui::TextDisabled(app.settings.auto_open_report
+                                    ? "The report opened in your browser."
+                                    : "The report is ready.");
             ImGui::Spacing();
-            if (ImGui::Button("Open report again"))
-                open_dm_report_in_browser(app.settings.uncapped);
+            if (ImGui::Button("Open report again")) open_dm_report_in_browser();
             ImGui::SameLine();
             if (ImGui::Button("Compare another")) app.dm_report_job.reset();
             ImGui::SameLine();
@@ -689,9 +699,9 @@ void render_main_window(AppState& app) {
 
     // A way back into the last batch's HTML report (it used to exist only as
     // an unrequested browser launch right after a batch).
-    if (report_file_exists(app.settings.uncapped)) {
+    if (report_file_exists()) {
         ImGui::SameLine();
-        if (ImGui::Button("Open path report") && !open_report_in_browser(app.settings.uncapped))
+        if (ImGui::Button("Open path report") && !open_report_in_browser())
             app.set_status("The path report could not be opened.");
     }
     ImGui::Spacing();

@@ -1,6 +1,6 @@
 // Tests for app/config: INI round-trip through an explicit temp file,
 // tolerance for malformed input, chartmode_key, and the Settings ->
-// AnalysisSettings mapping (edition gating included).
+// AnalysisSettings mapping (the SP cap included).
 
 #include "doctest.h"
 
@@ -33,7 +33,6 @@ std::string temp_ini(const char* tag) {
 
 TEST_CASE("settings round-trip through an INI file") {
     Settings s;
-    s.uncapped = true;
     s.chartfolders = {"C:\\charts\\a", "C:\\charts\\b"};
     s.is_rescan = true;
     s.view_prodrums = false;
@@ -43,17 +42,16 @@ TEST_CASE("settings round-trip through an INI file") {
     s.mslimit_enabled = false;
     s.mslimit_value = 42;
     s.hit_window_ms = 79;
-    s.sp_cap_enabled = true;
-    s.sp_cap_value = 16;
+    s.preview_volume = 23;
+    s.sp_cap = 16;
     s.auto_open_report = true;
     s.dm_last_user = "123456789";
 
     const std::string path = temp_ini("roundtrip");
     REQUIRE(s.save_file(path));
-    Settings r = Settings::load_file(path, /*uncapped=*/true);
+    Settings r = Settings::load_file(path);
     std::remove(path.c_str());
 
-    CHECK(r.uncapped == s.uncapped);
     CHECK(r.chartfolders == s.chartfolders);
     CHECK(r.is_rescan == s.is_rescan);
     CHECK(r.view_difficulty == s.view_difficulty);
@@ -64,16 +62,16 @@ TEST_CASE("settings round-trip through an INI file") {
     CHECK(r.mslimit_enabled == s.mslimit_enabled);
     CHECK(r.mslimit_value == s.mslimit_value);
     CHECK(r.hit_window_ms == s.hit_window_ms);
-    CHECK(r.sp_cap_enabled == s.sp_cap_enabled);
-    CHECK(r.sp_cap_value == s.sp_cap_value);
+    CHECK(r.preview_volume == s.preview_volume);
+    CHECK(r.sp_cap == s.sp_cap);
     CHECK(r.auto_open_report == s.auto_open_report);
     CHECK(r.dm_last_user == s.dm_last_user);
 }
 
 TEST_CASE("a missing INI yields defaults") {
-    Settings r = Settings::load_file(temp_ini("missing_never_written"), false);
+    Settings r = Settings::load_file(temp_ini("missing_never_written"));
     Settings d;
-    CHECK(r.uncapped == false);
+    CHECK(r.sp_cap == 4);
     CHECK(r.chartfolders.empty());
     CHECK(r.view_difficulty == d.view_difficulty);
     CHECK(r.depth_value == d.depth_value);
@@ -81,6 +79,7 @@ TEST_CASE("a missing INI yields defaults") {
     CHECK(r.mslimit_value == d.mslimit_value);
     CHECK(r.mslimit_value == 10);
     CHECK(r.hit_window_ms == 85);
+    CHECK(r.preview_volume == 40);
 }
 
 TEST_CASE("malformed INI lines are tolerated") {
@@ -96,7 +95,7 @@ TEST_CASE("malformed INI lines are tolerated") {
           << "  mslimit_value =  25  \n"
           << "view_prodrums=0\n";
     }
-    Settings r = Settings::load_file(path, false);
+    Settings r = Settings::load_file(path);
     std::remove(path.c_str());
 
     CHECK(r.mslimit_value == 25);       // whitespace-trimmed key/value
@@ -114,31 +113,65 @@ TEST_CASE("chartmode_key names the view flags") {
     CHECK(s.chartmode_key() == "Expert Drums, 1x Bass");
 }
 
-TEST_CASE("to_analysis_settings maps and gates by edition") {
+TEST_CASE("sp_cap round-trips as a number or auto; pre-1.6 keys are ignored") {
+    const std::string path = temp_ini("spcap");
+
+    // Auto writes the word and reads back as nullopt.
+    Settings s;
+    s.sp_cap = std::nullopt;
+    REQUIRE(s.save_file(path));
+    CHECK_FALSE(Settings::load_file(path).sp_cap.has_value());
+    CHECK(Settings::load_file(path).cap_query().is_auto());
+
+    // A number reads back as that number, and cap_query asks for it exactly.
+    s.sp_cap = 64;
+    REQUIRE(s.save_file(path));
+    CHECK(Settings::load_file(path).sp_cap == 64);
+    CHECK(Settings::load_file(path).cap_query().exact == 64);
+
+    // The old Uncapped-edition keys, which the main app also used to write as
+    // "off, 8", must not turn an existing INI into Auto or 8 bars. Garbage and
+    // zero keep the default too.
+    {
+        std::ofstream f(path, std::ios::trunc);
+        f << "sp_cap_enabled=0\n"
+          << "sp_cap_value=8\n";
+    }
+    CHECK(Settings::load_file(path).sp_cap == 4);
+    {
+        std::ofstream f(path, std::ios::trunc);
+        f << "sp_cap=0\n";
+    }
+    CHECK(Settings::load_file(path).sp_cap == 4);
+    {
+        std::ofstream f(path, std::ios::trunc);
+        f << "sp_cap=banana\n";
+    }
+    CHECK(Settings::load_file(path).sp_cap == 4);
+    std::remove(path.c_str());
+}
+
+TEST_CASE("to_analysis_settings maps the cap and its Auto budget") {
     Settings s;
     s.depth_mode = 1;
     s.depth_value = 5000;
     s.mslimit_enabled = true;
     s.mslimit_value = 20;
-    s.sp_cap_enabled = true;
-    s.sp_cap_value = 16;
 
-    // Capped edition: no sp cap, no ladder time budget.
-    s.uncapped = false;
+    // A fixed cap: single run, no time budget.
+    s.sp_cap = 16;
     AnalysisSettings a = s.to_analysis_settings();
     CHECK(a.depth_mode == 1);
     CHECK(a.depth_value == 5000);
     CHECK(a.ms_filter == 20.0);
-    CHECK(a.uncapped == false);
-    CHECK_FALSE(a.sp_cap.has_value());
-    CHECK_FALSE(a.uncapped_time_budget_s.has_value());
-
-    // Uncapped edition: the manual cap and the ladder budget apply.
-    s.uncapped = true;
-    a = s.to_analysis_settings();
-    CHECK(a.uncapped == true);
     CHECK(a.sp_cap == 16);
-    CHECK(a.uncapped_time_budget_s.has_value());
+    CHECK_FALSE(a.time_budget_s.has_value());
+
+    // Auto: the ladder and its budget apply.
+    s.sp_cap = std::nullopt;
+    a = s.to_analysis_settings();
+    CHECK_FALSE(a.sp_cap.has_value());
+    CHECK(a.time_budget_s.has_value());
 
     // Disabled ms limit maps to no filter.
     s.mslimit_enabled = false;

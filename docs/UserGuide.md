@@ -77,7 +77,7 @@ Information pulled from the chart's ini (or the archive's embedded metadata, for
 Lastly, a hash/checksum (the big hexadecimal number) is also shown here; identical chart files will have the same value. However, this comparison is only good within Hydra. Clone Hero and other apps have their own versions of this and they probably don't align.
 
 ### Stored result (upper middle)
-A summary of the saved analysis for this song under the current view options: the best score, how many paths were kept, and the settings the analysis ran with (timing limit, and in the Uncapped edition the SP meter it settled on). If the song hasn't been analyzed — or the record is stale — that's shown here instead.
+A summary of the saved analysis for this song under the current view options and SP cap: the best score, how many paths were kept, and the settings the analysis ran with (timing limit and SP cap; an Auto run shows the cap it settled on). If the song hasn't been analyzed at this cap — or the record is stale — that's shown here instead.
 
 ### Analysis Controls (upper right)
 Look here to generate paths for a song (and a lot of scoring info too).
@@ -94,8 +94,12 @@ When enabled, extra paths are only kept if their hardest required squeeze is wit
 
 Note: the limit compares raw squeeze milliseconds, measured at the SP end. It does not account for frontend timing scaling (see the note under Backends below), so where an activation shows a scale warning, a kept path can be somewhat harder to execute than its listed milliseconds suggest.
 
-#### SP cap (Uncapped edition only)
-Forces the Star Power meter ceiling to a specific number of bars instead of letting Hydra raise it automatically until the score settles.
+#### SP cap
+The Star Power meter ceiling the analysis runs under, in bars. 4 is Clone Hero's rule and the default; leave it there for paths you intend to play. Any other number is a what-if whose scores are not achievable in game. Tick **Auto** to let Hydra raise the cap until the score stops improving, which approximates no ceiling at all (slower: up to two minutes per chart).
+
+Results are kept per cap. Changing the cap switches which record the app shows, and a chart is only analyzed again when it has no record at the current cap. The path report follows the current cap; the leaderboard comparison only runs at 4 bars.
+
+If you used the pre-1.6 Hydra Uncapped app, its records are copied into the main library the first time 1.6 opens. The old `hydra_uncapped.db` is left untouched.
 
 #### Analyze button
 Smash this button to analyze the song and generate paths. The result will be saved and pulled up again whenever you check on this song in the future. Long analyses show a progress bar and can be cancelled; closing the window also cancels them.
@@ -150,5 +154,7 @@ Double squeezes are currently not considered in this scoring unless they're `2ms
 
 Two console programs ship alongside the app and share its settings and library:
 
-- **`hydra_batch`** — runs the same batch analysis as `Analyze library`, printing one line per chart. Flags: `--redo` (re-analyze existing results), `--reindex`, `--db <path>`, `--uncapped`.
-- **`hydra_report`** — rebuilds the HTML path index from stored results. Flags: `--paths N`, `--all-paths`, `--out <path>`, `--no-open`, `--db <path>`, `--uncapped`.
+- **`hydra_batch`** — runs the same batch analysis as `Analyze library`, printing one line per chart. Flags: `--redo` (re-analyze existing results), `--reindex`, `--db <path>`.
+- **`hydra_report`** — rebuilds the HTML path index from stored results. Flags: `--paths N`, `--all-paths`, `--out <path>`, `--no-open`, `--db <path>`.
+
+Both use the chart mode and SP cap from the app's settings file.

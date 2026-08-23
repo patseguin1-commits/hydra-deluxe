@@ -4,8 +4,13 @@
 //
 // Schema keeps hystore's shape: a `songmeta` table (one row per chart file,
 // keyed by content hash) and a `records` table (one row per (hyhash,
-// chartmode) analysis), with denormalized summary columns on `records` so a
-// sortable library listing never has to inflate a blob.
+// chartmode, sp_cap) analysis), with denormalized summary columns on
+// `records` so a sortable library listing never has to inflate a blob.
+//
+// The SP cap is part of a record's identity (docs/adr/0003): a chart keeps
+// one record per cap it was analyzed at, so a 4-bar result and a 64-bar
+// what-if never overwrite each other. Lookups say which cap they want with a
+// CapQuery.
 
 #ifndef HYDRA_STORE_RECORD_STORE_H
 #define HYDRA_STORE_RECORD_STORE_H
@@ -52,18 +57,30 @@ struct PreparedRow {
     std::string hyhash;
     std::string chartmode;
     std::string hyversion;
+    int sp_cap = kCloneHeroSpCap;
     std::string bestpath;
     std::vector<uint8_t> blob;
     PathSummary summary;
 };
 
+// Throws std::invalid_argument if the record carries no sp_cap (every
+// analyzer result does).
 PreparedRow prepare_row(const std::string& hyhash, const std::string& chartmode,
-                        const HydraRecord& record, bool uncapped);
+                        const HydraRecord& record);
 
-// hymisc.RECORD_VERSION equivalent: capped and uncapped records are stamped
-// with versions that can never compare equal, so a record from the other
-// edition reads as incompatible instead of silently mixing in.
-std::string current_record_version(bool uncapped);
+// hymisc.RECORD_VERSION equivalent: the app version that produced a row. A
+// row stamped by another version reads as stale.
+std::string current_record_version();
+
+// Which cap's record a lookup wants. at(N): the record analyzed at exactly N
+// bars. automatic(): the chart's highest cap above Clone Hero's 4 -- what an
+// Auto run would reuse -- preferring current-version rows over stale ones.
+struct CapQuery {
+    std::optional<int> exact;
+    static CapQuery at(int cap) { return CapQuery{cap}; }
+    static CapQuery automatic() { return CapQuery{std::nullopt}; }
+    bool is_auto() const { return !exact.has_value(); }
+};
 
 // One row of list_records()/library browsing.
 struct RecordListing {
@@ -72,6 +89,7 @@ struct RecordListing {
     std::string ref_artist;
     std::string ref_charter;
     std::string chartmode;
+    int sp_cap = kCloneHeroSpCap;
     std::string bestpath;
     PathSummary summary;
 };
@@ -110,10 +128,10 @@ using ChartLibraryCache = std::unordered_map<std::string, ChartCacheEntry>;
 
 class RecordStore {
 public:
-    // dbpath may be ":memory:" for an ephemeral store (used by tests). uncapped
-    // selects which edition's records this store considers current — mirrors
-    // hymisc.apply_edition driving hymisc.RECORD_VERSION.
-    RecordStore(const std::string& dbpath, bool uncapped);
+    // dbpath may be ":memory:" for an ephemeral store (used by tests). A db
+    // from before 1.6 (records keyed without sp_cap) is migrated in place on
+    // open, in one transaction; a failure rolls back and rethrows.
+    explicit RecordStore(const std::string& dbpath);
     ~RecordStore();
 
     RecordStore(const RecordStore&) = delete;
@@ -136,22 +154,26 @@ public:
     // ---- reading ------------------------------------------------------
 
     // (hyversion, bestpath), without touching the blob. nullopt if there's no
-    // record for this key.
+    // record for this key and cap.
     std::optional<std::pair<std::string, std::string>> get_summary(
-        const std::string& hyhash, const std::string& chartmode);
+        const std::string& hyhash, const std::string& chartmode, const CapQuery& cap);
 
     // The full record, inflated and with its timecodes restored against the
     // song's tempo map. nullopt if there's no row; a record with empty paths
-    // if the stored version doesn't match this store's current edition.
+    // if the stored version doesn't match the current one.
     std::optional<HydraRecord> get_record(const std::string& hyhash,
-                                          const std::string& chartmode);
+                                          const std::string& chartmode,
+                                          const CapQuery& cap);
 
     // The song's timing context (tick resolution + tempo/meter maps), needed
     // to restore a loaded record's timecodes. nullopt if the song isn't
     // registered.
     std::optional<SongTiming> get_timing(const std::string& hyhash);
 
-    bool has_record(const std::string& hyhash, const std::string& chartmode);
+    // True when a current-version record exists for this key and cap -- the
+    // "skip, already analyzed" test for a batch run. Stale rows don't count.
+    bool has_record(const std::string& hyhash, const std::string& chartmode,
+                    const CapQuery& cap);
 
     // One record's song identity, as yielded by for_each_blob. Mirrors the
     // songmeta dict hystore.iter_blobs builds per row, plus the row's
@@ -163,17 +185,27 @@ public:
         std::string ref_charter;
         std::string chartmode;
         std::string hyversion;
+        int sp_cap = kCloneHeroSpCap;
     };
 
-    // Calls fn once per stored record (optionally filtered to one chartmode),
-    // in insertion order, with the record inflated from its blob. Mirrors
+    // Calls fn once per stored record (optionally filtered to one chartmode,
+    // always filtered to the wanted cap), in insertion order, with the record
+    // inflated from its blob. Mirrors
     // hystore.iter_blobs: timecodes are NOT restored (the report only needs
     // pathstrings and summaries, which never read them), and a record stamped
     // by another version/edition arrives empty — json_load's short-circuit,
     // same as get_record.
     void for_each_blob(
-        const std::optional<std::string>& chartmode,
+        const std::optional<std::string>& chartmode, const CapQuery& cap,
         const std::function<void(const BlobRow&, const HydraRecord&)>& fn);
+
+    // One-time import of the pre-1.6 Uncapped edition's separate library.
+    // Copies that file's current-version records (and their songs) into this
+    // store under the cap each was analyzed at, restamped with the plain
+    // version. Never writes the other file. Records a note in `meta` so a
+    // second call is a no-op. Returns rows copied (0 when already done, the
+    // file is missing/unreadable, or it has no records table).
+    int import_legacy_uncapped(const std::string& uncapped_db_path);
 
     // ---- maintenance --------------------------------------------------
 
@@ -185,8 +217,8 @@ public:
     int reindex();
 
     std::vector<RecordListing> list_records(
-        const std::optional<std::string>& chartmode, SortColumn order_by,
-        bool descending, std::optional<int> limit = std::nullopt);
+        const std::optional<std::string>& chartmode, const CapQuery& cap,
+        SortColumn order_by, bool descending, std::optional<int> limit = std::nullopt);
 
     // {songs, records} row counts.
     std::pair<int64_t, int64_t> counts();
@@ -211,11 +243,14 @@ public:
 
 private:
     sqlite3* db_ = nullptr;
-    bool uncapped_;
     std::recursive_mutex mutex_;
 
     void exec(const char* sql);
+    bool has_column(const char* table, const char* column);
     void add_missing_columns();
+    void migrate_records_to_cap_key();
+    std::optional<std::string> meta_get(const std::string& key);
+    void meta_set(const std::string& key, const std::string& value);
 };
 
 }  // namespace hydra::store

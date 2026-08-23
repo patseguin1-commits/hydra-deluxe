@@ -1,6 +1,6 @@
 // Analysis orchestration — the C++ port of hydra/hyutil.py's discovery half
 // and hydra/hybatch.py's unit of work. Phase 3's search/pather.{h,cpp} already
-// ports hyutil's _analyze/_analyze_at_cap/_analyze_uncapped (one chart's
+// ports hyutil's _analyze/_analyze_at_cap/_analyze_uncapped (analyze_auto_cap) (one chart's
 // pathing); this is the rest: finding charts on disk, hashing/reading their
 // metadata, and running many of them across a thread pool into a RecordStore.
 //
@@ -85,13 +85,12 @@ struct AnalysisSettings {
     int depth_mode = 0;   // matches search/graph.h's DepthMode
     int depth_value = 4;
     std::optional<double> ms_filter;
-    bool uncapped = false;
-    // Uncapped edition only: a manual SP meter ceiling in bars (any value).
-    // nullopt runs the auto-settling ladder. Ignored when !uncapped.
-    std::optional<int> sp_cap;
-    // Uncapped ladder only: seconds before a too-slow rung is abandoned
+    // The SP meter ceiling in bars (4 = Clone Hero's rule). nullopt is Auto:
+    // the ladder that raises the ceiling until the score settles.
+    std::optional<int> sp_cap = 4;
+    // Auto only: seconds before a too-slow ladder rung is abandoned
     // (hymisc.SP_CAP_TIME_BUDGET). nullopt runs every rung to completion.
-    std::optional<double> uncapped_time_budget_s;
+    std::optional<double> time_budget_s;
 };
 
 // Loads and analyzes one chart file (.mid/.chart/.sng/.srb), producing a record and

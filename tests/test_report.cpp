@@ -19,12 +19,12 @@ namespace {
 
 // Analyze the first `want` non-empty corpus charts into a fresh in-memory
 // store and return how many records landed.
-int fill_store(store::RecordStore& store, bool uncapped, int want) {
+int fill_store(store::RecordStore& store, std::optional<int> cap, int want) {
     AnalysisSettings settings;
     settings.depth_mode = 0;
     settings.depth_value = 10;
-    settings.uncapped = uncapped;
-    settings.uncapped_time_budget_s = std::nullopt;
+    settings.sp_cap = cap;
+    settings.time_budget_s = std::nullopt;
 
     int added = 0;
     for (const std::string& path : corpus::chart_paths()) {
@@ -44,14 +44,15 @@ int fill_store(store::RecordStore& store, bool uncapped, int want) {
     return added;
 }
 
-void check_edition(bool uncapped) {
-    store::RecordStore store(":memory:", uncapped);
-    const int added = fill_store(store, uncapped, 5);
+void check_cap(std::optional<int> cap) {
+    store::RecordStore store(":memory:");
+    const int added = fill_store(store, cap, 5);
     REQUIRE(added > 0);
 
     // One row per shown path, so a record surfaces exactly one rank-1 row.
+    const store::CapQuery query = cap ? store::CapQuery::at(*cap) : store::CapQuery::automatic();
     std::vector<report::ReportRow> rows =
-        report::collect_rows(store, /*max_paths=*/100, uncapped);
+        report::collect_rows(store, /*max_paths=*/100, query);
     int rank1 = 0;
     for (const report::ReportRow& row : rows)
         if (row.rank == 1) ++rank1;
@@ -71,18 +72,51 @@ void check_edition(bool uncapped) {
     for (int i = 0; i < added; ++i)
         CHECK(html.find("Title " + std::to_string(i)) != std::string::npos);
 
-    MESSAGE((uncapped ? "uncapped" : "capped") << ": " << rows.size()
+    MESSAGE((cap ? std::to_string(*cap) + " bars" : "auto") << ": " << rows.size()
             << " rows, " << html.size() << " bytes");
 }
 
 }  // namespace
 
-TEST_CASE("report page embeds every stored record (capped)") {
-    check_edition(false);
-}
+TEST_CASE("report page embeds every stored record (4 bars)") { check_cap(4); }
 
-TEST_CASE("report page embeds every stored record (uncapped)") {
-    check_edition(true);
+TEST_CASE("report page embeds every stored record (Auto)") { check_cap(std::nullopt); }
+
+TEST_CASE("report lists only the wanted cap and names it") {
+    store::RecordStore store(":memory:");
+    REQUIRE(fill_store(store, 4, 1) == 1);
+    // The same chart again at 8 bars, under the same key.
+    AnalysisSettings settings;
+    settings.depth_value = 10;
+    settings.sp_cap = 8;
+    for (const std::string& path : corpus::chart_paths()) {
+        try {
+            AnalysisResult result = analyze_chart_file(path, settings);
+            if (result.song.is_empty() || result.record.paths.empty()) continue;
+            store.add_record("h0", "mode", result.record);
+            break;
+        } catch (const std::exception&) {
+            continue;
+        }
+    }
+    REQUIRE(store.counts().second == 2);
+
+    report::ReportOptions options;
+    options.cap = store::CapQuery::at(4);
+    report::GeneratedReport four = report::generate_report(store, options);
+    CHECK(four.html.find("SP cap 4 bars") != std::string::npos);
+    int rank1 = 0;
+    for (const report::ReportRow& row : report::collect_rows(store, 100, options.cap))
+        if (row.rank == 1) ++rank1;
+    CHECK(rank1 == 1);
+
+    options.cap = store::CapQuery::automatic();
+    report::GeneratedReport automatic = report::generate_report(store, options);
+    CHECK(automatic.html.find("SP cap Auto") != std::string::npos);
+    rank1 = 0;
+    for (const report::ReportRow& row : report::collect_rows(store, 100, options.cap))
+        if (row.rank == 1) ++rank1;
+    CHECK(rank1 == 1);
 }
 
 TEST_CASE("tier_for: raw-ms bands derived from the two-hit budget") {
@@ -128,4 +162,40 @@ TEST_CASE("report payload carries the hit window and the tier table") {
 
     // The dropdown is payload-built; no hardcoded band strings remain.
     CHECK(html.find("Beyond 140ms") == std::string::npos);
+}
+
+
+TEST_CASE("generate_report: one seam frames the page for every entry point") {
+    store::RecordStore store(":memory:");
+    const int added = fill_store(store, 4, 2);
+    REQUIRE(added > 0);
+
+    report::ReportOptions options;
+    options.max_paths = 5;
+    options.db_path = "C:/somewhere/hydra.db";
+    report::GeneratedReport result = report::generate_report(store, options);
+    CHECK(result.songs == added);
+    CHECK(result.records == added);
+    CHECK(result.rows >= added);
+
+    // The framing strings are part of the interface: the CLI and the GUI's
+    // ReportJob both ship exactly this subtitle and footer.
+    std::string subtitle = group_thousands(result.records) +
+                           " records across " + group_thousands(result.songs) +
+                           " songs — top 5 paths per chart";
+    CHECK(result.html.find(subtitle) != std::string::npos);
+    CHECK(result.html.find("Generated from hydra.db. Timing tiers match") !=
+          std::string::npos);
+    CHECK(result.html.find("past the 170 ms window") != std::string::npos);
+
+    // --all-paths wording.
+    options.max_paths = 1000000000;
+    CHECK(report::generate_report(store, options)
+              .html.find("songs — every path") != std::string::npos);
+
+    // An empty store yields counts but no page.
+    store::RecordStore empty(":memory:");
+    report::GeneratedReport none = report::generate_report(empty, options);
+    CHECK(none.rows == 0);
+    CHECK(none.html.empty());
 }

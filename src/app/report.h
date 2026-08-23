@@ -51,19 +51,45 @@ std::string plain(const std::string& text);
 // (an absolute floor), then quarters of 2*W up to Beyond at >= 2*W. At the
 // historical W = 70 this is the original 2/35/70/105/140 ladder.
 std::pair<std::string, std::string> tier_for(const std::optional<double>& ms,
-                                             double hit_window_ms = 85.0);
+                                             double hit_window_ms = kDefaultHitWindowMs);
 
-// Reads every stored record (skipping ones stamped by another version or
-// edition) and produces up to max_paths rows per chart, best score first.
-// hit_window_ms feeds the tier labels only.
+// Reads every stored record at the wanted cap (skipping ones stamped by
+// another version) and produces up to max_paths rows per chart, best score
+// first. hit_window_ms feeds the tier labels only.
 std::vector<ReportRow> collect_rows(store::RecordStore& store, int64_t max_paths,
-                                    bool uncapped, double hit_window_ms = 85.0);
+                                    const store::CapQuery& cap,
+                                    double hit_window_ms = kDefaultHitWindowMs);
 
 // The self-contained page: the PAGE template with subtitle/footer escaped in
 // and a JSON payload {hit_window, tiers, rows} embedded, so the page's tier
 // dropdown and stats derive from the same window the rows were labeled with.
 std::string build_html(const std::vector<ReportRow>& rows, const std::string& subtitle,
-                       const std::string& footer, double hit_window_ms = 85.0);
+                       const std::string& footer,
+                       double hit_window_ms = kDefaultHitWindowMs);
+
+// ---- generate_report -------------------------------------------------------
+// The whole report in one call: counts + rows + the standard page framing
+// (subtitle and footer). The GUI's ReportJob and the hydra_report CLI are
+// adapters over this seam; both previously composed the same framing strings
+// by hand, where they could (and did) drift.
+
+struct ReportOptions {
+    int64_t max_paths = 5;
+    // Which records the page lists: the user's current SP cap.
+    store::CapQuery cap = store::CapQuery::at(kCloneHeroSpCap);
+    int hit_window_ms = static_cast<int>(kDefaultHitWindowMs);
+    std::string db_path;  // names the footer's source database
+};
+
+struct GeneratedReport {
+    std::string html;  // empty when the store held no reportable rows
+    int64_t songs = 0;
+    int64_t records = 0;
+    int64_t rows = 0;
+};
+
+GeneratedReport generate_report(store::RecordStore& store,
+                                const ReportOptions& options);
 
 // repr(float) / json.dumps float formatting (shortest round-trip). Exposed
 // for tests.

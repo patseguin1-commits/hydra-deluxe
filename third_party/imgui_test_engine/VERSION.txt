@@ -1,0 +1,1 @@
+imgui_test_engine @ fdc1cb0 (https://github.com/ocornut/imgui_test_engine, branch: main, 2026-08-07); only the imgui_test_engine/ subfolder is vendored

@@ -1,5 +1,5 @@
-// Analysis orchestration: one run at a fixed cap, the uncapped SP-cap
-// ladder, and the edition dispatch. Discovery and the batch thread pool live
+// Analysis orchestration: one run at a fixed cap, the Auto SP-cap ladder,
+// and the dispatch between them. Discovery and the batch thread pool live
 // in app/analysis; this is only what produces a record for one chart.
 
 #ifndef HYDRA_SEARCH_PATHER_H
@@ -7,6 +7,7 @@
 
 #include <functional>
 #include <optional>
+#include <type_traits>
 #include <vector>
 
 #include "core/model.h"
@@ -34,30 +35,36 @@ HydraRecord analyze_at_cap(const Song& song, int sp_cap, int depth_mode,
                            std::optional<int> build_cap, bool want_allzero = false,
                            const std::function<void(float)>& on_progress = {});
 
-// The uncapped edition: raise the ceiling up the SP-cap ladder until the
-// score settles.
+// Auto cap: raise the ceiling up the SP-cap ladder until the score settles,
+// approximating "no ceiling at all".
 // time_budget_s, if set, abandons a ladder rung that overruns it (the first
 // rung always finishes), keeping the best rung so far and flagging it
 // unsettled. nullopt runs every rung to completion — what the tests use, so
 // their results stay deterministic.
 // want_allzero runs the all-0 pass once, after the ladder settles, at the
 // settled ceiling -- never per rung.
-HydraRecord analyze_uncapped(const Song& song, int depth_mode, int depth_value,
+HydraRecord analyze_auto_cap(const Song& song, int depth_mode, int depth_value,
                              std::optional<double> ms_filter,
                              bool want_allzero = false,
                              const std::function<void(float)>& on_progress = {},
                              std::optional<double> time_budget_s = std::nullopt);
 
-// Full analysis for one edition. capped -> a single run at 4 bars; uncapped ->
-// the auto-settling ladder, unless sp_cap is given, in which case a single run
-// at that ceiling (any bar count -- the uncapped edition's manual SP-cap
-// option). sp_cap is ignored in the capped edition. Throws hydra::ChartFileError
-// when the song has no notes, matching hyutil._analyze.
-HydraRecord analyze_chart(const Song& song, bool capped, int depth_mode,
+// Full analysis for one chart. sp_cap is the SP meter ceiling in bars: 4 is
+// Clone Hero's rule and runs exactly the classic single pass; any other
+// number runs a single pass at that ceiling; nullopt is Auto, the
+// self-settling ladder (time_budget_s applies only there). Throws
+// hydra::ChartFileError when the song has no notes, matching hyutil._analyze.
+HydraRecord analyze_chart(const Song& song, std::optional<int> sp_cap, int depth_mode,
                           int depth_value, std::optional<double> ms_filter,
-                          std::optional<int> sp_cap = std::nullopt,
                           const std::function<void(float)>& on_progress = {},
                           std::optional<double> time_budget_s = std::nullopt);
+// The pre-1.6 signature took a `capped` bool here. A bool would now silently
+// become a 1-bar cap, so refuse exactly that at compile time (a template so
+// an int literal still picks the real overload above).
+template <class Bool, std::enable_if_t<std::is_same_v<Bool, bool>, int> = 0>
+HydraRecord analyze_chart(const Song&, Bool, int, int, std::optional<double>,
+                          const std::function<void(float)>& = {},
+                          std::optional<double> = std::nullopt) = delete;
 
 }  // namespace hydra
 

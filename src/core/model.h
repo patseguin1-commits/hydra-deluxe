@@ -24,6 +24,11 @@
 
 namespace hydra {
 
+// Clone Hero's Star Power meter holds this many bars and no more. It is the
+// default SP cap; records analyzed at a different cap answer what-if questions
+// whose scores are not achievable in game.
+inline constexpr int kCloneHeroSpCap = 4;
+
 // A chart file that does not work, mirroring hymisc.ChartFileError. Chord and
 // the parsers raise it; the parsers swallow it per-op exactly as Python does.
 class ChartFileError : public std::runtime_error {
@@ -43,6 +48,40 @@ bool allows_dynamics(NoteColor c);
 std::string color_str(NoteColor c);         // "Kick"/"Red"/...
 std::string color_notationstr(NoteColor c); // "K"/"R"/"Y"/"B"/"G"
 NoteCymbalType cymbal_flip(NoteCymbalType t);
+
+// ---- squeeze thresholds -------------------------------------------------
+// One home for the ms thresholds that define squeeze semantics. Each used to
+// be a repeated literal; the value is the interface, so a change here is a
+// deliberate rule change, not a stray edit.
+
+// A squeeze (or calibration fill) tighter than this many ms counts as
+// difficult: it turns on warning colors, and it is the "Normal" floor of the
+// report's timing tiers.
+constexpr double kDifficultMs = 2.0;
+
+// Backend leeway edge: a backend note this close after the SP end still
+// scores under SP without a deliberate squeeze. Shared by the engine's
+// squeeze pricing and the "Standard" edge of BackendSqueeze::summarystr, so
+// the price and the label cannot drift apart.
+constexpr double kBackendLeewayMs = 3.0;
+
+// The default per-side hit window (the registrable Clone Hero Pro Drums
+// window). The *setting* app::Settings::hit_window_ms starts from this; the
+// display-layer defaults below use it so all entry points agree.
+constexpr double kDefaultHitWindowMs = 85.0;
+
+// Backends within this window of the deactivation are worth showing/storing
+// (was hymisc.BACKEND_DISPLAY_WINDOW_MS = 140). 2x the 85 ms hit window, so
+// the trim covers the full nominal squeeze budget; raising the hit_window_ms
+// *setting* above 85 does not widen this analysis-time trim.
+constexpr double kBackendDisplayWindowMs = 170.0;
+
+// Calibration-fill (E) timing window, applied to e_offset in both directions:
+// an activation with e_offset < -window is illegal (the fill can't be
+// summoned), and one with e_offset < +window is E-critical. 85 since 1.5.0
+// (the +/-70 hit-window figure was outdated); search-load-bearing, so it is
+// a constant, never the hit_window_ms setting.
+constexpr double kCalibrationFillWindowMs = 85.0;
 
 // ---- ChordNote ----------------------------------------------------------
 
@@ -134,7 +173,7 @@ struct SPSqueeze {
     const char* symbol() const {
         return kind == SqueezeKind::SqIn ? "+" : "-";
     }
-    bool is_difficult() const { return difficulty() > 2.0; }
+    bool is_difficult() const { return difficulty() > kDifficultMs; }
     const char* type_name() const {
         return kind == SqueezeKind::SqIn ? "SqIn" : "SqOut";
     }
@@ -164,7 +203,7 @@ struct BackendSqueeze {
     // Rating label. The outer +/-W edges come from the hit window; the inner
     // -10/3/10 edges are absolute (they encode leeway/near-deact semantics,
     // not the window).
-    std::string summarystr(double hit_window_ms = 85.0) const;
+    std::string summarystr(double hit_window_ms = kDefaultHitWindowMs) const;
 };
 
 // Multiplier squeeze. Construction validates the chord+combo and throws
@@ -270,6 +309,16 @@ std::optional<TransferScale> transfer_scale_between(int64_t act_tick,
                                                     int64_t end_tick,
                                                     const SongTiming& timing);
 
+// The activation's deactivation node D (where its Star Power runs out), in
+// ticks: recovered from the backend rows when one carries an offset (their
+// offsets are measured against D exactly, mid-SP phrase collections
+// included), else the plain act + 2*B measures (+2 with a SqIn). The same
+// derivation frontend_transfer_scales uses, shared so the Preview's active
+// SP window and the squeeze display can't disagree. Display-only; nullopt
+// when the activation has no timecode or sp_meter.
+std::optional<int64_t> activation_deact_tick(const Activation& act,
+                                             const SongTiming& timing);
+
 // The activation's transfer scales. The SP end is recovered from the backend
 // rows (their offsets encode the deactivation node exactly), so mid-SP phrase
 // collections are priced in; an activation with no offset-bearing backend row
@@ -280,65 +329,9 @@ std::optional<TransferScale> transfer_scale_between(int64_t act_tick,
 std::optional<ActTransferScales> frontend_transfer_scales(const Activation& act,
                                                           const SongTiming& timing);
 
-// Which directions of the transfer scale actually matter for this activation:
-// `late` when some positive backend squeeze or a SqIn wants a late (+)
-// frontend hit, `early` when a note is squeezed out of SP (a sqout backend,
-// or any SqOut in sqinouts) and so wants an early (-) one. `backends` is the
-// caller's act.display_backends(), passed in so it isn't rebuilt. Display-only.
-struct TransferRelevance {
-    bool late = false;
-    bool early = false;
-};
-TransferRelevance transfer_scale_relevance(const Activation& act,
-                                           const std::vector<BackendSqueeze>& backends);
-
-// ---- exact squeeze solver (display-layer) ---------------------------------
-// The transfer scale linearizes the SP-end map E(h) at one point; these
-// evaluate it exactly through SongTiming::sp_end_ms, so a displacement that
-// crosses a tempo/meter section boundary is priced correctly. All three
-// return quantities in chart ms and are display-only. They read the
-// activation's timecode ms, so call them only on restored records.
-
-// How far the SP end moves when the frontend is displaced `displaced_ms` (a
-// positive magnitude) in the squeeze's direction: early for SqOut, late for
-// SqIn. Judged at the pre-extension (2*B measures) end, like the feasibility
-// itself. Returns 0 when the activation lacks a timecode or SP meter.
-double sp_end_shift_ms(double displaced_ms, SqueezeKind kind,
-                       const Activation& act, const SongTiming& timing);
-
-// The smallest frontend displacement whose exact SP-end shift, plus the
-// note's own displacement `backend_ms`, covers `gap_ms`. Monotone, solved by
-// bisection to ~1e-3 ms over [0, 8000]; +infinity when even 8000 ms cannot
-// cover it (fall back to the linearized figure).
-double required_frontend_ms(double gap_ms, double backend_ms, SqueezeKind kind,
-                            const Activation& act, const SongTiming& timing);
-
-// The exact even split: the smallest x with x + sp_end_shift_ms(x) >= gap_ms
-// -- the solved counterpart of the linearized gap/(1+r). Same bisection and
-// +infinity convention as required_frontend_ms.
-double exact_even_split_ms(double gap_ms, SqueezeKind kind,
-                           const Activation& act, const SongTiming& timing);
-
-// A backend squeeze's raw ms mapped onto the nominal 2*W scale the ratings
-// assume. With frontend timing scaling by r at the SP end, the real combined
-// squeeze budget is squeeze_budget_ms(r, W) = W*(1+r) rather than 2*W, so a
-// raw |offset| counts for |offset| * 2 / (1+r) of the nominal budget (a
-// W-free quantity).
-double effective_backend_ms(double offset_ms, double transfer_r);
-double squeeze_budget_ms(double transfer_r, double hit_window_ms = 85.0);
-
-// Backends within this window of the deactivation are worth showing/storing
-// (was hymisc.BACKEND_DISPLAY_WINDOW_MS = 140). 2x the 85 ms hit window, so
-// the trim covers the full nominal squeeze budget; raising the hit_window_ms
-// *setting* above 85 does not widen this analysis-time trim.
-constexpr double kBackendDisplayWindowMs = 170.0;
-
-// Calibration-fill (E) timing window, applied to e_offset in both directions:
-// an activation with e_offset < -window is illegal (the fill can't be
-// summoned), and one with e_offset < +window is E-critical. 85 since 1.5.0
-// (the +/-70 hit-window figure was outdated); search-load-bearing, so it is
-// a constant, never the hit_window_ms setting.
-constexpr double kCalibrationFillWindowMs = 85.0;
+// The display-layer judgement of these scales — which directions matter, when
+// a scale is material, effective ms, the exact SP-end solver — lives in
+// core/squeeze_rating.h.
 
 // ---- Path ---------------------------------------------------------------
 

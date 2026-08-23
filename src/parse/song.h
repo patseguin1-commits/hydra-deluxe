@@ -29,6 +29,12 @@ struct SongTimestamp {
     bool flag_solo = false;
     bool flag_sp = false;
     std::optional<int64_t> activation_length;
+    // On the note that ends an SP phrase (flag_sp == true), the tick the phrase
+    // began at. The parser otherwise discards the phrase start once the end
+    // flag is set; the Preview needs the whole span to shade the phrase, so it
+    // is kept here. nullopt on every other note. Not part of the search or the
+    // stored record — a display-only addition.
+    std::optional<int64_t> sp_phrase_start;
 
     bool has_activation() const { return activation_length.has_value(); }
 };

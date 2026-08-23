@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "app/analysis.h"
+#include "core/model.h"
 #include "app/dm_report.h"
 #include "corpus_util.h"
 #include "net/dmbot_client.h"
@@ -34,6 +35,11 @@ int64_t fill_store(store::RecordStore& store) {
             store.add_song(kHash, "Stored Title", "Stored Artist",
                            "Stored Charter", result.song);
             store.add_record(kHash, kMode, result.record);
+            // A what-if record at 8 bars for the same chart: the comparison
+            // must never pick it up (the leaderboard plays at 4 bars).
+            HydraRecord whatif = result.record;
+            whatif.sp_cap = 8;
+            store.add_record(kHash, kMode, whatif);
             return result.record.best_path().totalscore();
         } catch (const std::exception&) {
             continue;
@@ -61,7 +67,7 @@ net::DmScore make_score(const std::string& identifier, int64_t score) {
 }  // namespace
 
 TEST_CASE("collect_dm_rows joins scores to records and labels them") {
-    store::RecordStore store(":memory:", /*uncapped=*/false);
+    store::RecordStore store(":memory:");
     const int64_t optimal = fill_store(store);
     REQUIRE(optimal > 0);
 
@@ -96,7 +102,7 @@ TEST_CASE("collect_dm_rows joins scores to records and labels them") {
 }
 
 TEST_CASE("collect_dm_rows: no pct off 100% speed; store identity fallback") {
-    store::RecordStore store(":memory:", /*uncapped=*/false);
+    store::RecordStore store(":memory:");
     const int64_t optimal = fill_store(store);
 
     net::DmScore fast = make_score(kHash, optimal - 10);
@@ -164,7 +170,7 @@ TEST_CASE("dmbot JSON parsers handle canned payloads") {
 }
 
 TEST_CASE("build_dm_html substitutes every placeholder") {
-    store::RecordStore store(":memory:", /*uncapped=*/false);
+    store::RecordStore store(":memory:");
     const int64_t optimal = fill_store(store);
 
     std::vector<DmReportRow> rows = app::dm_report::collect_dm_rows(
@@ -181,4 +187,37 @@ TEST_CASE("build_dm_html substitutes every placeholder") {
     CHECK(html.find(subtitle) != std::string::npos);
     CHECK(html.find(footer) != std::string::npos);
     CHECK(html.find("Board Title") != std::string::npos);
+}
+
+TEST_CASE("generate_dm_report: tally and framing behind one seam") {
+    store::RecordStore store(":memory:");
+    const int64_t optimal = fill_store(store);
+    REQUIRE(optimal > 0);
+
+    std::vector<net::DmScore> scores;
+    scores.push_back(make_score(kHash, optimal - 1000));  // matched
+    scores.push_back(make_score(kHash, optimal + 5));     // above optimal
+    scores.push_back(make_score("00ff00ff00ff00ff00ff00ff00ff00ff",
+                                123456));                 // unmatched
+
+    app::dm_report::GeneratedDmReport result =
+        app::dm_report::generate_dm_report(store, scores, kMode, "TestUser");
+    CHECK(result.stats.total == 3);
+    CHECK(result.stats.matched == 1);
+    CHECK(result.stats.above == 1);
+    CHECK(result.stats.unmatched == 1);
+
+    // The subtitle the finished modal's counts must agree with.
+    CHECK(result.html.find("TestUser — 3 scores: 1 matched, 1 above optimal, "
+                           "1 not in your library") != std::string::npos);
+    // (The apostrophe in "Hydra's" is HTML-escaped, so match up to it.)
+    CHECK(result.html.find(
+              "Actual scores from dmleaderboards.com against Hydra") !=
+          std::string::npos);
+
+    // No scores: zero stats, no page.
+    app::dm_report::GeneratedDmReport none =
+        app::dm_report::generate_dm_report(store, {}, kMode, "TestUser");
+    CHECK(none.stats.total == 0);
+    CHECK(none.html.empty());
 }

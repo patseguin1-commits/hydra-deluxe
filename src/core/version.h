@@ -15,4 +15,11 @@
 #define HYDRA_WIDEN(s) HYDRA_WIDEN_(s)
 #define HYDRA_VERSION_W HYDRA_WIDEN(HYDRA_VERSION)
 
+namespace hydra {
+// Window title and the taskbar identity (AppUserModelID; must match
+// installer/hydra.iss).
+inline constexpr const wchar_t* kWindowTitleW = L"Hydra v" HYDRA_VERSION_W;
+inline constexpr const wchar_t* kAppUserModelIDW = L"Hydra.Hydra";
+}  // namespace hydra
+
 #endif  // HYDRA_CORE_VERSION_H

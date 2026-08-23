@@ -1,0 +1,12 @@
+{
+  "_comment": "Onyx 20251011, 'blink-182 - What's My Age Again' (Hoph2o Sync Chart, notes.mid beside this file), Expert Pro Drums, paused at 0:36.913. golden_onyx.png is the whole Onyx window; crop is the highway area inside it. Masks cover Onyx's time box and track label.",
+  "chart": "notes.mid",
+  "time_ms": 36913,
+  "width": 1372,
+  "height": 714,
+  "crop": [0, 126, 1372, 714],
+  "pro": true,
+  "bass2x": true,
+  "tolerance": 10,
+  "mask": [[0, 0, 232, 112], [600, 628, 180, 52]]
+}
