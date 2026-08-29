@@ -26,8 +26,10 @@ namespace {
 // the Activation itself, but every backend row encodes D exactly: its
 // offset_ms was measured against D (graph.cpp add_deact_edge), so
 // D = row.ms - offset. Prefer the smallest-|offset| row; the frequent
-// 0.0-offset row is the deact node itself. nullopt when no row carries an
-// offset (the activation never deactivates, or an old trimmed record).
+// 0.0-offset row is the deact node itself. An activation that never
+// deactivates (its SP outlasts the chart) carries rows too -- the engine's
+// rebuild step synthesizes them against the SP end it tracked. So nullopt
+// now only means an old record stored before that, or a trimmed one.
 std::optional<int64_t> deact_tick_from_rows(const Activation& act,
                                             const SongTiming& timing) {
     const BackendSqueeze* d_row = nullptr;
@@ -87,9 +89,10 @@ std::optional<ActTransferScales> frontend_transfer_scales(const Activation& act,
                        ? timing.plusmeasure(timing.timecode(post_tick), -2).ticks()
                        : post_tick;
     } else {
-        // No backend row carries an offset (the activation never deactivates,
-        // or an old trimmed record): fall back to the plain reconstruction,
-        // which cannot see mid-SP collections. 2 measures per SP bar.
+        // No backend row carries an offset (an old record stored before the
+        // never-deactivating case got synthesized rows, or a trimmed one):
+        // fall back to the plain reconstruction, which cannot see mid-SP
+        // collections. 2 measures per SP bar.
         int64_t end_measures = 2 * static_cast<int64_t>(*act.sp_meter);
         pre_tick = timing.plusmeasure(*act.timecode, end_measures).ticks();
         post_tick = has_sqin

@@ -19,6 +19,8 @@
 #include "search/engine.h"
 #include "search/graph.h"
 #include "search/pather.h"
+#include "store/path_codec.h"
+#include "store/serialize.h"
 
 using namespace hydra;
 
@@ -201,4 +203,186 @@ TEST_CASE("search_allzero returns only all-0 paths inside the 0 ms limit") {
     CHECK(mismatches == 0);
     CHECK(found > 0);
     MESSAGE("checked " << checks << " charts, " << found << " with an all-0 path");
+}
+
+// ---- SP that outlasts the chart ----------------------------------------
+//
+// When the last activation's Star Power ends after the chart's final note,
+// the graph never builds a deactivation edge, so no edge holds the trailing
+// notes. The rebuild step synthesizes those rows against the SP end the
+// engine tracked (Path::sp_end_time), which includes every mid-SP phrase
+// extension the plain measure-count reconstruction cannot see.
+
+namespace {
+
+// A hand-built 4/4 120 BPM song. 192 ticks per beat, so a measure is 768
+// ticks and 2000 ms; one tick is 2000/768 ms. Built directly rather than
+// parsed so the note ticks in the assertions below are exactly these.
+struct TailNote {
+    int64_t tick;
+    bool sp_phrase = false;
+    bool activation = false;
+};
+
+Song build_tail_song(const std::vector<TailNote>& notes) {
+    Song song(192);
+    song.tpm_changes[0] = 768;
+    song.bpm_changes[0] = 120.0;
+    song.build_timing();
+
+    for (const TailNote& n : notes) {
+        SongTimestamp ts;
+        ts.timecode = song.timecode(n.tick);
+        ts.chord.add_note(NoteColor::Red);
+        ts.flag_sp = n.sp_phrase;
+        if (n.activation) ts.activation_length = 384;
+        song.sequence.push_back(ts);
+    }
+    return song;
+}
+
+double tick_ms(const Song& song, int64_t tick) {
+    return song.timing().ms_index().at(tick);
+}
+
+// The best path's final activation, which every case here expects to be one
+// that never deactivated.
+const Activation& last_act(const std::vector<Path>& paths) {
+    REQUIRE(!paths.empty());
+    REQUIRE(!paths.front().activations.empty());
+    return paths.front().activations.back();
+}
+
+}  // namespace
+
+TEST_CASE("SP past the last note: backends measured from the tracked SP end") {
+    // Two SP phrases, then an activation at tick 2304 with a 2-bar meter, so
+    // SP ends 4 measures later at tick 5376. The chart stops at 5280.
+    Song song = build_tail_song({{0, true, false},
+                                 {768, true, false},
+                                 {1536},
+                                 {2304, false, true},
+                                 {3072},
+                                 {3840},
+                                 {4608},
+                                 {5136},
+                                 {5280}});
+
+    ScoreGraph graph(song, 4);
+    std::vector<Path> paths =
+        run_search(graph, DepthMode::Scores, 0, std::nullopt);
+
+    const Activation& act = last_act(paths);
+    REQUIRE(act.sp_meter.has_value());
+    CHECK(*act.sp_meter == 2);
+    REQUIRE(act.timecode.has_value());
+    CHECK(act.timecode->ticks() == 2304);
+
+    const int64_t end_tick = 5376;
+    const double end_ms = tick_ms(song, end_tick);
+
+    // The rows exist at all -- the bug this pins showed "Backends: None."
+    REQUIRE(!act.backends.empty());
+
+    // Every trailing note is before the SP end, so every offset is negative.
+    for (const BackendSqueeze& b : act.backends) {
+        REQUIRE(b.offset_ms.has_value());
+        CHECK(*b.offset_ms < 0.0);
+    }
+
+    // The chart's last note is one of the rows, at its true distance.
+    const BackendSqueeze* last_note = nullptr;
+    for (const BackendSqueeze& b : act.backends)
+        if (b.timecode.ticks() == 5280) last_note = &b;
+    REQUIRE(last_note != nullptr);
+    CHECK(*last_note->offset_ms ==
+          doctest::Approx(tick_ms(song, 5280) - end_ms).epsilon(1e-9));
+
+    // And the rows put the SP end back exactly where the engine had it.
+    auto deact = activation_deact_tick(act, song.timing());
+    REQUIRE(deact.has_value());
+    CHECK(*deact == end_tick);
+}
+
+TEST_CASE("SP past the last note: a mid-activation phrase extends the end") {
+    // Same shape, but the note at 3840 completes an SP phrase during the
+    // activation. That pushes the pending deactivation two measures out, from
+    // tick 5376 to 6912 -- an extension the measure-count fallback (2 measures
+    // per SP bar, from a meter still recorded as 2) cannot see.
+    Song song = build_tail_song({{0, true, false},
+                                 {768, true, false},
+                                 {1536},
+                                 {2304, false, true},
+                                 {3072},
+                                 {3840, true, false},
+                                 {4608},
+                                 {5376},
+                                 {6144},
+                                 {6720},
+                                 {6816}});
+
+    ScoreGraph graph(song, 4);
+    std::vector<Path> paths =
+        run_search(graph, DepthMode::Scores, 0, std::nullopt);
+
+    const Activation& act = last_act(paths);
+    REQUIRE(act.sp_meter.has_value());
+    CHECK(*act.sp_meter == 2);
+
+    const int64_t extended_tick = 6912;
+    const int64_t plain_tick = 5376;
+
+    REQUIRE(!act.backends.empty());
+    for (const BackendSqueeze& b : act.backends) {
+        REQUIRE(b.offset_ms.has_value());
+        CHECK(*b.offset_ms < 0.0);
+    }
+
+    auto deact = activation_deact_tick(act, song.timing());
+    REQUIRE(deact.has_value());
+    CHECK(*deact == extended_tick);
+    CHECK(*deact != plain_tick);
+    // The activation records no SqIn, so the old fallback would have landed
+    // on the plain end. Pin that the rows, not the reconstruction, answered.
+    CHECK(act.sqinouts.empty());
+    CHECK(song.timing().plusmeasure(*act.timecode, 4).ticks() == plain_tick);
+}
+
+TEST_CASE("SP past the last note: synthesized rows survive a store round-trip") {
+    Song song = build_tail_song({{0, true, false},
+                                 {768, true, false},
+                                 {1536},
+                                 {2304, false, true},
+                                 {3072},
+                                 {3840},
+                                 {4608},
+                                 {5136},
+                                 {5280}});
+
+    ScoreGraph graph(song, 4);
+    std::vector<Path> paths =
+        run_search(graph, DepthMode::Scores, 0, std::nullopt);
+    const Activation& act = last_act(paths);
+    REQUIRE(!act.backends.empty());
+
+    // Decoded timecodes are ticks-only until restore_timecodes resolves them
+    // against the song's tempo map -- the same two steps read_record takes.
+    HydraRecord back;
+    back.paths.push_back(
+        store::decode_path_node(store::encode_path_node(paths.front())));
+    store::restore_timecodes(back, song.timing());
+    REQUIRE(back.paths.front().activations.size() ==
+            paths.front().activations.size());
+    const Activation& ract = back.paths.front().activations.back();
+
+    // The writer stores display_backends(), so what survives is the rows
+    // inside the +/-500 ms display window -- the same trim a deactivating
+    // activation's rows get. Here that is the last note, at -250 ms.
+    std::vector<BackendSqueeze> want = act.display_backends();
+    REQUIRE(!want.empty());
+    REQUIRE(ract.backends.size() == want.size());
+    for (size_t i = 0; i < want.size(); ++i) CHECK(ract.backends[i] == want[i]);
+
+    CHECK(activation_deact_tick(ract, song.timing()) ==
+          activation_deact_tick(act, song.timing()));
 }

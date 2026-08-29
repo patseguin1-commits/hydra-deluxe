@@ -147,6 +147,7 @@ struct Variant {
     int32_t act_tail;
     int32_t var_head;
     int32_t tied_count;
+    int64_t sp_end;
 };
 struct Path {
     int32_t node;
@@ -177,6 +178,9 @@ struct OutPath {
 struct OutAct {
     int32_t act_node, skips, sp_meter, deact_edge, sq_begin, sq_end;
     double e_offset;
+    // Only set (non-NO_TIME) on a path's last activation when it never
+    // deactivated: the engine's tracked SP end, extensions included.
+    int64_t final_sp_end;
 };
 struct OutSq {
     int32_t kind;
@@ -339,7 +343,8 @@ private:
 
     void emit_path(const Path& p);
     void emit_variant(int32_t v, int32_t depth);
-    void emit_acts(int32_t act_tail, int32_t* begin, int32_t* end);
+    void emit_acts(int32_t act_tail, int64_t sp_end_time, int32_t* begin,
+                   int32_t* end);
 
     const Enum& en_;
     bool has_sp_cap_;
@@ -706,6 +711,7 @@ void Engine::reduce_group(const int32_t* members, int32_t n) {
             v.act_tail = p.act_tail;
             v.var_head = p.var_head;
             v.tied_count = p.tied_count;
+            v.sp_end = p.sp_end_time;
             variants_.push_back(v);
             leader.var_head = (int32_t)variants_.size() - 1;
             leader.tied_count += p.tied_count;
@@ -871,7 +877,8 @@ void Engine::reduce_iteration_paths() {
 }
 
 // --- output --------------------------------------------------------------
-void Engine::emit_acts(int32_t act_tail, int32_t* begin, int32_t* end) {
+void Engine::emit_acts(int32_t act_tail, int64_t sp_end_time, int32_t* begin,
+                       int32_t* end) {
     chain_scratch_.clear();
     for (int32_t a = act_tail; a >= 0; a = acts_[(size_t)a].parent) {
         chain_scratch_.push_back(a);
@@ -900,9 +907,18 @@ void Engine::emit_acts(int32_t act_tail, int32_t* begin, int32_t* end) {
             out_sqs_.push_back(os);
         }
         oa.sq_end = (int32_t)out_sqs_.size();
+        oa.final_sp_end = NO_TIME;
         out_acts_.push_back(oa);
     }
     *end = (int32_t)out_acts_.size();
+
+    // The newest activation is the only one that can still be running at the
+    // end of the song. When it is (no deact edge), hand the rebuild step the
+    // SP end the search tracked, so it can measure the trailing notes.
+    if (*end > *begin) {
+        OutAct& last = out_acts_[(size_t)(*end - 1)];
+        if (last.deact_edge < 0) last.final_sp_end = sp_end_time;
+    }
 }
 
 void Engine::emit_variant(int32_t v, int32_t depth) {
@@ -925,7 +941,7 @@ void Engine::emit_variant(int32_t v, int32_t depth) {
         op.skipped_ghosts = var.skipped_ghosts;
         op.var_point = var.var_point;
         op.depth = depth;
-        emit_acts(var.act_tail, &op.act_begin, &op.act_end);
+        emit_acts(var.act_tail, var.sp_end, &op.act_begin, &op.act_end);
         out_paths_.push_back(op);
 
         emit_variant(var.var_head, depth + 1);
@@ -946,7 +962,7 @@ void Engine::emit_path(const Path& p) {
     op.skipped_ghosts = p.skipped_ghosts;
     op.var_point = -1;
     op.depth = 0;
-    emit_acts(p.act_tail, &op.act_begin, &op.act_end);
+    emit_acts(p.act_tail, p.sp_end_time, &op.act_begin, &op.act_end);
     out_paths_.push_back(op);
 
     emit_variant(p.var_head, 1);
@@ -1066,6 +1082,7 @@ std::vector<MPath> rebuild(const Enum& en, const std::vector<OutPath>& out_paths
                            const std::vector<OutAct>& out_acts,
                            const std::vector<OutSq>& out_sqs,
                            const std::vector<MultSqueeze>& multsqueezes,
+                           const std::vector<BackendSqueeze>& tail_backends,
                            const SongTiming& timing) {
     std::vector<BuildNode> pool;
     pool.reserve(out_paths.size());
@@ -1097,8 +1114,20 @@ std::vector<MPath> rebuild(const Enum& en, const std::vector<OutPath>& out_paths
             act.sp_meter = oa.sp_meter;
             act.frontend_points = node->branch_edge->frontend->points;
             act.e_offset = oa.e_offset;
-            if (oa.deact_edge >= 0)
+            if (oa.deact_edge >= 0) {
                 act.backends = en.edges[(size_t)oa.deact_edge]->backends;
+            } else if (oa.final_sp_end != NO_TIME) {
+                // SP outlasted the chart, so no deact edge was ever built and
+                // no edge holds these notes. Measure the song's trailing notes
+                // against the SP end the search tracked -- the same offset rule
+                // add_deact_edge uses, just against a node the graph never made.
+                const double end_ms = timing.ms_index().at(oa.final_sp_end);
+                for (const BackendSqueeze& b : tail_backends) {
+                    BackendSqueeze copy = b;
+                    copy.offset_ms = b.timecode.ms() - end_ms;
+                    act.backends.push_back(copy);
+                }
+            }
             for (int k = oa.sq_begin; k < oa.sq_end; ++k) {
                 const OutSq& os = out_sqs[(size_t)k];
                 SPSqueeze sq;
@@ -1112,9 +1141,10 @@ std::vector<MPath> rebuild(const Enum& en, const std::vector<OutPath>& out_paths
             // the details display uses to recompute them, on the same inputs
             // (timecode, sp_meter, backends, sqinouts), so the stored ratios
             // can't drift from a live recomputation. The backend rows carry
-            // the search's actual deact end; an activation with none (never
-            // deactivated) keeps the measure-count reconstruction fallback.
-            // A nullopt keeps the 1.0 defaults.
+            // the search's actual deact end; an activation that never
+            // deactivated carries rows synthesized just above, measured
+            // against the SP end the engine tracked, so it lands on the same
+            // footing. A nullopt keeps the 1.0 defaults.
             if (auto scales = frontend_transfer_scales(act, timing)) {
                 act.transfer_pre = scales->pre;
                 act.transfer_post = scales->post;
@@ -1179,7 +1209,8 @@ std::vector<MPath> run_search(const ScoreGraph& graph, DepthMode depth_mode,
         throw std::runtime_error("search reached a broken state");
 
     return rebuild(en, engine.out_paths(), engine.out_acts(), engine.out_sqs(),
-                   collect_multsqueezes(graph), graph.timing());
+                   collect_multsqueezes(graph), graph.tail_backends(),
+                   graph.timing());
 }
 
 }  // namespace hydra

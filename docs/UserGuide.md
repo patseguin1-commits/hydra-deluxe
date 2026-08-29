@@ -137,6 +137,8 @@ Frontend: The chord that the activation is on. If it's a multi-note chord, perfo
 
 Backends: The notes surrounding the end of Star Power for this activation. There is probably a note at `0ms`, which is exactly when SP ends; the others are the notes right before and right after.
 
+If the last activation's Star Power runs past the end of the chart, the table lists the notes before that SP end, so every timing is negative.
+
 Perform a backend squeeze by hitting the `0ms` note early, so that it lands during Star Power.
 
 The backends have a (made up by me) rating that just conveys how difficult it would be to fit that note into Star Power. If you're interested in double backend squeezes, look here for notes that are in the `3ms` to `85ms` range (the upper edge follows the hit-window setting). Or even higher if you're crazy. Whether these double backends are actually possible depends on some details that aren't considered by Hydra yet...

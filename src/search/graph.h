@@ -75,6 +75,14 @@ public:
     std::optional<int> sp_meter_cap() const { return sp_meter_cap_; }
     const SongTiming& timing() const { return song_.timing(); }
 
+    // The notes left in the squeeze window (kSqueezeWindowMs) before the song's
+    // last timestamp, i.e. the trailing notes no deactivation edge ever got to
+    // claim. offset_ms is unset on these: offsets are only stamped on the copies
+    // an edge keeps, measured against that edge's own destination.
+    const std::vector<BackendSqueeze>& tail_backends() const {
+        return recent_backends_;
+    }
+
 private:
     // Graph construction.
     void build();
