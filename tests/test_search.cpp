@@ -156,6 +156,62 @@ TEST_CASE("stored transfer scales match the display-layer recomputation") {
                        << nonflat << " with a non-flat scale)");
 }
 
+// An activation that squeezes a note out of SP ends its SP on that note, so
+// the note is hit after SP is gone -- and every note after it is hit later
+// still. None of them can be a backend squeeze. The deactivation edge holds
+// backends for every path that deactivates there, squeezed out or not, so the
+// record build has to trim per activation; this pins that it does.
+TEST_CASE("no activation keeps backends past its squeezed-out note") {
+    int charts = 0, sqout_acts = 0, mismatches = 0;
+
+    for (const std::string& path : corpus::chart_paths()) {
+        Song song = load_songpath(path, true, true);
+        if (song.is_empty()) continue;
+
+        std::optional<HydraRecord> record;
+        try {
+            SearchSettings cfg;
+            cfg.sp_cap = 4;
+            cfg.depth_mode = DepthMode::Scores;
+            cfg.depth_value = 4;
+            cfg.ms_filter = std::nullopt;
+            record = analyze_chart(song, cfg);
+        } catch (const ChartFileError&) {
+            continue;
+        }
+        ++charts;
+
+        std::string d;
+        for (const Path* p : record->all_paths()) {
+            for (const Activation& act : p->all_activations()) {
+                std::optional<double> sqout;
+                for (const SPSqueeze& sq : act.sqinouts)
+                    if (sq.kind == SqueezeKind::SqOut &&
+                        (!sqout || sq.offset() < *sqout))
+                        sqout = sq.offset();
+                if (!sqout) continue;
+                ++sqout_acts;
+
+                for (const BackendSqueeze& b : act.backends) {
+                    if (b.offset_ms.value_or(0.0) > *sqout + 0.01) {
+                        d = "backend past the sqout note";
+                        break;
+                    }
+                }
+                if (!d.empty()) break;
+            }
+            if (!d.empty()) break;
+        }
+        if (!d.empty() && ++mismatches <= 8)
+            CHECK_MESSAGE(false, path << " " << d);
+    }
+
+    CHECK(mismatches == 0);
+    REQUIRE(charts > 0);
+    MESSAGE("checked " << sqout_acts << " squeeze-out activations on " << charts
+                       << " charts");
+}
+
 // The all-0 pass is a second, constrained search. Its whole contract is that
 // every activation it reports records skips == 0, that the 0 ms limit is a
 // requirement rather than a preference, and that it never scores above the

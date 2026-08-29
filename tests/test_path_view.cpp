@@ -246,14 +246,16 @@ TEST_CASE("build_activations: the backend limit hides far rows but never "
     Activation act;
     act.skips = 0;
     act.e_offset = 300.0;  // not e-critical
-    for (double ms : {-30.0, 60.0, -100.0}) {
+    for (double ms : {-30.0, -100.0, 60.0}) {
         BackendSqueeze row;
         row.offset_ms = ms;
         act.backends.push_back(row);
     }
-    // Matches the -100 row (is_sqout_backend compares offsets within 0.01),
-    // so that row is the squeezed-out one.
-    act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -100.0});
+    // Matches the +60 row (is_sqout_backend compares offsets within 0.01), so
+    // that row is the squeezed-out one. It has to be the last row in chart
+    // order: nothing can be a backend past the note squeezed out of SP, and
+    // display_backends drops any row that claims to be.
+    act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, 60.0});
 
     Path p;
     p.activations.push_back(act);
@@ -268,12 +270,12 @@ TEST_CASE("build_activations: the backend limit hides far rows but never "
     // No limit: every stored row shows.
     CHECK(rows(std::nullopt).size() == 3);
 
-    // At 50 ms the +60 row goes; the -100 row stays because it is squeezed out.
+    // At 50 ms the -100 row goes; the +60 row stays because it is squeezed out.
     std::vector<BackendRowView> limited = rows(50.0);
     REQUIRE(limited.size() == 2);
     CHECK(limited[0].timing == "-30.0");
     CHECK_FALSE(limited[0].warn);
-    CHECK(limited[1].timing == "-100.0");
+    CHECK(limited[1].timing == "60.0");
     CHECK(limited[1].warn);
 }
 

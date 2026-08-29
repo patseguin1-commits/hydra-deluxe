@@ -6,6 +6,7 @@
 #include "doctest.h"
 
 #include <string>
+#include <vector>
 
 #include "core/model.h"
 
@@ -91,6 +92,34 @@ TEST_CASE("Path pathstring and pathstring_verbose") {
     CHECK(empty.pathstring() == "(No activations.)");
     CHECK(empty.pathstring_verbose() ==
           "(No mult squeezes.) | (No activations.) | Score: 0");
+}
+
+// Backend rows past a squeezed-out note are impossible in game: the sqout note
+// is hit after SP ends, so every note after it is hit outside SP too. The
+// engine trims them at record build; this pins the display-layer guard that
+// keeps records stored before that fix from showing them.
+TEST_CASE("display_backends drops rows beyond a squeeze out") {
+    Activation a;
+    const std::vector<double> offsets = {-368.1, -184.0, 0.0, 184.0, 368.1};
+    for (double off : offsets) {
+        BackendSqueeze bsq;
+        bsq.points = 50;
+        bsq.offset_ms = off;
+        a.backends.push_back(bsq);
+    }
+
+    // No squeeze out: every row is inside the +/-500 ms display window.
+    REQUIRE(a.display_backends().size() == offsets.size());
+    for (size_t i = 0; i < offsets.size(); ++i)
+        CHECK(a.display_backends()[i].offset_ms.value() == offsets[i]);
+
+    // Squeezing out at -184.0 keeps that row and the one before it, and drops
+    // the three that land after it.
+    a.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -184.0});
+    std::vector<BackendSqueeze> shown = a.display_backends();
+    REQUIRE(shown.size() == 2);
+    CHECK(shown[0].offset_ms.value() == -368.1);
+    CHECK(shown[1].offset_ms.value() == -184.0);
 }
 
 TEST_CASE("Chord rowstr / notationstr / disco flip") {

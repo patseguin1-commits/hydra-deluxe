@@ -551,8 +551,26 @@ bool Activation::is_sqout_backend(const BackendSqueeze& bsq) const {
 }
 
 std::vector<BackendSqueeze> Activation::display_backends() const {
+    // Nothing past a squeezed-out note can be a backend: the sqout note is hit
+    // after SP has ended, and every later note is hit after that one. The
+    // engine's record build drops those rows now, but records stored before
+    // that fix carry them inside their blobs, so the display guards again
+    // here. Both a row's offset and sq.offset() are measured against the same
+    // deactivation node, so comparing offsets is comparing chart order; 0.01
+    // is the same epsilon is_sqout_backend uses to spot the sqout row itself,
+    // which stays.
+    auto is_beyond_sqout = [this](const BackendSqueeze& bsq) {
+        for (const SPSqueeze& sq : sqinouts) {
+            if (sq.kind == SqueezeKind::SqOut &&
+                bsq.offset_ms.value_or(0.0) > sq.offset() + 0.01)
+                return true;
+        }
+        return false;
+    };
+
     std::vector<BackendSqueeze> out;
     for (const BackendSqueeze& bsq : backends) {
+        if (is_beyond_sqout(bsq)) continue;
         if (std::fabs(bsq.offset_ms.value_or(0.0)) < kBackendDisplayWindowMs ||
             is_sqout_backend(bsq))
             out.push_back(bsq);
