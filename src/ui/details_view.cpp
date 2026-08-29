@@ -134,7 +134,7 @@ void render_controls(AppState& app) {
     begin_disabled_input(mslimit_disabled);
     ImGui::SetNextItemWidth(px(100));
     if (ImGui::InputInt("##mslimitvalue", &app.settings.mslimit_value)) {
-        app.settings.mslimit_value = std::clamp(app.settings.mslimit_value, -200, 200);
+        app.settings.mslimit_value = std::clamp(app.settings.mslimit_value, -500, 500);
         app.commit_settings();
     }
     ImGui::SameLine();
@@ -156,7 +156,7 @@ void render_controls(AppState& app) {
     ImGui::SetNextItemWidth(px(100));
     if (ImGui::InputInt("##backendlimitvalue", &app.settings.backendlimit_value)) {
         app.settings.backendlimit_value =
-            std::clamp(app.settings.backendlimit_value, 0, 200);
+            std::clamp(app.settings.backendlimit_value, 0, 500);
         app.commit_settings();
     }
     ImGui::SameLine();

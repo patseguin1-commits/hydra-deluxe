@@ -543,6 +543,12 @@ void test_backend_limit(ImGuiTestContext* ctx) {
     IM_CHECK_EQ(hydra::app::Settings::load_file(h.ini_path).backendlimit_value, 30);
     IM_CHECK(h.app->settings.backend_limit() == 30.0);
 
+    // The full engine window (500 ms) is reachable; beyond it clamps back.
+    ctx->ItemInputValue("**/##backendlimitvalue", 500);
+    IM_CHECK(wait_until(ctx, [&] { return h.app->settings.backendlimit_value == 500; }, 5));
+    ctx->ItemInputValue("**/##backendlimitvalue", 600);
+    IM_CHECK(wait_until(ctx, [&] { return h.app->settings.backendlimit_value == 500; }, 5));
+
     // Display-only: the record the modal shows is still the analyzed one.
     IM_CHECK(h.app->viewed.record.has_value());
     IM_CHECK(h.app->current_page.summaries[0].state ==
