@@ -582,3 +582,32 @@ TEST_CASE("timing_tiers: the ladder at W=85 and at W=70") {
     CHECK_FALSE(t70[5].cutoff.has_value());
     CHECK_FALSE(t70[6].cutoff.has_value());
 }
+
+TEST_CASE("display_backends: 500 ms window keeps everything the 500 ms search graph collects") {
+    // kBackendDisplayWindowMs moved from 170 to 500 to match the search
+    // graph's own collection window, so nothing it gathers gets trimmed at
+    // store/display time. 180 and -300 are the regression: both used to fall
+    // outside the old +-170 window and get dropped.
+    std::map<int64_t, int64_t> tpm{{0, 1920}};
+    std::map<int64_t, double> bpm{{0, 120.0}};
+    SongTiming st(480, tpm, bpm);
+
+    Activation act;
+    act.timecode = st.timecode(0);
+    act.sp_meter = 2;
+
+    const double offsets[] = {0.0, 180.0, -300.0, 499.0, 520.0};
+    for (double off : offsets) {
+        BackendSqueeze row;
+        row.timecode = st.timecode(0);
+        row.offset_ms = off;
+        act.backends.push_back(row);
+    }
+
+    std::vector<BackendSqueeze> kept = act.display_backends();
+    REQUIRE(kept.size() == 4);
+    CHECK(kept[0].offset_ms == doctest::Approx(0.0));
+    CHECK(kept[1].offset_ms == doctest::Approx(180.0));
+    CHECK(kept[2].offset_ms == doctest::Approx(-300.0));
+    CHECK(kept[3].offset_ms == doctest::Approx(499.0));
+}

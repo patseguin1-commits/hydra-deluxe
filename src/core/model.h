@@ -70,11 +70,10 @@ constexpr double kBackendLeewayMs = 3.0;
 // display-layer defaults below use it so all entry points agree.
 constexpr double kDefaultHitWindowMs = 85.0;
 
-// Backends within this window of the deactivation are worth showing/storing
-// (was hymisc.BACKEND_DISPLAY_WINDOW_MS = 140). 2x the 85 ms hit window, so
-// the trim covers the full nominal squeeze budget; raising the hit_window_ms
-// *setting* above 85 does not widen this analysis-time trim.
-constexpr double kBackendDisplayWindowMs = 170.0;
+// Backends within this window of the deactivation are stored and shown.
+// 500 matches the graph's squeeze window, so nothing the engine collects
+// is trimmed; the Backend limit setting narrows the display from here.
+constexpr double kBackendDisplayWindowMs = 500.0;
 
 // Calibration-fill (E) timing window, applied to e_offset in both directions:
 // an activation with e_offset < -window is illegal (the fill can't be

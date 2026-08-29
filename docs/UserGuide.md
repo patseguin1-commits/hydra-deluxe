@@ -95,7 +95,7 @@ When enabled, extra paths are only kept if their hardest required squeeze is wit
 Note: the limit compares raw squeeze milliseconds, measured at the SP end. It does not account for frontend timing scaling (see the note under Backends below), so where an activation shows a scale warning, a kept path can be somewhat harder to execute than its listed milliseconds suggest.
 
 #### Backend limit
-This is a display-only filter for the Backends tables in Path Details, not something the analyzer uses. When enabled, a backend row only shows if its timing is within plus/minus this many milliseconds — except a note the path squeezes out, which always shows no matter how far out it is. Off (the default) shows everything the analyzer stored, which reaches out to about ±170ms. Because it only changes what's displayed, flipping it never triggers a re-analysis.
+This is a display-only filter for the Backends tables in Path Details, not something the analyzer uses. When enabled, a backend row only shows if its timing is within plus/minus this many milliseconds — except a note the path squeezes out, which always shows no matter how far out it is. Off (the default) shows everything the analyzer stored, which reaches out to ±500ms. Because it only changes what's displayed, flipping it never triggers a re-analysis.
 
 #### SP cap
 The Star Power meter ceiling the analysis runs under, in bars. 4 is Clone Hero's rule and the default; leave it there for paths you intend to play. Any other number is a what-if whose scores are not achievable in game. Tick **Auto** to let Hydra raise the cap until the score stops improving, which approximates no ceiling at all (slower: up to two minutes per chart).

@@ -128,8 +128,11 @@ TEST_CASE("records round-trip through RecordStore across the corpus and config m
             // rebuild actually derives ms/measure position, not just ticks.
             if (d.empty() && !record->paths.empty() &&
                 record->best_path().has_activations()) {
-                const Activation& orig = record->best_path().all_activations().front();
-                const Activation& again = reloaded->best_path().all_activations().front();
+                // all_activations() returns by value; keep the vectors alive.
+                const auto orig_acts = record->best_path().all_activations();
+                const Activation& orig = orig_acts.front();
+                const auto again_acts = reloaded->best_path().all_activations();
+                const Activation& again = again_acts.front();
                 if (!again.timecode.has_value() ||
                     again.timecode->ticks() != orig.timecode->ticks() ||
                     again.timecode->ms() != orig.timecode->ms())
@@ -210,8 +213,10 @@ TEST_CASE("record blob: v3 carries transfer scales, v1/v2 still read") {
           record->allzero_paths.front().totalscore());
 
     // Version 3 activations carry the transfer scales bit-exactly.
-    const Activation& orig_act = record->best_path().all_activations().front();
-    const Activation& again_act = again.best_path().all_activations().front();
+    const auto orig_acts = record->best_path().all_activations();
+    const auto again_acts = again.best_path().all_activations();
+    const Activation& orig_act = orig_acts.front();
+    const Activation& again_act = again_acts.front();
     CHECK(again_act.transfer_pre.early == orig_act.transfer_pre.early);
     CHECK(again_act.transfer_pre.late == orig_act.transfer_pre.late);
     CHECK(again_act.transfer_post.early == orig_act.transfer_post.early);
@@ -256,7 +261,8 @@ TEST_CASE("record blob: v3 carries transfer scales, v1/v2 still read") {
 
     HydraRecord old2 = read_record(w.bytes);
     REQUIRE(old2.paths.size() == 1);
-    const Activation& a2 = old2.best_path().all_activations().front();
+    const auto a2_acts = old2.best_path().all_activations();
+    const Activation& a2 = a2_acts.front();
     // Missing scales default to the flat-tempo identity...
     CHECK(a2.transfer_pre.early == 1.0);
     CHECK(a2.transfer_pre.late == 1.0);
