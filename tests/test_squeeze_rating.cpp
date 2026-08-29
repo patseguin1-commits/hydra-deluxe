@@ -466,6 +466,74 @@ TEST_CASE("rate_activation: stored scales, materiality-gated warns and rows") {
     CHECK_FALSE(r.late_warns);
 }
 
+TEST_CASE("rate_activation: free squeezes read the opposite scale direction") {
+    // The governing direction follows the sign of the difficulty, not the
+    // squeeze kind. A squeeze you already have (difficulty <= 0) is not
+    // achieved by a frontend hit — it is destroyed by one, in the opposite
+    // direction, so that is the scale that decides whether it survives.
+
+    // A free sqout: the note sits +300 ms past the SP end already, so a LATE
+    // frontend hit is what could drag the end over it. With late 4.45 the
+    // 300 ms of margin is worth only 110 ms of the nominal budget.
+    Activation freeout;
+    freeout.skips = 0;
+    freeout.transfer_post = TransferScale{1.0, 4.45};
+    freeout.transfer_pre = freeout.transfer_post;
+    freeout.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, 300.0});
+    BackendSqueeze out_row;
+    out_row.offset_ms = 300.0;  // matches the sqout offset within 0.01
+    freeout.backends.push_back(out_row);
+
+    ActivationRating r = rate_activation(freeout, nullptr, 85.0);
+    REQUIRE(r.backends.size() == 1);
+    CHECK(r.backends[0].squeezed_out);
+    CHECK(r.backends[0].scale == doctest::Approx(4.45));
+    REQUIRE(r.backends[0].effective_ms.has_value());
+    CHECK(*r.backends[0].effective_ms ==
+          doctest::Approx(effective_backend_ms(300.0, 4.45)));
+    CHECK(r.late_backend_warns);
+    CHECK_FALSE(r.early_backend_warns);
+    // The phrase note flips with the row: same squeeze, same direction.
+    CHECK(r.late_note_warns);
+    CHECK_FALSE(r.early_note_warns);
+
+    // A difficult sqout keeps the achievement direction: the note is inside
+    // SP, so only an early frontend hit pulls the end back before it.
+    Activation hardout;
+    hardout.skips = 0;
+    hardout.transfer_post = TransferScale{0.5, 1.0};
+    hardout.transfer_pre = hardout.transfer_post;
+    hardout.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -50.0});
+    BackendSqueeze hard_row;
+    hard_row.offset_ms = -50.0;
+    hardout.backends.push_back(hard_row);
+
+    r = rate_activation(hardout, nullptr, 85.0);
+    REQUIRE(r.backends.size() == 1);
+    CHECK(r.backends[0].squeezed_out);
+    CHECK(r.backends[0].scale == doctest::Approx(0.5));
+    REQUIRE(r.backends[0].effective_ms.has_value());
+    CHECK(*r.backends[0].effective_ms ==
+          doctest::Approx(effective_backend_ms(50.0, 0.5)));
+    CHECK(r.early_backend_warns);
+    CHECK_FALSE(r.late_backend_warns);
+    CHECK(r.early_note_warns);
+
+    // A free SqIn (the note sits comfortably inside SP) is threatened by an
+    // early frontend hit, so it warns on the early scale.
+    Activation freein;
+    freein.skips = 0;
+    freein.transfer_pre = TransferScale{0.5, 1.0};
+    freein.transfer_post = freein.transfer_pre;
+    freein.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, -50.0});
+
+    r = rate_activation(freein, nullptr, 85.0);
+    CHECK(r.early_note_warns);
+    CHECK_FALSE(r.late_note_warns);
+    CHECK(r.early_warns);
+    CHECK_FALSE(r.late_warns);
+}
+
 TEST_CASE("rate_activation: a live timing overrides the stored scales") {
     // Flat 4/4 at one tempo: the live recompute yields identity scales even
     // though the record stored 0.5s — the stored values are only a fallback.

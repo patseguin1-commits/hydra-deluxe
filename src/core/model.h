@@ -241,8 +241,9 @@ private:
 // exactly on a meter/tempo change: an early (-) hit moves into the section
 // before the tick, a late (+) hit into the section at/after it.
 struct TransferScale {
-    double early = 1.0;  // r- : early (-) frontend hits (SqOut direction)
-    double late = 1.0;   // r+ : late (+) frontend hits (SqIns, backend squeezes)
+    double early = 1.0;  // r- : early (-) hits — difficult SqOuts, free SqIns
+    double late = 1.0;   // r+ : late (+) hits — difficult SqIns, free SqOuts,
+                         //      backend squeezes
 };
 
 struct Activation {

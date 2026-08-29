@@ -141,12 +141,17 @@ ActivationRating rate_activation(const Activation& act,
     if (!scales) scales = ActTransferScales{act.transfer_pre, act.transfer_post};
     out.scales = *scales;
 
-    // The scale that governs each row: sqout rows need an early frontend,
-    // positive rows a late one. Both live at the (possibly SqIn-extended) SP
-    // end, so they read `post`. effective_ms maps the row's raw ms onto the
-    // nominal 2*W budget the ratings assume (the real combined budget is
-    // W*(1+r)); it engages only when the scale actually moves the number (an
-    // over-budget row still warns at x1.00 but reads at face value).
+    // The scale that governs each row follows the sign of its offset, not the
+    // kind of squeeze. A sqout row still inside SP (offset < 0) has to be
+    // achieved by an early frontend hit, so it reads the early scale; a sqout
+    // row already past the SP end (offset > 0) is free, and the only thing
+    // that can destroy it is a late frontend hit dragging the end over it, so
+    // it reads the late scale. Plain positive rows want a late frontend hit.
+    // All of them live at the (possibly SqIn-extended) SP end, so they read
+    // `post`. effective_ms maps the row's raw ms onto the nominal 2*W budget
+    // the ratings assume (the real combined budget is W*(1+r)); it engages
+    // only when the scale actually moves the number (an over-budget row still
+    // warns at x1.00 but reads at face value).
     std::vector<BackendSqueeze> backends = act.display_backends();
     out.backends.reserve(backends.size());
     for (const BackendSqueeze& bsq : backends) {
@@ -155,7 +160,12 @@ ActivationRating rate_activation(const Activation& act,
         row.squeezed_out = act.is_sqout_backend(bsq);
         if (bsq.offset_ms) {
             bool applies = false;
-            if (row.squeezed_out) {
+            if (row.squeezed_out && *bsq.offset_ms > 0.0) {
+                row.scale = scales->post.late;
+                applies = transfer_is_material(*bsq.offset_ms, row.scale,
+                                               hit_window_ms);
+                out.late_backend_warns |= applies;
+            } else if (row.squeezed_out) {
                 row.scale = scales->post.early;
                 applies = transfer_is_material(*bsq.offset_ms, row.scale,
                                                hit_window_ms);
@@ -176,11 +186,19 @@ ActivationRating rate_activation(const Activation& act,
         out.backends.push_back(std::move(row));
     }
 
-    // The SqIn/SqOut phrase notes are judged at the pre-extension end: a
-    // SqOut wants an early (-) frontend hit, a SqIn a late (+) one. They have
+    // The SqIn/SqOut phrase notes are judged at the pre-extension end, in the
+    // direction that decides them. A squeeze you still have to earn
+    // (difficulty > 0) is decided by the hit that achieves it: early (-) for a
+    // SqOut, late (+) for a SqIn. A free one (difficulty <= 0) is already
+    // yours, so the direction that matters is the opposite one -- the frontend
+    // error that would move the SP end far enough to take it away. They have
     // no display row of their own, so they only feed the warning line.
     for (const SPSqueeze& sq : act.sqinouts) {
-        if (sq.kind == SqueezeKind::SqOut)
+        bool achieved_early = (sq.kind == SqueezeKind::SqOut);
+        // At difficulty 0 the gap is 0 and nothing can be material, so the
+        // achievement direction stands.
+        bool early = sq.difficulty() >= 0.0 ? achieved_early : !achieved_early;
+        if (early)
             out.early_note_warns |= transfer_is_material(
                 sq.difficulty(), scales->pre.early, hit_window_ms);
         else
