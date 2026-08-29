@@ -47,6 +47,6 @@
     "msaa": 4,
     "sp_active_color": "#6cf7c6",
     "sp_active_darken": 0.2,
-    "fill_activation_lane_boost": 1.0
+    "fill_offered_alpha": 0.35
   }
 }

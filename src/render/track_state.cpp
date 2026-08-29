@@ -69,16 +69,22 @@ TrackState build_track_state(const PreviewScene& scene, const TrackStateOptions&
     };
     for (const PreviewSpan& s : scene.sp_phrases) st.overdrive_.push_back(span_iv(s, kSpanEndEpsilonS));
     for (const PreviewSpan& s : scene.solos) st.solo_.push_back(span_iv(s, kSpanEndEpsilonS));
-    for (const PreviewSpan& s : scene.fills) st.fill_.push_back(span_iv(s, kSpanEndEpsilonS));
+    // A hidden fill is one the game never showed, so it draws nothing.
+    for (const app::PreviewFill& f : scene.fills) {
+        if (f.state == app::PreviewFillState::Offered)
+            st.fill_.push_back(span_iv(f.span, kSpanEndEpsilonS));
+        else if (f.state == app::PreviewFillState::Taken)
+            st.fill_taken_.push_back(span_iv(f.span, kSpanEndEpsilonS));
+    }
     for (const PreviewActivation& a : scene.activations) {
         if (a.has_sp_end && a.sp_end_ms > a.ms)
             st.sp_active_.push_back({s_of(a.ms), s_of(a.sp_end_ms)});
         if (a.has_lane) {
             std::optional<Pad> pad = pad_of(a.lane);
             if (!pad) continue;
-            for (const PreviewSpan& f : scene.fills) {
-                if (f.end_tick != a.tick) continue;
-                st.fill_lane_.push_back({span_iv(f, kSpanEndEpsilonS), *pad});
+            for (const app::PreviewFill& f : scene.fills) {
+                if (f.state != app::PreviewFillState::Taken || f.span.end_tick != a.tick) continue;
+                st.fill_lane_.push_back({span_iv(f.span, kSpanEndEpsilonS), *pad});
                 break;
             }
         }
@@ -102,6 +108,7 @@ TrackState build_track_state(const PreviewScene& scene, const TrackStateOptions&
     edges(st.overdrive_);
     edges(st.solo_);
     edges(st.fill_);
+    edges(st.fill_taken_);
     edges(st.sp_active_);
     for (const auto& li : st.fill_lane_) {
         at(li.span.first);
@@ -115,6 +122,7 @@ TrackState build_track_state(const PreviewScene& scene, const TrackStateOptions&
         inst.overdrive = filled.overdrive;
         inst.solo = filled.solo;
         inst.fill = filled.fill;
+        inst.fill_taken = filled.fill_taken;
         inst.sp_active = filled.sp_active;
         inst.fill_lane = filled.fill_lane;
         inst.fill_lane_pad = filled.fill_lane_pad;
@@ -129,6 +137,7 @@ TrackInstant TrackState::synthesize(double t) const {
     inst.overdrive = toggle_at(overdrive_, t);
     inst.solo = toggle_at(solo_, t);
     inst.fill = toggle_at(fill_, t);
+    inst.fill_taken = toggle_at(fill_taken_, t);
     inst.sp_active = toggle_at(sp_active_, t);
     std::vector<Interval> lane_ivs;
     for (const LaneInterval& li : fill_lane_) lane_ivs.push_back(li.span);

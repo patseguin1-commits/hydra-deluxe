@@ -4,6 +4,7 @@
 #include "app/preview_view.h"
 
 #include <cstdio>
+#include <limits>
 #include <optional>
 
 #include "core/squeeze_rating.h"
@@ -81,7 +82,9 @@ PreviewScene build_preview_scene(const Song& song, const Path* path) {
         // ticks wide.
         if (ts.activation_length.has_value()) {
             int64_t end = ts.timecode.ticks();
-            scene.fills.push_back(span_from_ticks(song, end - *ts.activation_length, end));
+            PreviewFill f;
+            f.span = span_from_ticks(song, end - *ts.activation_length, end);
+            scene.fills.push_back(f);  // state is filled in from the path below
         }
     }
     if (in_solo)
@@ -127,6 +130,36 @@ PreviewScene build_preview_scene(const Song& song, const Path* path) {
                 pa.lane = lane_of(a.chord->activation_note().colortype);
             }
             scene.activations.push_back(pa);
+        }
+    }
+
+    // Which fills the game would have shown. Without a path we cannot know, so
+    // every candidate is drawn as offered.
+    if (path == nullptr) {
+        for (PreviewFill& f : scene.fills) f.state = PreviewFillState::Offered;
+    } else {
+        // `skips` counts the real opportunities the path passed over right
+        // before an activation: the search charges a skip only when the player
+        // had enough SP and the deadline still allowed it, and resets the count
+        // at each activation. So for an activation with skips == n, the n
+        // candidates nearest before it (and after the previous activation) were
+        // offered, its own candidate was taken, and every other candidate was
+        // hidden — the game would not have shown it. Candidates after the last
+        // activation stay hidden: the engine records nothing about them.
+        int64_t prev_tick = std::numeric_limits<int64_t>::min();
+        for (const PreviewActivation& a : scene.activations) {
+            for (PreviewFill& f : scene.fills)
+                if (f.span.end_tick == a.tick) {
+                    f.state = PreviewFillState::Taken;
+                    break;
+                }
+            int left = a.skips;
+            for (auto it = scene.fills.rbegin(); it != scene.fills.rend() && left > 0; ++it) {
+                if (it->span.end_tick >= a.tick || it->span.end_tick <= prev_tick) continue;
+                it->state = PreviewFillState::Offered;
+                --left;
+            }
+            prev_tick = a.tick;
         }
     }
     return scene;
@@ -209,6 +242,11 @@ PreviewTimeBox build_time_box(const PreviewScene& scene, double now_ms) {
     if (!s.empty() && s.back() == '.') s.pop_back();
     box.bpm = s + " BPM";
     return box;
+}
+
+std::string path_overlay_key(const Path* path) {
+    if (path == nullptr) return {};
+    return path->pathstring_verbose() + "|" + std::to_string(path->totalscore());
 }
 
 }  // namespace hydra::app

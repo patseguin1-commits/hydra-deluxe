@@ -84,7 +84,16 @@ std::map<std::string, int> count_chart_chords(const std::string& filepath);
 struct AnalysisSettings : SearchSettings {
     bool prodrums = true;
     bool bass2x = true;
+    // Which charted difficulty to read. Expert by default, so every existing
+    // caller keeps the behavior it had.
+    Difficulty difficulty = Difficulty::Expert;
 };
+
+// The store lens these settings would produce a result under: the ms limit
+// and the score range, canonicalized. Agrees with Settings::lens() for the
+// same settings (test_config pins that), so the GUI and the CLIs file their
+// results under the same key.
+store::Lens lens_from(const AnalysisSettings& settings);
 
 // Loads and analyzes one chart file (.mid/.chart/.sng/.srb), producing a record and
 // the song's timing (for the store's songmeta row). Mirrors

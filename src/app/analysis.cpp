@@ -559,9 +559,26 @@ std::map<std::string, int> count_chart_chords(const std::string& filepath) {
 AnalysisResult analyze_chart_file(const std::string& filepath,
                                   const AnalysisSettings& settings,
                                   const std::function<void(float)>& on_progress) {
-    Song song = load_songpath(filepath, settings.prodrums, settings.bass2x);
+    Song song =
+        load_songpath(filepath, settings.prodrums, settings.bass2x, settings.difficulty);
+    // Say which difficulty is missing. The search's own backstop can only say
+    // "no notes"; here we know what the user asked for, and a chart that
+    // simply has no Hard charting is the common case.
+    if (song.is_empty())
+        throw ChartFileError(std::string("No ") + difficulty_name(settings.difficulty) +
+                             (settings.prodrums ? " Pro Drums" : " Drums") +
+                             " notes in this chart.");
     HydraRecord record = analyze_chart(song, settings, on_progress);
     return AnalysisResult{std::move(record), std::move(song)};
+}
+
+store::Lens lens_from(const AnalysisSettings& settings) {
+    // ms_filter is a double only because the engine compares against one; the
+    // value always came from Settings::mslimit_value, an int.
+    std::optional<int> ms;
+    if (settings.ms_filter) ms = static_cast<int>(*settings.ms_filter);
+    return store::Lens::from(ms, settings.depth_mode == DepthMode::Points ? 1 : 0,
+                             settings.depth_value);
 }
 
 // ---- batch runner -----------------------------------------------------
@@ -593,12 +610,15 @@ void run_batch(const std::vector<ScanItem>& items, const std::string& chartmode,
               const std::function<void(const ScanItem&, const store::PreparedRow&)>& on_result,
               const std::atomic<bool>* cancel) {
     // "Already has a result" means a current-version record at the cap this
-    // run would produce (Auto: any record above 4 bars), so stale rows and
-    // other caps' rows are re-run rather than skipped.
+    // run would produce (Auto: any record above 4 bars) AND under this run's
+    // ms limit and score range, so stale rows, other caps' rows and other
+    // settings' rows are re-run rather than skipped.
     const store::CapQuery cap = store::CapQuery::from_setting(settings.sp_cap);
+    const store::Lens lens = lens_from(settings);
     std::vector<const ScanItem*> todo;
     for (const ScanItem& item : items) {
-        if (!redo && store.has_record(store::RecordKey{item.md5, chartmode, cap})) continue;
+        if (!redo && store.has_record(store::RecordKey{item.md5, chartmode, cap, lens}))
+            continue;
         todo.push_back(&item);
     }
 
@@ -628,7 +648,7 @@ void run_batch(const std::vector<ScanItem>& items, const std::string& chartmode,
                 try {
                     AnalysisResult ar = analyze_chart_file(item->notespath, settings);
                     wr.row = store::prepare_row(
-                        store::RecordKey{item->md5, chartmode, cap}, ar.record);
+                        store::RecordKey{item->md5, chartmode, cap, lens}, ar.record);
                     wr.analysis = std::move(ar);
                 } catch (const std::exception& e) {
                     wr.error = e.what();

@@ -156,12 +156,12 @@ ActivationRating rate_activation(const Activation& act,
                 row.scale = scales->post.early;
                 applies = transfer_is_material(*bsq.offset_ms, row.scale,
                                                hit_window_ms);
-                out.early_warns |= applies;
+                out.early_backend_warns |= applies;
             } else if (*bsq.offset_ms > kDifficultMs) {
                 row.scale = scales->post.late;
                 applies = transfer_is_material(*bsq.offset_ms, row.scale,
                                                hit_window_ms);
-                out.late_warns |= applies;
+                out.late_backend_warns |= applies;
             }
             if (applies)
                 row.effective_ms = effective_backend_ms(*bsq.offset_ms, row.scale);
@@ -175,14 +175,15 @@ ActivationRating rate_activation(const Activation& act,
     // no display row of their own, so they only feed the warning line.
     for (const SPSqueeze& sq : act.sqinouts) {
         if (sq.kind == SqueezeKind::SqOut)
-            out.early_warns |= transfer_is_material(sq.difficulty(),
-                                                    scales->pre.early,
-                                                    hit_window_ms);
+            out.early_note_warns |= transfer_is_material(
+                sq.difficulty(), scales->pre.early, hit_window_ms);
         else
-            out.late_warns |= transfer_is_material(sq.difficulty(),
-                                                   scales->pre.late,
-                                                   hit_window_ms);
+            out.late_note_warns |= transfer_is_material(
+                sq.difficulty(), scales->pre.late, hit_window_ms);
     }
+
+    out.late_warns = out.late_backend_warns || out.late_note_warns;
+    out.early_warns = out.early_backend_warns || out.early_note_warns;
 
     return out;
 }

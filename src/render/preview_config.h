@@ -69,7 +69,8 @@ struct PreviewConfig {
         int msaa = 4;  // mirrors Onyx's prefMSAA default
         Color sp_active_color{0x6c / 255.0f, 0xf7 / 255.0f, 0xc6 / 255.0f, 1};
         float sp_active_darken = 0.2f;
-        float fill_activation_lane_boost = 1.0f;
+        // How dim a fill the path passed over draws, next to the taken one.
+        float fill_offered_alpha = 0.35f;
     } hydra;
 };
 

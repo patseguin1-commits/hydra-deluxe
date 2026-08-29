@@ -23,6 +23,7 @@
 #include "core/winstr.h"
 #include "corpus_util.h"
 #include "miniz.h"
+#include "multidiff_chart.h"
 #include "parse/song.h"
 
 using namespace hydra;
@@ -147,10 +148,11 @@ std::vector<uint8_t> make_metadata(const std::string& notes_filename) {
 // 16-byte header + deflated metadata + deflated notes + one deflated stream per
 // `extra`, like a real bundle's trailing audio/art streams.
 std::vector<uint8_t> make_srb(const std::vector<uint8_t>& notes,
-                              const std::vector<std::vector<uint8_t>>& extra) {
+                              const std::vector<std::vector<uint8_t>>& extra,
+                              const std::string& notes_filename = "notes.mid") {
     std::vector<uint8_t> out;
     for (int i = 0; i < 16; ++i) out.push_back(static_cast<uint8_t>(0xA0 + i));
-    std::vector<uint8_t> s1 = deflate_raw(make_metadata("notes.mid"));
+    std::vector<uint8_t> s1 = deflate_raw(make_metadata(notes_filename));
     std::vector<uint8_t> s2 = deflate_raw(notes);
     out.insert(out.end(), s1.begin(), s1.end());
     out.insert(out.end(), s2.begin(), s2.end());
@@ -249,6 +251,26 @@ TEST_CASE("extract_srb_audio: trailing audio streams inflate; art is skipped") {
     CHECK(src.stems.size() == 1);
 }
 
+TEST_CASE("resolve_preview_source: a .srb with no extractable audio falls "
+          "back to a loose file beside it") {
+    // Mirrors a real Clone Hero bundle: extract_srb_audio finds nothing
+    // (its audio is encrypted, outside the DEFLATE chain this reads), so
+    // resolve_preview_source should still find a stem placed next to it.
+    std::string dir = make_subdir("srb_fallback");
+    std::vector<uint8_t> notes = hydra::read_file_bytes(
+        corpus::first_chart_with_suffix(".mid"));
+    write_bytes(dir + "\\bundle.srb", make_srb(notes, {}));
+    write_bytes(dir + "\\song.ogg", bytes_of("OggS fallback audio"));
+
+    CHECK(extract_srb_audio(dir + "\\bundle.srb").empty());
+
+    PreviewSource src = resolve_preview_source(dir + "\\bundle.srb", true, true);
+    CHECK_FALSE(src.song.is_empty());
+    REQUIRE(src.stems.size() == 1);
+    CHECK(src.stems[0].label == "song");
+    CHECK(src.stems[0].from_file());
+}
+
 TEST_CASE("resolve_preview_source: a loose chart parses and finds its audio") {
     std::string dir = make_subdir("resolve_loose");
     std::vector<uint8_t> notes = hydra::read_file_bytes(
@@ -261,4 +283,36 @@ TEST_CASE("resolve_preview_source: a loose chart parses and finds its audio") {
     REQUIRE(src.stems.size() == 1);
     CHECK(src.stems[0].label == "song");
     CHECK(src.stems[0].from_file());
+}
+
+TEST_CASE("containers pass the difficulty through to the chart inside") {
+    // .sng and .srb are pure containers: they hand the extracted notes to the
+    // .mid/.chart loader, so the difficulty has to survive the trip. The
+    // fixture chart has four deliberately different difficulty sections.
+    const std::vector<uint8_t> notes = multidiff::chart_bytes();
+
+    std::string sng = fixture_dir() + "\\multidiff.sng";
+    write_bytes(sng, make_sng({{"notes.chart", notes},
+                               {"song.ogg", bytes_of("OggS audio")}}));
+
+    std::string srb = fixture_dir() + "\\multidiff.srb";
+    write_bytes(srb, make_srb(notes, {}, "notes.chart"));
+
+    for (const std::string& path : {sng, srb}) {
+        CHECK(resolve_preview_source(path, true, true).song.sequence.size() ==
+              multidiff::kExpertChords);
+        CHECK(resolve_preview_source(path, true, true, Difficulty::Hard)
+                  .song.sequence.size() == multidiff::kHardChords);
+        CHECK(resolve_preview_source(path, true, true, Difficulty::Easy)
+                  .song.sequence.size() == multidiff::kEasyChords);
+        // No [MediumDrums] section: an empty song, not a fallback.
+        CHECK(resolve_preview_source(path, true, true, Difficulty::Medium)
+                  .song.is_empty());
+    }
+
+    // The same, straight through the loaders (no preview resolution involved).
+    CHECK(load_songpath_sng(sng, true, true, Difficulty::Hard).sequence.size() ==
+          multidiff::kHardChords);
+    CHECK(load_songpath_srb(srb, true, true, Difficulty::Hard).sequence.size() ==
+          multidiff::kHardChords);
 }

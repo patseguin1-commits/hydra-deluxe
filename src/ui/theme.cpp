@@ -89,4 +89,20 @@ void end_disabled_input(bool disabled) {
     ImGui::EndDisabled();
 }
 
+void begin_disabled_checkbox(bool disabled) {
+    ImGui::BeginDisabled(disabled);
+    if (disabled) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kNewSongColor);
+        ImGui::PushStyleColor(ImGuiCol_CheckMark, kNewSongColor);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, kDisabledInputBgColor);
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, kDisabledInputBgColor);
+        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, kDisabledInputBgColor);
+    }
+}
+
+void end_disabled_checkbox(bool disabled) {
+    if (disabled) ImGui::PopStyleColor(5);
+    ImGui::EndDisabled();
+}
+
 }  // namespace hydra::ui

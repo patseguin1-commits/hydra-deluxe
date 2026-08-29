@@ -117,7 +117,7 @@ PreviewConfig load_preview_config(const std::string& json_text) {
     get_i(hy, "msaa", c.hydra.msaa);
     get_color(hy, "sp_active_color", c.hydra.sp_active_color);
     get_f(hy, "sp_active_darken", c.hydra.sp_active_darken);
-    get_f(hy, "fill_activation_lane_boost", c.hydra.fill_activation_lane_boost);
+    get_f(hy, "fill_offered_alpha", c.hydra.fill_offered_alpha);
 
     return c;
 }

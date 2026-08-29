@@ -35,11 +35,14 @@ could never show a fresh Auto run that settled lower. The user pressed
 Analyze, the ladder settled at 64, the store kept the 64-bar row, and the view
 went on showing the 1728-bar row with its stale depth and ms settings. Newest
 wins means an Auto run always becomes the Auto answer; the taller row stays
-for an explicit lookup at its cap.
+for an explicit lookup at its cap. *(Refined by ADR-0009: Auto now also
+requires the row's ms limit and score range to match the current settings;
+version-then-newest breaks ties within that.)*
 
 **The ms limit and score range do not key a record.** They are stored on it
 and shown, as before; re-analyzing with a different value overwrites. Only the
-cap changes a record's identity.
+cap changes a record's identity. *(Superseded by ADR-0009: the ms limit and
+score range now key a record too.)*
 
 ## What this costs
 

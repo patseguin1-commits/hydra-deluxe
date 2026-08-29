@@ -17,10 +17,12 @@
 #define HYDRA_UI_PREVIEW_CONTROLLER_H
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "app/preview_view.h"
 #include "core/model.h"  // Path
+#include "parse/song.h"
 #include "render/preview_renderer.h"
 #include "store/record_store.h"  // ChartLibraryEntry
 #include "ui/preview_transport.h"
@@ -45,17 +47,23 @@ public:
     PreviewController(const PreviewController&) = delete;
     PreviewController& operator=(const PreviewController&) = delete;
 
-    // (Re)start the preview for `entry`. A no-op if already open for the same
-    // chart. `path` (may be null) supplies the activation overlay; it is copied,
-    // so the caller's Path need not outlive the call.
+    // (Re)start the preview for `entry`. Called every frame the Preview tab is
+    // shown. `path` (may be null) supplies the path overlay; it is copied, so
+    // the caller's Path need not outlive the call. Already open for the same
+    // chart and the same path: a no-op. Same chart, different path: the overlay
+    // is swapped in place off the retained song — no re-parse, no audio
+    // re-decode, playback position untouched.
     void open(const store::ChartLibraryEntry& entry, bool pro, bool bass2x,
-              const Path* path);
+              Difficulty difficulty, const Path* path);
     // Stop audio, drop the scene/transport, and join the load thread. Keeps the
     // renderer for reuse. Safe to call when nothing is open.
     void close();
 
     bool active() const { return active_; }
     const std::string& open_key() const { return open_key_; }
+    // Which path the drawn overlay was built from (app::path_overlay_key);
+    // empty when there is no overlay or nothing has loaded yet.
+    const std::string& overlay_path_key() const { return scene_path_key_; }
 
     // Advance the async load; once finished, build the transport + audio device.
     // Call once per frame while the Preview tab is shown.
@@ -118,6 +126,17 @@ private:
     hydra::app::PreviewScene scene_;
     bool scene_dirty_ = true;  // scene_ changed since the renderer last saw it
     bool pro_ = true;          // the pro-drums view setting the chart was opened with
+
+    // The path overlay, kept swappable without touching the audio: the parsed
+    // song the load produced, the overlay the panel last asked for, and the one
+    // scene_ was actually built with. The two keys differ only while a load is
+    // in flight and the Paths tab changed the selection under it; poll()
+    // closes the gap.
+    std::optional<Song> song_;
+    std::optional<Path> path_;
+    std::string path_key_;        // key of path_
+    std::string job_path_key_;    // key the in-flight job was started with
+    std::string scene_path_key_;  // key scene_'s overlay was built from
 
     int volume_pct_ = 40;
     bool scrubbing_ = false;

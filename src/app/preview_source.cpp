@@ -190,13 +190,17 @@ std::vector<PreviewAudioStem> extract_srb_audio(const std::string& path) {
 }
 
 PreviewSource resolve_preview_source(const std::string& notespath, bool pro,
-                                     bool bass2x) {
-    PreviewSource src{load_songpath(notespath, pro, bass2x), {}};
+                                     bool bass2x, Difficulty difficulty) {
+    PreviewSource src{load_songpath(notespath, pro, bass2x, difficulty), {}};
     if (ends_with_ci(notespath, ".sng"))
         src.stems = extract_sng_audio(notespath);
-    else if (ends_with_ci(notespath, ".srb"))
+    else if (ends_with_ci(notespath, ".srb")) {
         src.stems = extract_srb_audio(notespath);
-    else
+        // The bundled songs' own audio is encrypted (real container, not the
+        // DEFLATE chain this walks) and unreadable; fall back to a loose copy
+        // placed next to the chart, same as a folder chart uses.
+        if (src.stems.empty()) src.stems = find_loose_audio(dir_name(notespath));
+    } else
         src.stems = find_loose_audio(dir_name(notespath));
     return src;
 }

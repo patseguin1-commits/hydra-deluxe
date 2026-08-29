@@ -5,7 +5,7 @@
 // meter maps. The MidiParser and ChartParser live in the .cpp; callers use the
 // load_songpath_* functions.
 //
-// The parsers read the Expert charting only.
+// Every load_* function takes the difficulty to read and defaults to Expert.
 
 #ifndef HYDRA_PARSE_SONG_H
 #define HYDRA_PARSE_SONG_H
@@ -20,6 +20,16 @@
 #include "core/timing.h"
 
 namespace hydra {
+
+// Which charted difficulty to read. One chart carries all four: a .mid keeps
+// them in the single "PART DRUMS" track at four pitch bases, a .chart keeps
+// them in four named sections. Expert is the default everywhere, so passing
+// nothing reads exactly what Hydra always read.
+enum class Difficulty { Expert, Hard, Medium, Easy };
+
+// "Expert" / "Hard" / "Medium" / "Easy" — the name used in the .chart section
+// name, the chartmode key, and the user-facing error strings.
+const char* difficulty_name(Difficulty difficulty);
 
 // A timecode paired with a chord and gameplay modifiers, mirroring
 // hysong.SongTimestamp.
@@ -77,16 +87,23 @@ private:
     std::optional<SongTiming> timing_;
 };
 
-Song load_songpath_mid(const std::string& path, bool pro, bool bass2x);
-Song load_songpath_chart(const std::string& path, bool pro, bool bass2x);
-Song load_songpath_sng(const std::string& path, bool pro, bool bass2x);
-Song load_songpath_srb(const std::string& path, bool pro, bool bass2x);
+Song load_songpath_mid(const std::string& path, bool pro, bool bass2x,
+                       Difficulty difficulty = Difficulty::Expert);
+Song load_songpath_chart(const std::string& path, bool pro, bool bass2x,
+                         Difficulty difficulty = Difficulty::Expert);
+Song load_songpath_sng(const std::string& path, bool pro, bool bass2x,
+                       Difficulty difficulty = Difficulty::Expert);
+Song load_songpath_srb(const std::string& path, bool pro, bool bass2x,
+                       Difficulty difficulty = Difficulty::Expert);
 
-Song load_songbytes_mid(const std::vector<uint8_t>& data, bool pro, bool bass2x);
-Song load_songbytes_chart(const std::vector<uint8_t>& data, bool pro, bool bass2x);
+Song load_songbytes_mid(const std::vector<uint8_t>& data, bool pro, bool bass2x,
+                        Difficulty difficulty = Difficulty::Expert);
+Song load_songbytes_chart(const std::vector<uint8_t>& data, bool pro, bool bass2x,
+                          Difficulty difficulty = Difficulty::Expert);
 
 // Dispatch on the file extension (.mid/.chart/.sng/.srb, case-insensitive).
-Song load_songpath(const std::string& path, bool pro, bool bass2x);
+Song load_songpath(const std::string& path, bool pro, bool bass2x,
+                   Difficulty difficulty = Difficulty::Expert);
 
 }  // namespace hydra
 

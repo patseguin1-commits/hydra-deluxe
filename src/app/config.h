@@ -66,6 +66,13 @@ struct Settings {
     bool mslimit_enabled = true;
     int mslimit_value = 10;
 
+    // The backend tables' display window: when enabled, only backend rows
+    // within +/- this many ms are shown (squeezed-out rows always show).
+    // Display-layer only, like hit_window_ms: it never reaches the search,
+    // so changing it never invalidates stored records.
+    bool backendlimit_enabled = false;
+    int backendlimit_value = 50;
+
     // The per-side hit window in real ms; feeds the squeeze budgets, the
     // backend ratings, and the report tiers. Display-layer only: it never
     // reaches the search, so changing it never invalidates stored records.
@@ -99,16 +106,34 @@ struct Settings {
     static Settings load_file(const std::string& path);
     bool save_file(const std::string& path) const;
 
+    // view_difficulty as the parsers' enum. An unrecognized string reads as
+    // Expert; load_file normalizes the stored string too, so a hand-edited INI
+    // can never put a junk word into chartmode_key().
+    Difficulty difficulty() const;
+
+    // 2x Bass with the Expert-only rule applied. A second kick pedal is an
+    // Expert charting concept, so the other three difficulties always analyze
+    // (and preview, and file their records) as 1x.
+    bool effective_bass2x() const;
+
     // "Expert Pro Drums, 2x Bass" — mirrors HyAppUserSettings.chartmode_key.
     std::string chartmode_key() const;
 
     AnalysisSettings to_analysis_settings() const;
 
+    // The backend display window as the view-model wants it: the value when
+    // the limit is on, nullopt (show every stored row) when off.
+    std::optional<double> backend_limit() const;
+
     // Which stored record the current SP cap asks for (store::CapQuery).
     store::CapQuery cap_query() const;
 
+    // The rest of the settings a stored result is keyed by: the ms limit and
+    // the score range, in the store's canonical form.
+    store::Lens lens() const;
+
     // The identity of one chart's record under the current settings: this
-    // hash, the current chartmode, and the current SP cap.
+    // hash, the current chartmode, the current SP cap and the current lens.
     store::RecordKey record_key(const std::string& hyhash) const;
 };
 

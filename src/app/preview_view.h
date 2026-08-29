@@ -1,9 +1,10 @@
 // Preview view-model — the note highway as plain data, built here so the
 // derivation is testable without a Direct3D frame or an audio device.
 //
-// The Preview tab renders a chart's Expert pro-drums notes as a scrolling 3D
-// highway (see docs/adr/0005). This module turns a parsed Song (and, when the
-// chart has been analyzed, the optimal Path) into a PreviewScene: notes with
+// The Preview tab renders a chart's notes — at the difficulty and drum mode
+// the library's View row selects — as a scrolling 3D highway (see
+// docs/adr/0005). This module turns a parsed Song (and, when the
+// chart has been analyzed, the selected Path) into a PreviewScene: notes with
 // their lane and drum attributes at resolved ms/measure positions, plus the
 // spans the highway shades — SP phrases, solos, and activation fills — and the
 // path overlay's activation moments. The renderer and the transport UI consume
@@ -55,7 +56,20 @@ struct PreviewSpan {
     double end_ms = 0.0;
 };
 
-// One activation the optimal path takes: where the player deploys banked SP.
+// What the game would have done with one candidate activation fill, read off
+// the path's own skip counts (see build_preview_scene):
+//   Hidden  — never shown: not enough SP banked, or SP was already running.
+//   Offered — shown and passed over: the path could have activated here.
+//   Taken   — the fill the path activates on.
+enum class PreviewFillState { Hidden, Offered, Taken };
+
+// One candidate activation fill and what the path did with it.
+struct PreviewFill {
+    PreviewSpan span;
+    PreviewFillState state = PreviewFillState::Hidden;
+};
+
+// One activation the selected path takes: where the player deploys banked SP.
 struct PreviewActivation {
     int64_t tick = 0;
     double ms = 0.0;
@@ -97,7 +111,7 @@ struct PreviewScene {
     std::vector<PreviewNote> notes;
     std::vector<PreviewSpan> sp_phrases;    // from the song's SP-phrase flags
     std::vector<PreviewSpan> solos;         // from per-note solo flags
-    std::vector<PreviewSpan> fills;         // candidate activation-fill windows
+    std::vector<PreviewFill> fills;         // candidate activation-fill windows
     std::vector<PreviewActivation> activations;  // overlay: the path's activations
     std::vector<PreviewBeat> beats;    // bar/beat/half-beat lines, tick order
     std::vector<PreviewTempo> tempos;  // tempo changes, tick order
@@ -123,11 +137,18 @@ struct PreviewTimeBox {
 PreviewTimeBox build_time_box(const PreviewScene& scene, double now_ms);
 
 // Build the scene from a parsed song. `path` may be null (the chart is not
-// analyzed yet): then `activations` is empty and everything else is present, so
-// the Preview works for any selected chart. When `path` is given, its
-// activations (those carrying a timecode) become the overlay, their ms resolved
-// against the song's own timing so they line up with the notes exactly.
+// analyzed yet): then `activations` is empty, every candidate fill reads
+// Offered, and everything else is present, so the Preview works for any
+// selected chart. When `path` is given, its activations (those carrying a
+// timecode) become the overlay, their ms resolved against the song's own
+// timing so they line up with the notes exactly, and each candidate fill is
+// classified Hidden / Offered / Taken from the activations' skip counts.
 PreviewScene build_preview_scene(const Song& song, const Path* path);
+
+// Identity of the path an overlay was built from. Path has no operator==, so
+// callers that must notice a changed selection compare these keys instead. A
+// null path (no overlay) gives an empty key.
+std::string path_overlay_key(const Path* path);
 
 }  // namespace hydra::app
 

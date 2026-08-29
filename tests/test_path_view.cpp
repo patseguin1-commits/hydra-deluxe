@@ -68,12 +68,12 @@ TEST_CASE("build_record_status: the three states and their lines") {
           "Best score:  " + group_thousands(rec.best_path().totalscore()));
     CHECK(view.lines[1] ==
           "Paths kept:  " + std::to_string((int)rec.all_paths().size()));
-    CHECK(view.lines[2] == "Limit timings:  10 ms");
+    CHECK(view.lines[2] == "Path limit:  10 ms");
     CHECK(view.lines[3] == "SP cap:  4 bars");
 
     HydraRecord nolimit = rec;
     nolimit.ms_limit.reset();
-    CHECK(build_record_status(ready(nolimit)).lines[2] == "Limit timings:  off");
+    CHECK(build_record_status(ready(nolimit)).lines[2] == "Path limit:  off");
 
     // The cap line always names the cap the record ran at.
     HydraRecord whatif = rec;
@@ -137,7 +137,7 @@ TEST_CASE("build_path_list: score groups and the all-0 dedupe rule") {
     CHECK(total == flat.size());
     CHECK(list.groups.front().score_label ==
           group_thousands(flat.front()->totalscore()));
-    CHECK(list.more_label == "More Paths (Limit timings: 10 ms)");
+    CHECK(list.more_label == "More Paths (Path limit: 10 ms)");
 
     // An all-0 path that duplicates a listed path (same score AND notation)
     // stays hidden.
@@ -183,6 +183,98 @@ TEST_CASE("build_activations: headers, footer, and backend rows line up") {
     CHECK(view.footer[0].text ==
           "Leftover SP: " + std::to_string(best.leftover_sp) + ".");
     CHECK_FALSE(view.footer[0].warn);
+}
+
+TEST_CASE("build_activations: the scale warning prints the end that warned") {
+    HydraRecord rec;  // only feeds the footer; irrelevant here
+    auto warning_of = [&rec](const Activation& act) {
+        Path p;
+        p.activations.push_back(act);
+        ActivationsView v = build_activations(p, rec, nullptr, 85.0);
+        REQUIRE(v.acts.size() == 1);
+        return v.acts[0].scale_warning;
+    };
+
+    Activation base;
+    base.skips = 0;
+    base.e_offset = 300.0;  // not e-critical
+
+    // A SqIn is judged at the pre (pre-extension) end. With post at identity,
+    // the line must print the pre scale and name the SqIn's end -- the old
+    // code printed post's meaningless x1.00.
+    Activation sqin = base;
+    sqin.transfer_pre = TransferScale{1.0, 0.5};
+    sqin.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, 50.0});
+    std::string warn = warning_of(sqin);
+    CHECK(warn ==
+          "Frontend timing scales x0.50 at the SqIn's SP end: "
+          "+10ms (late) at the frontend moves that end only +5.0ms.");
+
+    // A gap past the combined budget trips materiality even at identity
+    // scales. With nothing but x1.00 to report, no line at all.
+    Activation overbudget = base;
+    overbudget.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, 250.0});
+    CHECK(warning_of(overbudget).empty());
+
+    // Backend rows still read the post end, worded exactly as before.
+    Activation backend = base;
+    backend.transfer_post = TransferScale{1.0, 0.5};
+    BackendSqueeze row;
+    row.offset_ms = 50.0;
+    backend.backends.push_back(row);
+    warn = warning_of(backend);
+    CHECK(warn ==
+          "Frontend timing scales x0.50 to the SP end: "
+          "+10ms (late) at the frontend moves the SP end only +5.0ms.");
+
+    // Both ends warning in the same direction with different scales are
+    // listed separately, labeled by what each end judges.
+    Activation both = base;
+    both.transfer_pre = TransferScale{1.0, 0.5};
+    both.transfer_post = TransferScale{1.0, 0.8};
+    both.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, 50.0});
+    both.backends.push_back(row);
+    warn = warning_of(both);
+    CHECK(warn ==
+          "Frontend timing scales x0.80 (late, backends) / x0.50 (late, SqIn).");
+}
+
+TEST_CASE("build_activations: the backend limit hides far rows but never "
+          "squeezed-out ones") {
+    HydraRecord rec;  // only feeds the footer; irrelevant here
+
+    Activation act;
+    act.skips = 0;
+    act.e_offset = 300.0;  // not e-critical
+    for (double ms : {-30.0, 60.0, -100.0}) {
+        BackendSqueeze row;
+        row.offset_ms = ms;
+        act.backends.push_back(row);
+    }
+    // Matches the -100 row (is_sqout_backend compares offsets within 0.01),
+    // so that row is the squeezed-out one.
+    act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -100.0});
+
+    Path p;
+    p.activations.push_back(act);
+
+    auto rows = [&](std::optional<double> limit) {
+        ActivationsView v = limit ? build_activations(p, rec, nullptr, 85.0, limit)
+                                  : build_activations(p, rec, nullptr, 85.0);
+        REQUIRE(v.acts.size() == 1);
+        return v.acts[0].backends;
+    };
+
+    // No limit: every stored row shows.
+    CHECK(rows(std::nullopt).size() == 3);
+
+    // At 50 ms the +60 row goes; the -100 row stays because it is squeezed out.
+    std::vector<BackendRowView> limited = rows(50.0);
+    REQUIRE(limited.size() == 2);
+    CHECK(limited[0].timing == "-30.0");
+    CHECK_FALSE(limited[0].warn);
+    CHECK(limited[1].timing == "-100.0");
+    CHECK(limited[1].warn);
 }
 
 TEST_CASE("build_multsqueezes: one labeled entry per squeeze") {

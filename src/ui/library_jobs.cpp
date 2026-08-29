@@ -204,10 +204,11 @@ app::AnalysisResult AnalyzeJob::take_result() { return std::move(*result_); }
 
 // ---- ReportJob --------------------------------------------------------
 
-ReportJob::ReportJob(store::RecordStore& store, store::CapQuery cap, bool open_when_done,
-                     int hit_window_ms)
+ReportJob::ReportJob(store::RecordStore& store, store::CapQuery cap, store::Lens lens,
+                     bool open_when_done, int hit_window_ms)
     : store_(store),
       cap_(cap),
+      lens_(lens),
       open_when_done_(open_when_done),
       hit_window_ms_(hit_window_ms) {}
 
@@ -220,6 +221,7 @@ void ReportJob::run() {
         app::report::ReportOptions options;
         options.max_paths = 5;
         options.cap = cap_;
+        options.lens = lens_;
         options.hit_window_ms = hit_window_ms_;
         options.db_path = app::db_path();
         app::report::GeneratedReport report =

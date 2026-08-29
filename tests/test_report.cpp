@@ -55,7 +55,7 @@ void check_cap(std::optional<int> cap) {
     // One row per shown path, so a record surfaces exactly one rank-1 row.
     const store::CapQuery query = cap ? store::CapQuery::at(*cap) : store::CapQuery::automatic();
     std::vector<report::ReportRow> rows =
-        report::collect_rows(store, /*max_paths=*/100, query);
+        report::collect_rows(store, /*max_paths=*/100, query, store::Lens{});
     int rank1 = 0;
     for (const report::ReportRow& row : rows)
         if (row.rank == 1) ++rank1;
@@ -110,7 +110,7 @@ TEST_CASE("report lists only the wanted cap and names it") {
     report::GeneratedReport four = report::generate_report(store, options);
     CHECK(four.html.find("SP cap 4 bars") != std::string::npos);
     int rank1 = 0;
-    for (const report::ReportRow& row : report::collect_rows(store, 100, options.cap))
+    for (const report::ReportRow& row : report::collect_rows(store, 100, options.cap, options.lens))
         if (row.rank == 1) ++rank1;
     CHECK(rank1 == 1);
 
@@ -118,7 +118,7 @@ TEST_CASE("report lists only the wanted cap and names it") {
     report::GeneratedReport automatic = report::generate_report(store, options);
     CHECK(automatic.html.find("SP cap Auto") != std::string::npos);
     rank1 = 0;
-    for (const report::ReportRow& row : report::collect_rows(store, 100, options.cap))
+    for (const report::ReportRow& row : report::collect_rows(store, 100, options.cap, options.lens))
         if (row.rank == 1) ++rank1;
     CHECK(rank1 == 1);
 }

@@ -11,6 +11,7 @@
 #ifndef HYDRA_APP_PATH_VIEW_H
 #define HYDRA_APP_PATH_VIEW_H
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -73,9 +74,12 @@ struct ActivationsView {
 
 // `timing` may be null (no songmeta row): the stored transfer scales are used
 // (see rate_activation).
+// `backend_limit_ms` hides backend rows beyond +/- that many ms, squeezed-out
+// rows excepted; nullopt (the default) shows every stored row.
 ActivationsView build_activations(const Path& path, const HydraRecord& record,
                                   const SongTiming* timing,
-                                  double hit_window_ms);
+                                  double hit_window_ms,
+                                  std::optional<double> backend_limit_ms = std::nullopt);
 
 // The hover hint shown next to a scale warning.
 extern const char* const kTransferScaleHint;
@@ -105,7 +109,7 @@ struct PathListView {
     // Groups in traversal order; the view renders "Optimal Path" before the
     // first and `more_label` before the second.
     std::vector<PathGroupView> groups;
-    std::string more_label;  // "More Paths" (+ " (Limit timings: N ms)")
+    std::string more_label;  // "More Paths" (+ " (Path limit: N ms)")
 
     // The all-0 section: shown only when the generated list does not already
     // contain that path (same score AND same notation).

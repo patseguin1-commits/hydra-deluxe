@@ -137,6 +137,8 @@ add_library(hydra_core STATIC
     src/search/engine.cpp
     src/search/pather.cpp
     src/store/serialize.cpp
+    src/store/path_binary.cpp
+    src/store/path_codec.cpp
     src/store/record_store.cpp
     src/app/analysis.cpp
     src/app/config.cpp
@@ -315,6 +317,7 @@ add_executable(hydra_tests
     tests/test_srb.cpp
     tests/test_search.cpp
     tests/test_store.cpp
+    tests/test_path_codec.cpp
     tests/test_analysis.cpp
     tests/test_report.cpp
     tests/test_config.cpp

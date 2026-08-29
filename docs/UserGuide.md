@@ -77,7 +77,7 @@ Information pulled from the chart's ini (or the archive's embedded metadata, for
 Lastly, a hash/checksum (the big hexadecimal number) is also shown here; identical chart files will have the same value. However, this comparison is only good within Hydra. Clone Hero and other apps have their own versions of this and they probably don't align.
 
 ### Stored result (upper middle)
-A summary of the saved analysis for this song under the current view options and SP cap: the best score, how many paths were kept, and the settings the analysis ran with (timing limit and SP cap; an Auto run shows the cap it settled on). If the song hasn't been analyzed at this cap — or the record is stale — that's shown here instead.
+A summary of the saved analysis for this song under the current view options and SP cap: the best score, how many paths were kept, and the settings the analysis ran with (path limit and SP cap; an Auto run shows the cap it settled on). If the song hasn't been analyzed at this cap — or the record is stale — that's shown here instead.
 
 ### Analysis Controls (upper right)
 Look here to generate paths for a song (and a lot of scoring info too).
@@ -89,10 +89,13 @@ Note that the more extra paths are allowed, the longer analysis will take, thoug
 
 There are two depth modes. You can keep some extra paths based on a certain number of `scores` (i.e. "the next best score under optimal") or a certain amount of `points` (i.e. "paths that are within 2000 points of optimal").
 
-#### Limit timings
+#### Path limit
 When enabled, extra paths are only kept if their hardest required squeeze is within this many milliseconds — useful if you want alternates you can realistically hit. Lower (or negative) values demand more slack. The limit a record was analyzed with is shown above its path list.
 
 Note: the limit compares raw squeeze milliseconds, measured at the SP end. It does not account for frontend timing scaling (see the note under Backends below), so where an activation shows a scale warning, a kept path can be somewhat harder to execute than its listed milliseconds suggest.
+
+#### Backend limit
+This is a display-only filter for the Backends tables in Path Details, not something the analyzer uses. When enabled, a backend row only shows if its timing is within plus/minus this many milliseconds — except a note the path squeezes out, which always shows no matter how far out it is. Off (the default) shows everything the analyzer stored, which reaches out to about ±170ms. Because it only changes what's displayed, flipping it never triggers a re-analysis.
 
 #### SP cap
 The Star Power meter ceiling the analysis runs under, in bars. 4 is Clone Hero's rule and the default; leave it there for paths you intend to play. Any other number is a what-if whose scores are not achievable in game. Tick **Auto** to let Hydra raise the cap until the score stops improving, which approximates no ceiling at all (slower: up to two minutes per chart).

@@ -35,6 +35,13 @@ PreviewSpan span(double start_ms, double end_ms) {
     return s;
 }
 
+PreviewFill fill(PreviewSpan s, PreviewFillState state) {
+    PreviewFill f;
+    f.span = s;
+    f.state = state;
+    return f;
+}
+
 const TrackInstant* find(const std::vector<TrackInstant>& v, double t) {
     for (const TrackInstant& i : v)
         if (i.t == doctest::Approx(t)) return &i;
@@ -112,11 +119,13 @@ TEST_CASE("build_track_state: active SP window ends exactly at the deact node") 
     CHECK(find(st.instants(), 3.0005) == nullptr);
 }
 
-TEST_CASE("build_track_state: every fill toggles `fill`; the activated one lights its lane") {
+TEST_CASE("build_track_state: taken, offered and hidden fills toggle different spans") {
     PreviewScene scene;
     scene.notes = {note(0.0, PreviewLane::Red), note(2000.0, PreviewLane::Green),
-                   note(5000.0, PreviewLane::Green)};
-    scene.fills = {span(1000.0, 2000.0), span(4000.0, 5000.0)};  // second is skipped
+                   note(5000.0, PreviewLane::Green), note(8000.0, PreviewLane::Green)};
+    scene.fills = {fill(span(1000.0, 2000.0), PreviewFillState::Taken),
+                   fill(span(4000.0, 5000.0), PreviewFillState::Offered),
+                   fill(span(7000.0, 8000.0), PreviewFillState::Hidden)};
     PreviewActivation a;
     a.tick = 2000;
     a.ms = 2000.0;
@@ -125,22 +134,39 @@ TEST_CASE("build_track_state: every fill toggles `fill`; the activated one light
     scene.activations = {a};
 
     TrackState st = build_track_state(scene, TrackStateOptions{});
-    const TrackInstant* f1 = find(st.instants(), 1.0);
-    const TrackInstant* f2 = find(st.instants(), 4.0);
-    REQUIRE(f1);
-    REQUIRE(f2);
-    CHECK(f1->fill == Toggle::Start);
-    CHECK(f2->fill == Toggle::Start);
-    CHECK(f1->fill_lane == Toggle::Start);
-    REQUIRE(f1->fill_lane_pad.has_value());
-    CHECK(*f1->fill_lane_pad == Pad::Green);
-    CHECK(f2->fill_lane == Toggle::Empty);
-    CHECK_FALSE(f2->fill_lane_pad.has_value());
-    // The activation note itself (2.0) is inside both the fill and the lane.
+    const TrackInstant* taken = find(st.instants(), 1.0);
+    const TrackInstant* offered = find(st.instants(), 4.0);
+    REQUIRE(taken);
+    REQUIRE(offered);
+
+    // The taken fill drives `fill_taken` and the lit lane, not `fill`.
+    CHECK(taken->fill_taken == Toggle::Start);
+    CHECK(taken->fill == Toggle::Empty);
+    CHECK(taken->fill_lane == Toggle::Start);
+    REQUIRE(taken->fill_lane_pad.has_value());
+    CHECK(*taken->fill_lane_pad == Pad::Green);
+
+    // The offered fill drives `fill` alone.
+    CHECK(offered->fill == Toggle::Start);
+    CHECK(offered->fill_taken == Toggle::Empty);
+    CHECK(offered->fill_lane == Toggle::Empty);
+    CHECK_FALSE(offered->fill_lane_pad.has_value());
+
+    // The hidden fill produces no intervals at all: nothing toggles at 7.0.
+    const TrackInstant* hidden = find(st.instants(), 7.0);
+    CHECK(hidden == nullptr);
+    const TrackInstant* hidden_end = find(st.instants(), 8.0);  // the note is there
+    REQUIRE(hidden_end);
+    CHECK(hidden_end->fill == Toggle::Empty);
+    CHECK(hidden_end->fill_taken == Toggle::Empty);
+    CHECK(hidden_end->fill_lane == Toggle::Empty);
+
+    // The activation note itself (2.0) is inside both the taken fill and the lane.
     const TrackInstant* act = find(st.instants(), 2.0);
     REQUIRE(act);
-    CHECK(act->fill == Toggle::On);
+    CHECK(act->fill_taken == Toggle::On);
     CHECK(act->fill_lane == Toggle::On);
+    CHECK(act->fill == Toggle::Empty);
 }
 
 TEST_CASE("build_track_state: beats land on instants; solo toggles") {

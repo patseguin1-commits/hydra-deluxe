@@ -72,6 +72,31 @@ Song make_hand_song() {
     return song;
 }
 
+// A song with four candidate activation fills, each 240 ticks long, ending on
+// the notes at ticks 480, 960, 1440 and 1920.
+Song make_fill_song() {
+    Song song(480);
+    song.bpm_changes[0] = 120.0;
+    song.build_timing();
+    for (int i = 1; i <= 4; ++i) {
+        Chord c;
+        c.add_note(NoteColor::Green);
+        SongTimestamp ts;
+        ts.timecode = song.timecode(480 * i);
+        ts.chord = std::move(c);
+        ts.activation_length = 240;
+        song.sequence.push_back(std::move(ts));
+    }
+    return song;
+}
+
+Activation act_at(const Song& song, int64_t tick, int skips) {
+    Activation a;
+    a.timecode = song.timecode(tick);
+    a.skips = skips;
+    return a;
+}
+
 // One analyzed corpus chart (the first that yields paths), shared across cases.
 const AnalysisResult& analyzed() {
     static const AnalysisResult result = [] {
@@ -142,8 +167,52 @@ TEST_CASE("build_preview_scene: SP phrase, solo, and fill spans") {
     CHECK(scene.solos[0].end_tick == 480);
 
     REQUIRE(scene.fills.size() == 1);
-    CHECK(scene.fills[0].start_tick == 240);  // 720 - 480
-    CHECK(scene.fills[0].end_tick == 720);
+    CHECK(scene.fills[0].span.start_tick == 240);  // 720 - 480
+    CHECK(scene.fills[0].span.end_tick == 720);
+}
+
+TEST_CASE("build_preview_scene: an unanalyzed chart offers every candidate fill") {
+    Song song = make_fill_song();
+    PreviewScene scene = build_preview_scene(song, nullptr);
+    REQUIRE(scene.fills.size() == 4);
+    for (const PreviewFill& f : scene.fills) CHECK(f.state == PreviewFillState::Offered);
+}
+
+TEST_CASE("build_preview_scene: skips say which fills the path was offered") {
+    Song song = make_fill_song();
+    Path path;
+    // The path activates on the third fill after passing over one before it.
+    path.activations = {act_at(song, 1440, 1)};
+
+    PreviewScene scene = build_preview_scene(song, &path);
+    REQUIRE(scene.fills.size() == 4);
+    CHECK(scene.fills[0].state == PreviewFillState::Hidden);   // not enough SP
+    CHECK(scene.fills[1].state == PreviewFillState::Offered);  // the one skip
+    CHECK(scene.fills[2].state == PreviewFillState::Taken);
+    CHECK(scene.fills[3].state == PreviewFillState::Hidden);   // past the last act
+    CHECK(scene.fills[2].span.end_tick == 1440);
+}
+
+TEST_CASE("build_preview_scene: a second activation with skips 0 hides what lies between") {
+    Song song = make_fill_song();
+    Path path;
+    path.activations = {act_at(song, 960, 0), act_at(song, 1920, 0)};
+
+    PreviewScene scene = build_preview_scene(song, &path);
+    REQUIRE(scene.fills.size() == 4);
+    CHECK(scene.fills[0].state == PreviewFillState::Hidden);
+    CHECK(scene.fills[1].state == PreviewFillState::Taken);
+    CHECK(scene.fills[2].state == PreviewFillState::Hidden);  // SP was still active
+    CHECK(scene.fills[3].state == PreviewFillState::Taken);
+
+    // With one skip charged to the second activation, the fill between them is
+    // offered instead.
+    Path skipped;
+    skipped.activations = {act_at(song, 960, 0), act_at(song, 1920, 1)};
+    PreviewScene s2 = build_preview_scene(song, &skipped);
+    CHECK(s2.fills[1].state == PreviewFillState::Taken);
+    CHECK(s2.fills[2].state == PreviewFillState::Offered);
+    CHECK(s2.fills[3].state == PreviewFillState::Taken);
 }
 
 TEST_CASE("build_beat_events: bars, beats, and half-beats from the timing alone") {
@@ -293,4 +362,31 @@ TEST_CASE("build_preview_scene: an analyzed chart's overlay matches its path") {
     PreviewScene bare = build_preview_scene(r.song, nullptr);
     CHECK(bare.notes.size() == scene.notes.size());
     CHECK(bare.activations.empty());
+}
+
+TEST_CASE("path_overlay_key: no overlay, the same path, and a changed path") {
+    // The key is how the Preview notices the Paths tab picked a different
+    // path; Path itself has no operator==.
+    CHECK(path_overlay_key(nullptr).empty());
+
+    const AnalysisResult& r = analyzed();
+    std::vector<const Path*> paths = r.record.all_paths();
+    REQUIRE_FALSE(paths.empty());
+
+    const Path& first = *paths.front();
+    Path copy = first;
+    CHECK_FALSE(path_overlay_key(&first).empty());
+    CHECK(path_overlay_key(&first) == path_overlay_key(&copy));
+
+    // Same activations, a different score: still a different overlay.
+    Path rescored = first;
+    rescored.score_base += 1;
+    CHECK(path_overlay_key(&first) != path_overlay_key(&rescored));
+
+    // Different activations: different key.
+    Path trimmed = first;
+    if (!trimmed.activations.empty()) {
+        trimmed.activations.pop_back();
+        CHECK(path_overlay_key(&first) != path_overlay_key(&trimmed));
+    }
 }

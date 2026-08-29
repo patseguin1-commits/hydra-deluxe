@@ -40,9 +40,10 @@ struct TrackInstant {
     std::vector<TrackGem> notes;
     Toggle overdrive = Toggle::Empty;  // SP phrase (Onyx: overdrive)
     Toggle solo = Toggle::Empty;
-    Toggle fill = Toggle::Empty;       // any fill window (drawn like Onyx's BRE)
-    Toggle sp_active = Toggle::Empty;  // Hydra: the path's active SP window
-    Toggle fill_lane = Toggle::Empty;  // Hydra: the activated fill's lit lane
+    Toggle fill = Toggle::Empty;        // an offered fill (drawn like Onyx's BRE)
+    Toggle fill_taken = Toggle::Empty;  // Hydra: a fill the path activates on
+    Toggle sp_active = Toggle::Empty;   // Hydra: the path's active SP window
+    Toggle fill_lane = Toggle::Empty;   // Hydra: the activated fill's lit lane
     std::optional<Pad> fill_lane_pad;  // which lane, while fill_lane != Empty
     std::optional<app::PreviewBeatKind> beat;
 };
@@ -85,7 +86,7 @@ private:
     };
 
     std::vector<TrackInstant> instants_;
-    std::vector<Interval> overdrive_, solo_, fill_, sp_active_;
+    std::vector<Interval> overdrive_, solo_, fill_, fill_taken_, sp_active_;
     std::vector<LaneInterval> fill_lane_;
 
     TrackInstant synthesize(double t) const;
@@ -94,8 +95,10 @@ private:
 // Build the timeline from a scene. SP phrases and fills are extended by half a
 // millisecond past their last note so that note reads as inside (Hydra marks
 // a phrase by its last note; Onyx's phrase extends past it). Active SP
-// windows end exactly at the deact node. The activated fill's lane comes from
-// the activation at the fill's end note.
+// windows end exactly at the deact node. Offered fills drive `fill` and taken
+// ones `fill_taken`; hidden fills produce no intervals at all, since the game
+// would never have shown them. The activated fill's lane comes from the
+// activation at the fill's end note.
 TrackState build_track_state(const app::PreviewScene& scene, const TrackStateOptions& opts);
 
 // Onyx's makeToggle: the state of a span at `t` given its intervals.

@@ -47,7 +47,7 @@ public:
     // open_when_done: the user's "Open report automatically" setting, same as
     // ReportJob (the finished modal offers an "Open report again" button).
     DmReportJob(store::RecordStore& store, std::string discord_id, std::string username,
-                std::string chartmode, bool open_when_done);
+                std::string chartmode, store::Lens lens, bool open_when_done);
     ~DmReportJob() { shutdown(); }
 
     void start();
@@ -64,6 +64,7 @@ private:
     std::string discord_id_;
     std::string username_;
     std::string chartmode_;
+    store::Lens lens_;
     bool open_when_done_;
     int total_ = 0, matched_ = 0, above_ = 0, unmatched_ = 0;
 };

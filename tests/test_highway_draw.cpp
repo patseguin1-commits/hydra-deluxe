@@ -38,6 +38,13 @@ PreviewSpan span(double a, double b) {
     return s;
 }
 
+PreviewFill fill(PreviewSpan s, PreviewFillState state) {
+    PreviewFill f;
+    f.span = s;
+    f.state = state;
+    return f;
+}
+
 XMFLOAT3 transform(const XMFLOAT4X4& m, float x, float y, float z) {
     XMVECTOR v = XMVector3TransformCoord(XMVectorSet(x, y, z, 1.0f), XMLoadFloat4x4(&m));
     XMFLOAT3 out;
@@ -139,7 +146,7 @@ TEST_CASE("build_highway_draws: order and geometry for a frame") {
     scene.notes = {note(1000.0, PreviewLane::Red), note(1500.0, PreviewLane::Yellow, true),
                    note(1500.0, PreviewLane::Kick)};
     scene.solos = {span(900.0, 1200.0)};
-    scene.fills = {span(1300.0, 1500.0)};
+    scene.fills = {fill(span(1300.0, 1500.0), PreviewFillState::Offered)};
     scene.beats = {{0, 1000.0, PreviewBeatKind::Bar}, {0, 1250.0, PreviewBeatKind::Half}};
     TrackState st = build_track_state(scene, TrackStateOptions{});
 
@@ -366,11 +373,11 @@ TEST_CASE("build_highway_draws: energy gems inside an SP phrase, tinted floor in
     CHECK(tinted);
 }
 
-TEST_CASE("build_highway_draws: the activated fill lights its lane on top") {
+TEST_CASE("build_highway_draws: the taken fill lights its lane with the lit target") {
     PreviewConfig cfg;
     PreviewScene scene;
     scene.notes = {note(1000.0, PreviewLane::Red), note(1500.0, PreviewLane::Green)};
-    scene.fills = {span(1300.0, 1500.0)};
+    scene.fills = {fill(span(1300.0, 1500.0), PreviewFillState::Taken)};
     PreviewActivation a;
     a.tick = 1500;
     a.ms = 1500.0;
@@ -379,15 +386,56 @@ TEST_CASE("build_highway_draws: the activated fill lights its lane on top") {
     scene.activations = {a};
     TrackState st = build_track_state(scene, TrackStateOptions{});
     std::vector<DrawCommand> cmds = build_highway_draws(st, cfg, 1.0, 1.0);
-    int green = 0, others = 0;
+    int lanes = 0, lit_green = 0;
     for (const DrawCommand& c : cmds) {
-        if (c.material.texture == TextureId::LaneGreen) ++green;
-        if (c.material.texture == TextureId::LaneRed || c.material.texture == TextureId::LaneYellow ||
-            c.material.texture == TextureId::LaneBlue)
-            ++others;
+        if (c.material.texture >= TextureId::LaneRed && c.material.texture <= TextureId::LaneGreen) {
+            ++lanes;
+            CHECK(c.alpha == doctest::Approx(1.0f));  // taken fills are full strength
+        }
+        if (c.material.texture == TextureId::TargetGreenLight) {
+            ++lit_green;
+            // The extra pass covers the fill's stretch, not the strike line.
+            CHECK(c.lo[2] == doctest::Approx(time_to_z(cfg, 1.0, 1.3, 1.0)));
+            CHECK(c.hi[2] == doctest::Approx(time_to_z(cfg, 1.0, 1.5005, 1.0)));
+            CHECK(c.lo[0] == doctest::Approx(0.5f));  // the green lane's x span
+            CHECK(c.hi[0] == doctest::Approx(1.0f));
+        }
     }
-    CHECK(green == 2);
-    CHECK(others == 3);
+    CHECK(lanes == 4);      // all four lanes light, Onyx's BRE look
+    CHECK(lit_green == 1);  // the activation lane, drawn once more on top
+}
+
+TEST_CASE("build_highway_draws: an offered fill's strips are dimmed") {
+    PreviewConfig cfg;
+    PreviewScene scene;
+    scene.notes = {note(1000.0, PreviewLane::Red), note(1500.0, PreviewLane::Green)};
+    scene.fills = {fill(span(1300.0, 1500.0), PreviewFillState::Offered)};
+    TrackState st = build_track_state(scene, TrackStateOptions{});
+    std::vector<DrawCommand> cmds = build_highway_draws(st, cfg, 1.0, 1.0);
+    int lanes = 0, lit = 0;
+    for (const DrawCommand& c : cmds) {
+        if (c.material.texture >= TextureId::LaneRed && c.material.texture <= TextureId::LaneGreen) {
+            ++lanes;
+            CHECK(c.alpha == doctest::Approx(cfg.hydra.fill_offered_alpha));
+        }
+        if (c.material.texture == TextureId::TargetGreenLight) ++lit;
+    }
+    CHECK(lanes == 4);
+    CHECK(lit == 0);  // nothing was activated here
+}
+
+TEST_CASE("build_highway_draws: a hidden fill draws no lane strips") {
+    PreviewConfig cfg;
+    PreviewScene scene;
+    scene.notes = {note(1000.0, PreviewLane::Red), note(1500.0, PreviewLane::Green)};
+    scene.fills = {fill(span(1300.0, 1500.0), PreviewFillState::Hidden)};
+    TrackState st = build_track_state(scene, TrackStateOptions{});
+    std::vector<DrawCommand> cmds = build_highway_draws(st, cfg, 1.0, 1.0);
+    int lanes = 0;
+    for (const DrawCommand& c : cmds)
+        if (c.material.texture >= TextureId::LaneRed && c.material.texture <= TextureId::LaneGreen)
+            ++lanes;
+    CHECK(lanes == 0);
 }
 
 TEST_CASE("build_highway_draws: an empty window still draws floor, railings and targets") {

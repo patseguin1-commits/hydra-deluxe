@@ -159,8 +159,40 @@ bool sort_column_is_songmeta(SortColumn c) {
            c == SortColumn::RefCharter;
 }
 
-// The records table's columns, single-sourced so the create, the migration
-// rebuild and the legacy import all agree on the layout.
+// The results table's columns, single-sourced so the create, the v1->v2
+// migration and the legacy import all agree on the layout. result_id is the
+// rowid alias: a bigger one means "written later", which is how Auto picks
+// the newest run.
+constexpr const char* kResultsColumnDefs =
+    "  result_id   INTEGER PRIMARY KEY,"
+    "  hyhash      TEXT NOT NULL,"
+    "  chartmode   TEXT NOT NULL,"
+    "  hyversion   TEXT NOT NULL,"
+    "  sp_cap      INTEGER NOT NULL,"
+    "  ms_enabled  INTEGER NOT NULL,"
+    "  ms_value    INTEGER NOT NULL,"
+    "  depth_mode  INTEGER NOT NULL,"
+    "  depth_value INTEGER NOT NULL,"
+    "  bestpath    TEXT NOT NULL,"
+    "  structure   BLOB NOT NULL,"
+    "  score       INTEGER,"
+    "  actcount    INTEGER,"
+    "  maxskip     INTEGER,"
+    "  hardest_ms  REAL,"
+    "  avgmult     REAL,"
+    "  notecount   INTEGER,"
+    "  sqin_count  INTEGER,"
+    "  sqout_count INTEGER,"
+    "  pathcount   INTEGER,"
+    "  UNIQUE (hyhash, chartmode, sp_cap, ms_enabled, ms_value, depth_mode, depth_value)";
+
+// The summary columns, in the order bind_summary/read_summary use.
+constexpr const char* kSummaryColumnList =
+    "score, actcount, maxskip, hardest_ms, avgmult, notecount, sqin_count, "
+    "sqout_count, pathcount";
+
+// The pre-1.6-era records table's columns, single-sourced so the cap-key
+// migration's rebuild agrees with the shape it reads.
 constexpr const char* kRecordsColumnDefs =
     "  hyhash      TEXT NOT NULL,"
     "  chartmode   TEXT NOT NULL,"
@@ -185,48 +217,86 @@ constexpr const char* kRecordsColumnList =
 // The blob header that peek_sp_cap needs: u32 version + opt_f64 + opt_i32.
 constexpr int kBlobHeadBytes = 18;
 
-// The cap filter for a single-row lookup (get_summary / get_record). Appended
-// after "WHERE hyhash=? AND chartmode=?"; bind_cap_lookup binds its one
-// parameter at the given index. Auto takes the best row: current version
-// first, then the newest. Newest, not tallest: an Auto run that settles below
-// an older, taller row (an imported uncapped result, a what-if the user
-// typed) is the result the user just asked for, and the only one that ran
-// under the current depth / ms settings. The tallest rule showed the old row
-// forever and "Analyze paths!" could never replace it. Write order is the
-// rowid: INSERT OR REPLACE gives a rewritten row a fresh one.
-void append_cap_lookup(std::string& sql, const CapQuery& cap) {
-    if (cap.exact) sql += " AND sp_cap=?";
-    else sql += " AND sp_cap>" + std::to_string(kCloneHeroSpCap) +
-                " ORDER BY (hyversion=?) DESC, rowid DESC LIMIT 1";
+// ---- lens / cap filters ---------------------------------------------------
+//
+// Every lookup answers one question: "which row ran under these settings?".
+// The candidate set is always the wanted lens plus the sentinel rows -- a
+// migrated row is a placeholder that answers any question badly, so it is
+// offered only when nothing better exists, and a real row always outranks it.
+
+// "the row at alias `a` carries exactly this lens". Four bound parameters, in
+// Lens's field order. `a` is "", "r." or "x.".
+std::string lens_match(const char* a) {
+    std::string p = a;
+    return "(" + p + "ms_enabled=? AND " + p + "ms_value=? AND " + p +
+           "depth_mode=? AND " + p + "depth_value=?)";
 }
-void bind_cap_lookup(sqlite3_stmt* s, int idx, const CapQuery& cap) {
-    if (cap.exact) sqlite3_bind_int(s, idx, *cap.exact);
-    else bind_text(s, idx, current_record_version());
+std::string lens_or_sentinel(const char* a) {
+    return "(" + lens_match(a) + " OR " + std::string(a) + "ms_enabled=-1)";
+}
+int bind_lens(sqlite3_stmt* s, int idx, const Lens& lens) {
+    sqlite3_bind_int(s, idx, lens.ms_enabled);
+    sqlite3_bind_int(s, idx + 1, lens.ms_value);
+    sqlite3_bind_int(s, idx + 2, lens.depth_mode);
+    sqlite3_bind_int(s, idx + 3, lens.depth_value);
+    return idx + 4;
 }
 
-// The cap filter for a set query over alias r (list_records / for_each_blob):
-// exact keeps rows at that cap; Auto keeps, per (hyhash, chartmode), the one
-// row an Auto lookup would pick -- no other row above 4 outranks it, where
-// "outranks" is current-version first, then newer (see append_cap_lookup).
-// Binds four parameters for Auto, one for exact.
+// The filter for a single-row lookup (get_summary / get_record). Appended
+// after "WHERE hyhash=? AND chartmode=?"; its placeholders are filled by the
+// bind_ twin below, which is where the lens's values go in. Auto takes the
+// best row: a real row
+// before a sentinel, then current version, then the newest. Newest, not
+// tallest: an Auto run that settles below an older, taller row (an imported
+// uncapped result, a what-if the user typed) is the result the user just
+// asked for, so every Auto lookup must show it. The tallest rule showed the
+// old row forever and "Analyze paths!" could never replace it. Write order is
+// result_id: add_row deletes and re-inserts, so a rewritten row is newest.
+void append_lookup_filter(std::string& sql, const CapQuery& cap) {
+    sql += " AND " + lens_or_sentinel("");
+    if (cap.exact)
+        sql += " AND sp_cap=? ORDER BY (ms_enabled!=-1) DESC LIMIT 1";
+    else
+        sql += " AND sp_cap>" + std::to_string(kCloneHeroSpCap) +
+               " ORDER BY (ms_enabled!=-1) DESC, (hyversion=?) DESC, result_id DESC LIMIT 1";
+}
+int bind_lookup_filter(sqlite3_stmt* s, int idx, const CapQuery& cap, const Lens& lens) {
+    idx = bind_lens(s, idx, lens);
+    if (cap.exact) sqlite3_bind_int(s, idx, *cap.exact);
+    else bind_text(s, idx, current_record_version());
+    return idx + 1;
+}
+
+// The filter for a set query over alias r (list_records / for_each_blob):
+// exact keeps that cap's rows; Auto keeps, per (hyhash, chartmode), the one
+// row an Auto lookup would pick -- no other candidate outranks it, ranked
+// exactly as append_lookup_filter ranks. Binds 5 parameters for exact, 12 for
+// Auto.
 void append_cap_set_filter(std::string& sql, const CapQuery& cap) {
+    sql += " AND " + lens_or_sentinel("r.");
     if (cap.exact) {
         sql += " AND r.sp_cap = ?";
         return;
     }
     std::string four = std::to_string(kCloneHeroSpCap);
     sql += " AND r.sp_cap > " + four +
-           " AND NOT EXISTS (SELECT 1 FROM records x"
+           " AND NOT EXISTS (SELECT 1 FROM results x"
            "   WHERE x.hyhash = r.hyhash AND x.chartmode = r.chartmode"
            "     AND x.sp_cap > " + four +
-           "     AND ((x.hyversion = ?) > (r.hyversion = ?)"
-           "          OR ((x.hyversion = ?) = (r.hyversion = ?) AND x.rowid > r.rowid)))";
+           "     AND " + lens_or_sentinel("x.") +
+           "     AND ((x.ms_enabled!=-1) > (r.ms_enabled!=-1)"
+           "          OR ((x.ms_enabled!=-1) = (r.ms_enabled!=-1)"
+           "              AND ((x.hyversion = ?) > (r.hyversion = ?)"
+           "                   OR ((x.hyversion = ?) = (r.hyversion = ?)"
+           "                       AND x.result_id > r.result_id)))))";
 }
-int bind_cap_set_filter(sqlite3_stmt* s, int idx, const CapQuery& cap) {
+int bind_cap_set_filter(sqlite3_stmt* s, int idx, const CapQuery& cap, const Lens& lens) {
+    idx = bind_lens(s, idx, lens);
     if (cap.exact) {
         sqlite3_bind_int(s, idx, *cap.exact);
         return idx + 1;
     }
+    idx = bind_lens(s, idx, lens);
     for (int i = 0; i < 4; ++i) bind_text(s, idx + i, current_record_version());
     return idx + 4;
 }
@@ -289,14 +359,27 @@ PreparedRow prepare_row(const RecordKey& key, const HydraRecord& record) {
                                     std::to_string(*key.cap.exact) +
                                     " but the record was analyzed at " +
                                     std::to_string(*record.sp_cap));
+    // Both sides come from the same int (Settings::mslimit_value, widened to
+    // the engine's double), so an exact comparison is the right one.
+    if (key.lens.ms_enabled == 1 &&
+        (!record.ms_limit || *record.ms_limit != static_cast<double>(key.lens.ms_value)))
+        throw std::invalid_argument(
+            "prepare_row: key asks for an ms limit of " +
+            std::to_string(key.lens.ms_value) + " but the record was analyzed " +
+            (record.ms_limit ? "at " + std::to_string(*record.ms_limit) : "without one"));
+
     PreparedRow row;
     row.hyhash = key.hyhash;
     row.chartmode = key.chartmode;
     row.hyversion = current_record_version();
     row.sp_cap = *record.sp_cap;
+    row.lens = key.lens;
     row.bestpath = record.paths.empty() ? std::string() : record.best_path().pathstring();
     row.summary = summarize_record(record);
-    row.blob = write_record(record);
+
+    FlatRecord flat = flatten_record(record);
+    row.structure = std::move(flat.structure);
+    row.nodes = std::move(flat.nodes);
     return row;
 }
 
@@ -331,13 +414,18 @@ RecordStore::RecordStore(const std::string& dbpath) {
         "  key   TEXT PRIMARY KEY,"
         "  value TEXT"
         ");");
-    exec((std::string("CREATE TABLE IF NOT EXISTS records (") + kRecordsColumnDefs + ");")
-             .c_str());
-
-    add_missing_columns();
-    if (!has_column("records", "sp_cap")) migrate_records_to_cap_key();
-    // Schema 1 = records keyed by cap. A fresh db is born at it.
-    exec("PRAGMA user_version = 1");
+    // A pre-1.6 or 1.6 file still has the old single-blob `records` table.
+    // Bring it to the v1 shape (keyed by cap) first, then fold it into the
+    // three v2 tables. A fresh db skips both and is born at v2.
+    const bool had_records = has_table("records");
+    if (had_records) {
+        add_missing_columns();
+        if (!has_column("records", "sp_cap")) migrate_records_to_cap_key();
+    }
+    create_result_tables();
+    if (had_records) migrate_records_to_results();
+    // Schema 2 = results keyed by the full settings, with shared paths.
+    exec("PRAGMA user_version = 2");
 }
 
 RecordStore::~RecordStore() { close(); }
@@ -356,6 +444,13 @@ void RecordStore::exec(const char* sql) {
         sqlite3_free(errmsg);
         throw std::runtime_error("sqlite exec failed: " + msg);
     }
+}
+
+bool RecordStore::has_table(const char* table) {
+    Stmt s = prepare(db_,
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?");
+    bind_text(s, 1, table);
+    return sqlite3_step(s) == SQLITE_ROW && sqlite3_column_int(s, 0) > 0;
 }
 
 bool RecordStore::has_column(const char* table, const char* column) {
@@ -441,6 +536,69 @@ void RecordStore::migrate_records_to_cap_key() {
     }
 }
 
+void RecordStore::create_result_tables() {
+    exec((std::string("CREATE TABLE IF NOT EXISTS results (") + kResultsColumnDefs + ");")
+             .c_str());
+    // A node belongs to one chart+mode: the same bytes under a different chart
+    // are a different path, and scoping the table this way keeps the garbage
+    // collection after a write to the rows that write could have orphaned.
+    exec("CREATE TABLE IF NOT EXISTS paths ("
+         "  hyhash    TEXT NOT NULL,"
+         "  chartmode TEXT NOT NULL,"
+         "  phash     TEXT NOT NULL,"
+         "  payload   BLOB NOT NULL,"
+         "  PRIMARY KEY (hyhash, chartmode, phash)"
+         ");"
+         // hyhash/chartmode are denormalized here on purpose: collecting a
+         // chart's orphaned nodes must never have to decode a structure blob.
+         "CREATE TABLE IF NOT EXISTS path_refs ("
+         "  result_id INTEGER NOT NULL,"
+         "  hyhash    TEXT NOT NULL,"
+         "  chartmode TEXT NOT NULL,"
+         "  phash     TEXT NOT NULL,"
+         "  PRIMARY KEY (result_id, phash)"
+         ");"
+         "CREATE INDEX IF NOT EXISTS path_refs_by_node"
+         "  ON path_refs (hyhash, chartmode, phash);");
+}
+
+void RecordStore::migrate_records_to_results() {
+    // Every v1 row becomes a results row with the sentinel lens: the result is
+    // real, but the file never recorded which ms limit or score range produced
+    // it, so it can only be offered as "something was here" and must never be
+    // decoded. Its old single-blob payload rides along in `structure` as
+    // ballast -- kept so nothing is silently thrown away, never read.
+    exec("BEGIN");
+    try {
+        exec((std::string("INSERT INTO results"
+                          " (hyhash, chartmode, hyversion, sp_cap, ms_enabled, ms_value,"
+                          "  depth_mode, depth_value, bestpath, structure, ") +
+              kSummaryColumnList +
+              ") SELECT hyhash, chartmode, hyversion, sp_cap, -1, 0, 0, 0, bestpath, blob, " +
+              kSummaryColumnList + " FROM records ORDER BY rowid")
+                 .c_str());
+        exec("DROP TABLE records");
+        exec("PRAGMA user_version = 2");
+        exec("COMMIT");
+    } catch (...) {
+        exec("ROLLBACK");
+        throw;
+    }
+}
+
+std::unordered_map<std::string, std::vector<uint8_t>> RecordStore::load_nodes(
+    int64_t result_id) {
+    std::unordered_map<std::string, std::vector<uint8_t>> nodes;
+    Stmt s = prepare(db_,
+        "SELECT p.phash, p.payload FROM path_refs pr JOIN paths p"
+        "  ON p.hyhash = pr.hyhash AND p.chartmode = pr.chartmode AND p.phash = pr.phash"
+        " WHERE pr.result_id = ?");
+    sqlite3_bind_int64(s, 1, result_id);
+    while (sqlite3_step(s) == SQLITE_ROW)
+        nodes.emplace(column_text(s, 0), column_blob(s, 1));
+    return nodes;
+}
+
 int RecordStore::import_legacy_uncapped(const std::string& uncapped_db_path) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (meta_get("uncapped_import")) return 0;
@@ -497,19 +655,31 @@ int RecordStore::import_legacy_uncapped(const std::string& uncapped_db_path) {
                         sources.push_back({sqlite3_column_int64(s, 0), *cap});
             }
             for (const Src& src : sources) {
+                // A sentinel-lens row, like the v1->v2 migration writes: the
+                // old file records the cap and nothing else, so the settings
+                // behind the result are unknown and it reads Stale. Its
+                // hyversion is kept as the old file stamped it -- restamping
+                // it as current would claim a provenance it doesn't have.
+                //
                 // An existing row at the same key was made by this build and
                 // is newer; OR IGNORE keeps it.
                 Stmt s = prepare(db_,
-                    "INSERT OR IGNORE INTO main.records "
-                    "(hyhash, chartmode, hyversion, sp_cap, bestpath, blob, score, actcount, "
-                    " maxskip, hardest_ms, avgmult, notecount, sqin_count, sqout_count, "
-                    " pathcount) "
-                    "SELECT hyhash, chartmode, ?, ?, bestpath, blob, score, actcount, "
-                    " maxskip, hardest_ms, avgmult, notecount, sqin_count, sqout_count, "
-                    " pathcount FROM unc.records WHERE rowid=?");
-                bind_text(s, 1, current_record_version());
-                sqlite3_bind_int(s, 2, src.cap);
-                sqlite3_bind_int64(s, 3, src.rowid);
+                    (std::string(
+                        "INSERT OR IGNORE INTO main.results "
+                        "(hyhash, chartmode, hyversion, sp_cap, ms_enabled, ms_value, "
+                        " depth_mode, depth_value, bestpath, structure, ") +
+                     kSummaryColumnList +
+                     ") SELECT u.hyhash, u.chartmode, u.hyversion, ?, -1, 0, 0, 0,"
+                     " u.bestpath, u.blob, u.score, u.actcount, u.maxskip, u.hardest_ms,"
+                     " u.avgmult, u.notecount, u.sqin_count, u.sqout_count, u.pathcount"
+                     " FROM unc.records u WHERE u.rowid=?"
+                     "   AND NOT EXISTS (SELECT 1 FROM main.results m"
+                     "     WHERE m.hyhash = u.hyhash AND m.chartmode = u.chartmode"
+                     "       AND m.sp_cap = ?)")
+                        .c_str());
+                sqlite3_bind_int(s, 1, src.cap);
+                sqlite3_bind_int64(s, 2, src.rowid);
+                sqlite3_bind_int(s, 3, src.cap);
                 if (sqlite3_step(s) != SQLITE_DONE)
                     throw std::runtime_error(std::string("import record failed: ") +
                                              sqlite3_errmsg(db_));
@@ -572,69 +742,193 @@ void RecordStore::add_record(const RecordKey& key, const HydraRecord& record) {
 void RecordStore::add_row(const PreparedRow& row) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
 
-    Stmt s = prepare(db_,
-        "INSERT OR REPLACE INTO records "
-        "(hyhash, chartmode, hyversion, sp_cap, bestpath, blob, "
-        " score, actcount, maxskip, hardest_ms, avgmult, notecount, sqin_count, "
-        " sqout_count, pathcount) "
-        "VALUES (?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?)");
-    bind_text(s, 1, row.hyhash);
-    bind_text(s, 2, row.chartmode);
-    bind_text(s, 3, row.hyversion);
-    sqlite3_bind_int(s, 4, row.sp_cap);
-    bind_text(s, 5, row.bestpath);
-    bind_blob(s, 6, row.blob);
-    bind_summary(s, 7, row.summary);
-    if (sqlite3_step(s) != SQLITE_DONE)
-        throw std::runtime_error(std::string("add_row failed: ") + sqlite3_errmsg(db_));
+    // Deleting a result means deleting its refs first, always: the refs are
+    // what keep its paths alive, and the final sweep collects whatever they
+    // stopped pointing at. Every step below runs in one transaction, so a
+    // failure anywhere leaves the store exactly as it was.
+    auto run = [&](Stmt& s, const char* what) {
+        if (sqlite3_step(s) != SQLITE_DONE)
+            throw std::runtime_error(std::string("add_row ") + what + " failed: " +
+                                     sqlite3_errmsg(db_));
+    };
+    // Deletes the results a subquery names, and their refs. `where` is a
+    // fragment over `results`, bound by `bind`.
+    auto purge = [&](const std::string& where,
+                     const std::function<void(sqlite3_stmt*)>& bind, const char* what) {
+        std::string refs = "DELETE FROM path_refs WHERE result_id IN"
+                           " (SELECT result_id FROM results WHERE " + where + ")";
+        Stmt r = prepare(db_, refs.c_str());
+        bind(r);
+        run(r, what);
+
+        std::string rows = "DELETE FROM results WHERE " + where;
+        Stmt d = prepare(db_, rows.c_str());
+        bind(d);
+        run(d, what);
+    };
+
+    exec("BEGIN");
+    try {
+        // (1) Anything this chart+mode holds from another Hydra version is
+        //     unreadable to this build, so a write here supersedes all of it.
+        //     The comparison is against the current version, not this row's:
+        //     a test writing a deliberately old-stamped row must not take the
+        //     real rows with it.
+        purge("hyhash=? AND chartmode=? AND hyversion<>?",
+              [&](sqlite3_stmt* s) {
+                  bind_text(s, 1, row.hyhash);
+                  bind_text(s, 2, row.chartmode);
+                  bind_text(s, 3, current_record_version());
+              },
+              "version purge");
+
+        // (2) A sentinel at this cap was a placeholder for "some result ran
+        //     here"; a real run at that cap is the answer it stood in for.
+        purge("hyhash=? AND chartmode=? AND sp_cap=? AND ms_enabled=-1",
+              [&](sqlite3_stmt* s) {
+                  bind_text(s, 1, row.hyhash);
+                  bind_text(s, 2, row.chartmode);
+                  sqlite3_bind_int(s, 3, row.sp_cap);
+              },
+              "sentinel purge");
+
+        // (3) The row this one replaces, deleted explicitly rather than by
+        //     INSERT OR REPLACE: the refs bookkeeping has to be ours, and the
+        //     re-insert must take a fresh result_id so Auto sees it as newest.
+        purge("hyhash=? AND chartmode=? AND sp_cap=? AND ms_enabled=? AND ms_value=?"
+              " AND depth_mode=? AND depth_value=?",
+              [&](sqlite3_stmt* s) {
+                  bind_text(s, 1, row.hyhash);
+                  bind_text(s, 2, row.chartmode);
+                  sqlite3_bind_int(s, 3, row.sp_cap);
+                  bind_lens(s, 4, row.lens);
+              },
+              "replace purge");
+
+        // (4) The result, then its paths (shared, so first writer wins) and
+        //     the refs that tie the two together.
+        {
+            Stmt s = prepare(db_,
+                (std::string("INSERT INTO results "
+                             "(hyhash, chartmode, hyversion, sp_cap, ms_enabled, ms_value,"
+                             " depth_mode, depth_value, bestpath, structure, ") +
+                 kSummaryColumnList + ") VALUES (?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?)")
+                    .c_str());
+            bind_text(s, 1, row.hyhash);
+            bind_text(s, 2, row.chartmode);
+            bind_text(s, 3, row.hyversion);
+            sqlite3_bind_int(s, 4, row.sp_cap);
+            bind_lens(s, 5, row.lens);
+            bind_text(s, 9, row.bestpath);
+            bind_blob(s, 10, row.structure);
+            bind_summary(s, 11, row.summary);
+            run(s, "insert");
+        }
+        const int64_t result_id = sqlite3_last_insert_rowid(db_);
+
+        for (const StoredPathNode& node : row.nodes) {
+            {
+                Stmt s = prepare(db_,
+                    "INSERT OR IGNORE INTO paths (hyhash, chartmode, phash, payload)"
+                    " VALUES (?,?,?,?)");
+                bind_text(s, 1, row.hyhash);
+                bind_text(s, 2, row.chartmode);
+                bind_text(s, 3, node.hash);
+                bind_blob(s, 4, node.payload);
+                run(s, "path insert");
+            }
+            Stmt s = prepare(db_,
+                "INSERT OR IGNORE INTO path_refs (result_id, hyhash, chartmode, phash)"
+                " VALUES (?,?,?,?)");
+            sqlite3_bind_int64(s, 1, result_id);
+            bind_text(s, 2, row.hyhash);
+            bind_text(s, 3, row.chartmode);
+            bind_text(s, 4, node.hash);
+            run(s, "path ref insert");
+        }
+
+        // (5) Whatever the replaced row was the last owner of.
+        {
+            Stmt s = prepare(db_,
+                "DELETE FROM paths WHERE hyhash=? AND chartmode=? AND phash NOT IN"
+                " (SELECT phash FROM path_refs WHERE hyhash=? AND chartmode=?)");
+            bind_text(s, 1, row.hyhash);
+            bind_text(s, 2, row.chartmode);
+            bind_text(s, 3, row.hyhash);
+            bind_text(s, 4, row.chartmode);
+            run(s, "path gc");
+        }
+
+        exec("COMMIT");
+    } catch (...) {
+        exec("ROLLBACK");
+        throw;
+    }
 }
 
 SummaryLookup RecordStore::get_summary(const RecordKey& key) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    std::string sql = "SELECT hyversion, bestpath FROM records WHERE hyhash=? AND chartmode=?";
-    append_cap_lookup(sql, key.cap);
+    std::string sql =
+        "SELECT hyversion, ms_enabled, bestpath FROM results WHERE hyhash=? AND chartmode=?";
+    append_lookup_filter(sql, key.cap);
     Stmt s = prepare(db_, sql.c_str());
     bind_text(s, 1, key.hyhash);
     bind_text(s, 2, key.chartmode);
-    bind_cap_lookup(s, 3, key.cap);
+    bind_lookup_filter(s, 3, key.cap, key.lens);
     if (sqlite3_step(s) != SQLITE_ROW) return SummaryLookup{};
 
     SummaryLookup out;
-    if (column_text(s, 0) != current_record_version()) {
+    if (column_text(s, 0) != current_record_version() || sqlite3_column_int(s, 1) == -1) {
         out.status = RecordStatus::Stale;
         return out;
     }
     out.status = RecordStatus::Ready;
-    out.bestpath = column_text(s, 1);
+    out.bestpath = column_text(s, 2);
     return out;
 }
 
 RecordLookup RecordStore::get_record(const RecordKey& key) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    std::string sql = "SELECT hyversion, blob FROM records WHERE hyhash=? AND chartmode=?";
-    append_cap_lookup(sql, key.cap);
-    Stmt s = prepare(db_, sql.c_str());
-    bind_text(s, 1, key.hyhash);
-    bind_text(s, 2, key.chartmode);
-    bind_cap_lookup(s, 3, key.cap);
-    if (sqlite3_step(s) != SQLITE_ROW) return RecordLookup{};
 
+    int64_t result_id = 0;
+    std::vector<uint8_t> structure;
     RecordLookup out;
-    out.hyversion = column_text(s, 0);
-    if (out.hyversion != current_record_version()) {
-        // Stamped by a different version: the blob is not decoded at all,
-        // matching hydata.json_load's short-circuit on hyversion mismatch.
-        // Callers see Stale and prompt a re-analyze.
-        out.status = RecordStatus::Stale;
-        return out;
+    {
+        std::string sql =
+            "SELECT result_id, hyversion, ms_enabled, structure FROM results"
+            " WHERE hyhash=? AND chartmode=?";
+        append_lookup_filter(sql, key.cap);
+        Stmt s = prepare(db_, sql.c_str());
+        bind_text(s, 1, key.hyhash);
+        bind_text(s, 2, key.chartmode);
+        bind_lookup_filter(s, 3, key.cap, key.lens);
+        if (sqlite3_step(s) != SQLITE_ROW) return RecordLookup{};
+
+        out.hyversion = column_text(s, 1);
+        // Stamped by a different version, or migrated in with unknown
+        // settings: nothing stored is decoded at all, matching
+        // hydata.json_load's short-circuit on hyversion mismatch. Callers see
+        // Stale and prompt a re-analyze.
+        if (out.hyversion != current_record_version() || sqlite3_column_int(s, 2) == -1) {
+            out.status = RecordStatus::Stale;
+            return out;
+        }
+        result_id = sqlite3_column_int64(s, 0);
+        structure = column_blob(s, 3);
     }
 
     out.status = RecordStatus::Ready;
-    const std::vector<uint8_t> blob = column_blob(s, 1);
+    const std::unordered_map<std::string, std::vector<uint8_t>> nodes = load_nodes(result_id);
+    HydraRecord record = rebuild_record(
+        structure, [&nodes](const std::string& hash) -> const std::vector<uint8_t>* {
+            auto it = nodes.find(hash);
+            return it == nodes.end() ? nullptr : &it->second;
+        });
     // The tempomap is decoded once, here, and handed back with the record --
     // the display layer needs the same timing and must not query for it again.
     out.timing = get_timing(key.hyhash);
-    out.record = out.timing ? read_record(blob, *out.timing) : read_record(blob);
+    if (out.timing) restore_timecodes(record, *out.timing);
+    out.record = std::move(record);
     return out;
 }
 
@@ -648,19 +942,24 @@ std::optional<SongTiming> RecordStore::get_timing(const std::string& hyhash) {
 
 bool RecordStore::has_record(const RecordKey& key) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    std::string sql = "SELECT 1 FROM records WHERE hyhash=? AND chartmode=? AND hyversion=?";
+    // The exact lens, never a sentinel: "already analyzed" has to mean "under
+    // these settings", or a batch run skips charts whose stored answer came
+    // from a different question.
+    std::string sql = "SELECT 1 FROM results WHERE hyhash=? AND chartmode=? AND hyversion=?"
+                      " AND " + lens_match("");
     if (key.cap.exact) sql += " AND sp_cap=?";
     else sql += " AND sp_cap>" + std::to_string(kCloneHeroSpCap);
     Stmt s = prepare(db_, sql.c_str());
     bind_text(s, 1, key.hyhash);
     bind_text(s, 2, key.chartmode);
     bind_text(s, 3, current_record_version());
-    if (key.cap.exact) sqlite3_bind_int(s, 4, *key.cap.exact);
+    int idx = bind_lens(s, 4, key.lens);
+    if (key.cap.exact) sqlite3_bind_int(s, idx, *key.cap.exact);
     return sqlite3_step(s) == SQLITE_ROW;
 }
 
 void RecordStore::for_each_blob(
-    const std::optional<std::string>& chartmode, const CapQuery& cap,
+    const std::optional<std::string>& chartmode, const CapQuery& cap, const Lens& lens,
     const std::function<void(const BlobRow&, const HydraRecord*)>& fn) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
 
@@ -668,24 +967,25 @@ void RecordStore::for_each_blob(
     // sqlite cursor — it may call back into this store.
     struct Row {
         BlobRow meta;
-        std::vector<uint8_t> blob;
+        int64_t result_id = 0;
+        std::vector<uint8_t> structure;
     };
     std::vector<Row> rows;
     {
         std::string sql =
             "SELECT s.hyhash, s.ref_name, s.ref_artist, s.ref_charter, "
-            "r.chartmode, r.hyversion, r.sp_cap, r.blob "
-            "FROM records r JOIN songmeta s ON s.hyhash = r.hyhash WHERE 1=1";
+            "r.chartmode, r.hyversion, r.sp_cap, r.result_id, r.structure, r.ms_enabled "
+            "FROM results r JOIN songmeta s ON s.hyhash = r.hyhash WHERE 1=1";
         if (chartmode) sql += " AND r.chartmode = ?";
         append_cap_set_filter(sql, cap);
         // Python's iter_blobs has no ORDER BY and gets insertion order from
         // sqlite's table scan; say so explicitly here.
-        sql += " ORDER BY r.rowid";
+        sql += " ORDER BY r.result_id";
 
         Stmt s = prepare(db_, sql.c_str());
         int idx = 1;
         if (chartmode) bind_text(s, idx++, *chartmode);
-        bind_cap_set_filter(s, idx, cap);
+        bind_cap_set_filter(s, idx, cap, lens);
         const std::string current = current_record_version();
         while (sqlite3_step(s) == SQLITE_ROW) {
             Row row;
@@ -695,10 +995,13 @@ void RecordStore::for_each_blob(
             row.meta.ref_charter = column_text(s, 3);
             row.meta.chartmode = column_text(s, 4);
             row.meta.hyversion = column_text(s, 5);
-            row.meta.status = row.meta.hyversion == current ? RecordStatus::Ready
-                                                            : RecordStatus::Stale;
             row.meta.sp_cap = sqlite3_column_int(s, 6);
-            row.blob = column_blob(s, 7);
+            row.result_id = sqlite3_column_int64(s, 7);
+            row.structure = column_blob(s, 8);
+            row.meta.status =
+                (row.meta.hyversion == current && sqlite3_column_int(s, 9) != -1)
+                    ? RecordStatus::Ready
+                    : RecordStatus::Stale;
             rows.push_back(std::move(row));
         }
     }
@@ -708,51 +1011,90 @@ void RecordStore::for_each_blob(
             fn(row.meta, nullptr);
             continue;
         }
-        HydraRecord record = read_record(row.blob);
+        const std::unordered_map<std::string, std::vector<uint8_t>> nodes =
+            load_nodes(row.result_id);
+        HydraRecord record = rebuild_record(
+            row.structure, [&nodes](const std::string& hash) -> const std::vector<uint8_t>* {
+                auto it = nodes.find(hash);
+                return it == nodes.end() ? nullptr : &it->second;
+            });
         fn(row.meta, &record);
     }
 }
 
 int RecordStore::drop_stale_records() {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    Stmt s = prepare(db_, "DELETE FROM records WHERE hyversion != ?");
-    bind_text(s, 1, current_record_version());
-    if (sqlite3_step(s) != SQLITE_DONE)
-        throw std::runtime_error(std::string("drop_stale_records failed: ") +
-                                 sqlite3_errmsg(db_));
-    return sqlite3_changes(db_);
+    // Stale is two things now: a stamp from another Hydra version, and a
+    // sentinel migrated in from an older database. Neither can ever be read.
+    const char* kWhere = "hyversion != ? OR ms_enabled = -1";
+
+    {
+        Stmt s = prepare(db_,
+            (std::string("DELETE FROM path_refs WHERE result_id IN"
+                         " (SELECT result_id FROM results WHERE ") + kWhere + ")").c_str());
+        bind_text(s, 1, current_record_version());
+        if (sqlite3_step(s) != SQLITE_DONE)
+            throw std::runtime_error(std::string("drop_stale_records refs failed: ") +
+                                     sqlite3_errmsg(db_));
+    }
+
+    int removed = 0;
+    {
+        Stmt s = prepare(db_,
+            (std::string("DELETE FROM results WHERE ") + kWhere).c_str());
+        bind_text(s, 1, current_record_version());
+        if (sqlite3_step(s) != SQLITE_DONE)
+            throw std::runtime_error(std::string("drop_stale_records failed: ") +
+                                     sqlite3_errmsg(db_));
+        removed = sqlite3_changes(db_);
+    }
+
+    exec("DELETE FROM paths WHERE NOT EXISTS (SELECT 1 FROM path_refs pr"
+         "  WHERE pr.hyhash = paths.hyhash AND pr.chartmode = paths.chartmode"
+         "    AND pr.phash = paths.phash)");
+    return removed;
 }
 
 int RecordStore::reindex() {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     struct Row {
-        std::string hyhash, chartmode, hyversion;
-        int sp_cap;
-        std::vector<uint8_t> blob;
+        int64_t result_id;
+        std::string hyversion;
+        int ms_enabled;
+        std::vector<uint8_t> structure;
     };
     std::vector<Row> rows;
     {
-        Stmt s = prepare(db_, "SELECT hyhash, chartmode, hyversion, sp_cap, blob FROM records");
+        Stmt s = prepare(db_, "SELECT result_id, hyversion, ms_enabled, structure"
+                              " FROM results ORDER BY result_id");
         while (sqlite3_step(s) == SQLITE_ROW)
-            rows.push_back({column_text(s, 0), column_text(s, 1), column_text(s, 2),
-                            sqlite3_column_int(s, 3), column_blob(s, 4)});
+            rows.push_back({sqlite3_column_int64(s, 0), column_text(s, 1),
+                            sqlite3_column_int(s, 2), column_blob(s, 3)});
     }
 
     std::string current = current_record_version();
     int done = 0;
     for (const Row& row : rows) {
+        // A stale or sentinel row gets empty summaries: its stored bytes are
+        // not this build's to read, so there is nothing to recompute from.
         PathSummary summary;
-        if (row.hyversion == current) summary = summarize_record(read_record(row.blob));
+        if (row.hyversion == current && row.ms_enabled != -1) {
+            const std::unordered_map<std::string, std::vector<uint8_t>> nodes =
+                load_nodes(row.result_id);
+            summary = summarize_record(rebuild_record(
+                row.structure,
+                [&nodes](const std::string& hash) -> const std::vector<uint8_t>* {
+                    auto it = nodes.find(hash);
+                    return it == nodes.end() ? nullptr : &it->second;
+                }));
+        }
 
         Stmt s = prepare(db_,
-            "UPDATE records SET score=?,actcount=?,maxskip=?,hardest_ms=?,avgmult=?,"
-            "notecount=?,sqin_count=?,sqout_count=?,pathcount=? "
-            "WHERE hyhash=? AND chartmode=? AND sp_cap=?");
+            "UPDATE results SET score=?,actcount=?,maxskip=?,hardest_ms=?,avgmult=?,"
+            "notecount=?,sqin_count=?,sqout_count=?,pathcount=? WHERE result_id=?");
         bind_summary(s, 1, summary);
-        bind_text(s, 10, row.hyhash);
-        bind_text(s, 11, row.chartmode);
-        sqlite3_bind_int(s, 12, row.sp_cap);
+        sqlite3_bind_int64(s, 10, row.result_id);
         if (sqlite3_step(s) != SQLITE_DONE)
             throw std::runtime_error(std::string("reindex failed: ") + sqlite3_errmsg(db_));
         ++done;
@@ -761,15 +1103,15 @@ int RecordStore::reindex() {
 }
 
 std::vector<RecordListing> RecordStore::list_records(
-    const std::optional<std::string>& chartmode, const CapQuery& cap, SortColumn order_by,
-    bool descending, std::optional<int> limit) {
+    const std::optional<std::string>& chartmode, const CapQuery& cap, const Lens& lens,
+    SortColumn order_by, bool descending, std::optional<int> limit) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     std::string sql =
         "SELECT s.hyhash, s.ref_name, s.ref_artist, s.ref_charter, r.chartmode, r.bestpath, "
         "r.score, r.actcount, r.maxskip, r.hardest_ms, r.avgmult, r.notecount, "
         "r.sqin_count, r.sqout_count, r.pathcount, r.sp_cap "
-        "FROM records r JOIN songmeta s ON s.hyhash = r.hyhash WHERE 1=1";
+        "FROM results r JOIN songmeta s ON s.hyhash = r.hyhash WHERE 1=1";
     if (chartmode) sql += " AND r.chartmode = ?";
     append_cap_set_filter(sql, cap);
 
@@ -783,7 +1125,7 @@ std::vector<RecordListing> RecordStore::list_records(
     Stmt s = prepare(db_, sql.c_str());
     int idx = 1;
     if (chartmode) bind_text(s, idx++, *chartmode);
-    bind_cap_set_filter(s, idx, cap);
+    bind_cap_set_filter(s, idx, cap, lens);
 
     std::vector<RecordListing> out;
     while (sqlite3_step(s) == SQLITE_ROW) {
@@ -807,7 +1149,7 @@ std::pair<int64_t, int64_t> RecordStore::counts() {
     sqlite3_step(songs);
     int64_t nsongs = sqlite3_column_int64(songs, 0);
 
-    Stmt records = prepare(db_, "SELECT COUNT(*) FROM records");
+    Stmt records = prepare(db_, "SELECT COUNT(*) FROM results");
     sqlite3_step(records);
     int64_t nrecords = sqlite3_column_int64(records, 0);
 

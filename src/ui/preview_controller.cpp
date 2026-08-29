@@ -19,8 +19,23 @@ PreviewController::PreviewController(ID3D11Device* device, ID3D11DeviceContext* 
 PreviewController::~PreviewController() { close(); }
 
 void PreviewController::open(const store::ChartLibraryEntry& entry, bool pro,
-                             bool bass2x, const Path* path) {
-    if (active_ && open_key_ == entry.md5) return;
+                             bool bass2x, Difficulty difficulty,
+                             const Path* path) {
+    if (active_ && open_key_ == entry.md5) {
+        std::string key = hydra::app::path_overlay_key(path);
+        if (key == path_key_) return;  // same chart, same overlay: nothing to do
+        path_ = path ? std::optional<Path>(*path) : std::nullopt;
+        path_key_ = std::move(key);
+        // Mid-load the job is building its own scene; poll() reconciles. Once
+        // the song is here the overlay is rebuilt on the spot, which leaves the
+        // audio and the playhead alone.
+        if (!job_ && song_ && !song_->is_empty()) {
+            scene_ = hydra::app::build_preview_scene(*song_, path);
+            scene_path_key_ = path_key_;
+            scene_dirty_ = true;
+        }
+        return;
+    }
     close();
 
     open_key_ = entry.md5;
@@ -28,9 +43,10 @@ void PreviewController::open(const store::ChartLibraryEntry& entry, bool pro,
     error_.clear();
     pro_ = pro;
 
-    std::optional<Path> path_copy;
-    if (path) path_copy = *path;
-    job_ = std::make_unique<PreviewLoadJob>(entry, pro, bass2x, std::move(path_copy));
+    path_ = path ? std::optional<Path>(*path) : std::nullopt;
+    path_key_ = hydra::app::path_overlay_key(path);
+    job_path_key_ = path_key_;
+    job_ = std::make_unique<PreviewLoadJob>(entry, pro, bass2x, difficulty, path_);
     job_->start();
 }
 
@@ -47,6 +63,11 @@ void PreviewController::close() {
     job_.reset();  // ResultJobBase's shutdown() joins the worker
     scene_ = hydra::app::PreviewScene{};
     scene_dirty_ = true;  // the renderer (if kept) must drop the old chart
+    song_.reset();
+    path_.reset();
+    path_key_.clear();
+    job_path_key_.clear();
+    scene_path_key_.clear();
     have_frame_ = false;
     active_ = false;
     scrubbing_ = false;
@@ -58,9 +79,12 @@ void PreviewController::close() {
 void PreviewController::poll() {
     if (!job_ || !job_->finished()) return;
 
-    if (job_->ok()) {
+    const bool ok = job_->ok();
+    if (ok) {
         PreviewLoadJob::Result result = job_->take_result();
+        song_ = std::move(result.song);
         scene_ = std::move(result.scene);
+        scene_path_key_ = job_path_key_;
         scene_dirty_ = true;
         transport_.set_gain(static_cast<float>(volume_pct_) / 100.0f);
         transport_.load(std::make_unique<audio::Playhead>(std::move(result.mixed)),
@@ -83,6 +107,15 @@ void PreviewController::poll() {
         error_ = job_->error();
     }
     job_.reset();
+    job_path_key_.clear();
+
+    // The Paths tab can change the selection while the load runs, and the job
+    // built its scene from the path it was started with.
+    if (ok && scene_path_key_ != path_key_) {
+        scene_ = hydra::app::build_preview_scene(*song_, path_ ? &*path_ : nullptr);
+        scene_path_key_ = path_key_;
+        scene_dirty_ = true;
+    }
 }
 
 ID3D11ShaderResourceView* PreviewController::render(int width, int height) {

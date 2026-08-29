@@ -2,15 +2,26 @@
 // on a redesigned binary format (see docs/CPP_PORT_PLAN.md Phase 4). Old
 // Python-era .db files are not read; a fresh scan populates a new one.
 //
-// Schema keeps hystore's shape: a `songmeta` table (one row per chart file,
-// keyed by content hash) and a `records` table (one row per (hyhash,
-// chartmode, sp_cap) analysis), with denormalized summary columns on
-// `records` so a sortable library listing never has to inflate a blob.
+// Three tables carry an analysis (schema user_version 2):
 //
-// The SP cap is part of a record's identity (docs/adr/0003): a chart keeps
-// one record per cap it was analyzed at, so a 4-bar result and a 64-bar
-// what-if never overwrite each other. Lookups say which cap they want with a
-// CapQuery.
+//   * `results` — one row per run, keyed by the FULL settings it ran under:
+//     the chart, the chart mode, the SP cap, and the Lens (ms limit + score
+//     range). Summary columns are denormalized onto it so a sortable library
+//     listing never has to inflate anything. The row holds a *structure* blob
+//     (the path tree's shape) rather than the paths themselves.
+//   * `paths` — every distinct path node, content-addressed by its hash and
+//     shared across every result that references it (store/path_codec.h). A
+//     path is never stored twice.
+//   * `path_refs` — which nodes each result uses, so the store can garbage
+//     collect a node the moment nothing points at it.
+//
+// `songmeta` (one row per chart file, keyed by content hash) is unchanged.
+//
+// Why the full settings and not just the cap: a run under a different ms
+// limit or score range is a different answer, and overwriting one with the
+// other lost the first. Now they coexist, and a lookup asks for the one it
+// wants. The SP cap half of that identity is docs/adr/0003; lookups name the
+// cap with a CapQuery and the rest with a Lens.
 
 #ifndef HYDRA_STORE_RECORD_STORE_H
 #define HYDRA_STORE_RECORD_STORE_H
@@ -27,6 +38,7 @@
 #include "core/model.h"
 #include "core/timing.h"
 #include "parse/song.h"
+#include "store/path_codec.h"
 
 struct sqlite3;
 
@@ -68,37 +80,86 @@ struct CapQuery {
     bool operator!=(const CapQuery& other) const { return !(*this == other); }
 };
 
-// One record's identity (ADR-0003): the chart, the chart mode, and the SP
-// cap. `cap` is a query because a caller may ask for "whatever Auto would
+// The rest of the settings a run happened under: the ms limit and the score
+// range. Two runs of the same chart at the same cap under different lenses
+// are two results, neither overwriting the other.
+//
+// Canonical form, so equal settings always compare equal: a disabled ms limit
+// stores value 0, because the engine ignores the number when the limit is off
+// -- "off at 10" and "off at 42" ran the identical search.
+struct Lens {
+    // 1 = ms limit on, 0 = off, -1 = a sentinel (below).
+    int ms_enabled = 0;
+    int ms_value = 0;
+    int depth_mode = 0;  // 0 = scores, 1 = points -- the INI's own ints
+    int depth_value = 0;
+
+    // `ms` is Settings::mslimit_value when the limit is on, nullopt when off.
+    static Lens from(std::optional<int> ms, int depth_mode, int depth_value) {
+        Lens lens;
+        lens.ms_enabled = ms ? 1 : 0;
+        lens.ms_value = ms ? *ms : 0;
+        lens.depth_mode = depth_mode;
+        lens.depth_value = depth_value;
+        return lens;
+    }
+
+    // A row migrated or imported from an older database: it has a result, but
+    // nothing records which settings produced it. Such a row always reads
+    // Stale, and its stored blob is never decoded.
+    static Lens sentinel() {
+        Lens lens;
+        lens.ms_enabled = -1;
+        return lens;
+    }
+    bool is_sentinel() const { return ms_enabled == -1; }
+
+    // Spelled out rather than defaulted: this project builds as C++17.
+    bool operator==(const Lens& other) const {
+        return ms_enabled == other.ms_enabled && ms_value == other.ms_value &&
+               depth_mode == other.depth_mode && depth_value == other.depth_value;
+    }
+    bool operator!=(const Lens& other) const { return !(*this == other); }
+};
+
+// One result's identity: the chart, the chart mode, the SP cap (ADR-0003) and
+// the lens. `cap` is a query because a caller may ask for "whatever Auto would
 // reuse"; a row itself always has an exact cap.
 struct RecordKey {
     std::string hyhash;
     std::string chartmode;
     CapQuery cap;
+    Lens lens;
     bool operator==(const RecordKey& other) const {
-        return hyhash == other.hyhash && chartmode == other.chartmode && cap == other.cap;
+        return hyhash == other.hyhash && chartmode == other.chartmode &&
+               cap == other.cap && lens == other.lens;
     }
     bool operator!=(const RecordKey& other) const { return !(*this == other); }
 };
 
-// A record's row, fully computed and ready to insert — the expensive half of
-// a save (summarizing + serializing), kept free of any db connection so a
+// A result's row, fully computed and ready to insert — the expensive half of
+// a save (summarizing + flattening), kept free of any db connection so a
 // worker thread can build it off the main store. Mirrors hystore.prepare_row.
 struct PreparedRow {
     std::string hyhash;
     std::string chartmode;
     std::string hyversion;
     int sp_cap = kCloneHeroSpCap;
+    Lens lens;
     std::string bestpath;
-    std::vector<uint8_t> blob;
+    // The path tree's shape (store/path_codec.h) and every distinct node it
+    // names, deduplicated.
+    std::vector<uint8_t> structure;
+    std::vector<StoredPathNode> nodes;
     PathSummary summary;
 };
 
 // Throws std::invalid_argument if the record carries no sp_cap (every
-// analyzer result does), or if the key names an exact cap that isn't the cap
-// the record was analyzed at -- that mismatch would file the result under a
-// cap it doesn't belong to. An automatic key takes whatever cap the record
-// carries.
+// analyzer result does), if the key names an exact cap that isn't the cap the
+// record was analyzed at, or if the key's lens has the ms limit on at a value
+// the record wasn't analyzed under -- each mismatch would file the result
+// under settings it doesn't belong to. An automatic key takes whatever cap the
+// record carries.
 PreparedRow prepare_row(const RecordKey& key, const HydraRecord& record);
 
 // hymisc.RECORD_VERSION equivalent: the app version that produced a row. For
@@ -108,9 +169,9 @@ std::string current_record_version();
 
 // What a stored-record lookup found. The store is the only place that decides
 // whether a row is usable: NotAnalyzed (no row at all), Stale (a row another
-// Hydra version wrote, so its contents are not trusted and its blob is never
-// decoded), or Ready (a real result -- which may legitimately have zero
-// paths).
+// Hydra version wrote, or one migrated in with unknown settings -- either way
+// its contents are not trusted and its blob is never decoded), or Ready (a
+// real result -- which may legitimately have zero paths).
 enum class RecordStatus { NotAnalyzed, Stale, Ready };
 
 // The answer to get_record: the status, plus the payload when it is Ready.
@@ -212,8 +273,10 @@ public:
     // registered.
     std::optional<SongTiming> get_timing(const std::string& hyhash);
 
-    // True when a current-version record exists for this key and cap -- the
-    // "skip, already analyzed" test for a batch run. Stale rows don't count.
+    // True when a current-version record exists for this exact key -- cap and
+    // lens both -- the "skip, already analyzed" test for a batch run. Stale
+    // rows and sentinel rows don't count, and neither does a result from
+    // different settings.
     bool has_record(const RecordKey& key);
 
     // One record's song identity, as yielded by for_each_blob. Mirrors the
@@ -239,30 +302,37 @@ public:
     // pathstrings and summaries, which never read them).
     void for_each_blob(
         const std::optional<std::string>& chartmode, const CapQuery& cap,
+        const Lens& lens,
         const std::function<void(const BlobRow&, const HydraRecord*)>& fn);
 
     // One-time import of the pre-1.6 Uncapped edition's separate library.
     // Copies that file's current-version records (and their songs) into this
-    // store under the cap each was analyzed at, restamped with the plain
-    // version. Never writes the other file. Records a note in `meta` so a
-    // second call is a no-op. Returns rows copied (0 when already done, the
-    // file is missing/unreadable, or it has no records table).
+    // store under the cap each was analyzed at. Never writes the other file.
+    // Records a note in `meta` so a second call is a no-op. Returns rows
+    // copied (0 when already done, the file is missing/unreadable, or it has
+    // no records table).
+    //
+    // The old file records no settings beyond the cap, so every copied row
+    // lands with the sentinel lens and reads Stale: "there was a result here,
+    // but nobody knows what it answered". Re-analyzing replaces it.
     int import_legacy_uncapped(const std::string& uncapped_db_path);
 
     // ---- maintenance --------------------------------------------------
 
-    // Removes records that no longer match this store's current version.
-    // Returns the number of rows removed.
+    // Removes results that no longer match this store's current version, plus
+    // the sentinel rows migrated in from an older database, then collects any
+    // path left with nothing pointing at it. Returns the number of result rows
+    // removed.
     int drop_stale_records();
 
-    // Recomputes the summary columns from stored blobs. Returns rows touched.
+    // Recomputes the summary columns from stored paths. Returns rows touched.
     int reindex();
 
     std::vector<RecordListing> list_records(
-        const std::optional<std::string>& chartmode, const CapQuery& cap,
+        const std::optional<std::string>& chartmode, const CapQuery& cap, const Lens& lens,
         SortColumn order_by, bool descending, std::optional<int> limit = std::nullopt);
 
-    // {songs, records} row counts.
+    // {songs, results} row counts.
     std::pair<int64_t, int64_t> counts();
 
     // ---- chart library (scan results) ----------------------------------
@@ -288,9 +358,15 @@ private:
     std::recursive_mutex mutex_;
 
     void exec(const char* sql);
+    bool has_table(const char* table);
     bool has_column(const char* table, const char* column);
     void add_missing_columns();
     void migrate_records_to_cap_key();
+    void create_result_tables();
+    void migrate_records_to_results();
+    // Every path node one result references, keyed by hash — what
+    // path_codec::rebuild_record's lookup closure reads.
+    std::unordered_map<std::string, std::vector<uint8_t>> load_nodes(int64_t result_id);
     std::optional<std::string> meta_get(const std::string& key);
     void meta_set(const std::string& key, const std::string& value);
 };

@@ -238,13 +238,14 @@ std::string lower_hex(std::string s) {
 
 std::vector<DmReportRow> collect_dm_rows(store::RecordStore& store,
                                          const std::vector<net::DmScore>& scores,
-                                         const std::string& chartmode) {
+                                         const std::string& chartmode,
+                                         const store::Lens& lens) {
     // One query for every stored record in this chartmode, indexed by hash.
     // Only 4-bar records: the leaderboard plays by Clone Hero's rules, and a
     // what-if cap's score would read as "above optimal" nonsense.
     std::unordered_map<std::string, store::RecordListing> by_hash;
     for (store::RecordListing& r :
-         store.list_records(chartmode, store::CapQuery::at(kCloneHeroSpCap),
+         store.list_records(chartmode, store::CapQuery::at(kCloneHeroSpCap), lens,
                             store::SortColumn::Score, /*descending=*/true)) {
         by_hash.emplace(lower_hex(r.hyhash), std::move(r));
     }
@@ -351,9 +352,10 @@ DmReportStats tally_dm_rows(const std::vector<DmReportRow>& rows) {
 GeneratedDmReport generate_dm_report(store::RecordStore& store,
                                      const std::vector<net::DmScore>& scores,
                                      const std::string& chartmode,
+                                     const store::Lens& lens,
                                      const std::string& username) {
     GeneratedDmReport out;
-    std::vector<DmReportRow> rows = collect_dm_rows(store, scores, chartmode);
+    std::vector<DmReportRow> rows = collect_dm_rows(store, scores, chartmode, lens);
     out.stats = tally_dm_rows(rows);
     if (rows.empty()) return out;
 

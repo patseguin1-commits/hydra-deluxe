@@ -193,6 +193,11 @@ void render_actions_row(AppState& app) {
         if (app.settings.sp_cap != kCloneHeroSpCap) {
             app.set_status("Leaderboard comparison needs SP cap 4 (Clone Hero's rule). "
                            "Set it in a song's details.");
+        } else if (app.settings.difficulty() != Difficulty::Expert) {
+            // The ladder only carries Expert scores, so a Hard/Medium/Easy
+            // library has nothing to compare against.
+            app.set_status("Leaderboard comparison needs Expert difficulty. "
+                           "Switch the View difficulty back to Expert.");
         } else {
             // Fresh picker: drop any finished report from a previous run, and
             // only refetch the ladder if we don't already have it this session
@@ -213,17 +218,39 @@ void render_actions_row(AppState& app) {
 void render_view_controls(AppState& app) {
     ImGui::TextUnformatted("View:");
     ImGui::SameLine();
-    // Only "Expert" exists end-to-end today. A plain label says so honestly;
-    // the permanently-disabled combo this replaces rendered exactly like a
-    // working dropdown (DisabledAlpha is 1.0, so a bare BeginDisabled has no
-    // visual effect) and silently swallowed clicks.
-    ImGui::TextDisabled("Expert");
-    hint("Only Expert difficulty is supported right now.");
+    ImGui::SetNextItemWidth(px(90));
+    const char* kDifficulties[] = {"Expert", "Hard", "Medium", "Easy"};
+    int difficulty_idx = static_cast<int>(app.settings.difficulty());
+    if (ImGui::Combo("##difficulty", &difficulty_idx, kDifficulties,
+                     IM_ARRAYSIZE(kDifficulties))) {
+        app.settings.view_difficulty = kDifficulties[difficulty_idx];
+        // A different difficulty is a different chartmode, so commit_settings
+        // resets the page, re-reads the library and rewrites the INI.
+        app.commit_settings();
+    }
+    hint("Which charted difficulty to analyze, path and preview");
 
     ImGui::SameLine();
     if (ImGui::Checkbox("Pro Drums", &app.settings.view_prodrums)) app.commit_settings();
     ImGui::SameLine();
-    if (ImGui::Checkbox("2x Bass", &app.settings.view_bass2x)) app.commit_settings();
+
+    // A second kick pedal only exists in Expert charting, so off Expert the
+    // box reads unchecked and is visibly disabled. The stored view_bass2x is
+    // left alone: BeginDisabled swallows the click, so nothing commits, and
+    // returning to Expert brings the user's own setting back.
+    const bool expert = app.settings.difficulty() == Difficulty::Expert;
+    bool bass2x_shown = app.settings.effective_bass2x();
+    begin_disabled_checkbox(!expert);
+    if (ImGui::Checkbox("2x Bass", &bass2x_shown)) {
+        app.settings.view_bass2x = bass2x_shown;
+        app.commit_settings();
+    }
+    end_disabled_checkbox(!expert);
+    // hint() can't be used here: ImGui does not report a disabled item as
+    // hovered unless asked, so the tooltip would never appear.
+    if (!expert && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal |
+                                        ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("2x Bass is an Expert-only charting concept.");
 }
 
 void render_search_box(AppState& app) {
@@ -498,6 +525,7 @@ void render_batch_modal(AppState& app) {
         if (!app.report_started && !app.batch_job->is_cancelled()) {
             app.report_started = true;
             app.report_job = std::make_unique<ReportJob>(*app.store, app.settings.cap_query(),
+                                                         app.settings.lens(),
                                                          app.settings.auto_open_report,
                                                          app.settings.hit_window_ms);
             app.report_job->start();

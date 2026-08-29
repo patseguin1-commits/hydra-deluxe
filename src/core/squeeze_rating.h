@@ -110,8 +110,15 @@ struct ActivationRating {
     // on older blobs.
     ActTransferScales scales;
     // The materially affected directions: drive the scale-warning line.
+    // late/early_warns aggregate; the per-end flags record which end tripped
+    // them (backend rows are judged at the post end, SqIn/SqOut phrase notes
+    // at the pre end), so the line can print the scale that actually warned.
     bool late_warns = false;
     bool early_warns = false;
+    bool late_backend_warns = false;
+    bool early_backend_warns = false;
+    bool late_note_warns = false;
+    bool early_note_warns = false;
     // One entry per act.display_backends() row, in that order.
     std::vector<BackendRating> backends;
 };

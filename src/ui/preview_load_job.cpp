@@ -11,10 +11,11 @@
 namespace hydra::ui {
 
 PreviewLoadJob::PreviewLoadJob(store::ChartLibraryEntry entry, bool pro, bool bass2x,
-                               std::optional<Path> path)
+                               Difficulty difficulty, std::optional<Path> path)
     : entry_(std::move(entry)),
       pro_(pro),
       bass2x_(bass2x),
+      difficulty_(difficulty),
       path_(std::move(path)) {}
 
 void PreviewLoadJob::start() { spawn([this] { run(); }); }
@@ -25,7 +26,15 @@ void PreviewLoadJob::run() {
         // are never stored), then decode + mix to one 48 kHz stereo buffer.
         step_.store(Step::Reading);
         app::PreviewSource source =
-            app::resolve_preview_source(entry_.notespath, pro_, bass2x_);
+            app::resolve_preview_source(entry_.notespath, pro_, bass2x_, difficulty_);
+        // A chart with no charting at this difficulty would otherwise build an
+        // empty scene and the tab would show a blank highway with no reason
+        // given. Throwing here surfaces it as "Preview failed: ...", the same
+        // wording analysis uses.
+        if (source.song.is_empty())
+            throw ChartFileError(std::string("No ") + difficulty_name(difficulty_) +
+                                 (pro_ ? " Pro Drums" : " Drums") +
+                                 " notes in this chart.");
         step_.store(Step::Decoding);
         audio::DecodedAudio mixed = audio::decode_and_mix(
             source.stems, /*out_rate=*/48000, /*out_channels=*/2, [this](int done, int total) {
@@ -36,7 +45,7 @@ void PreviewLoadJob::run() {
         step_.store(Step::Building);
         const Path* path = path_ ? &*path_ : nullptr;
         app::PreviewScene scene = app::build_preview_scene(source.song, path);
-        result_ = Result{std::move(scene), std::move(mixed)};
+        result_ = Result{std::move(scene), std::move(mixed), std::move(source.song)};
         return true;
     });
 }

@@ -45,7 +45,8 @@ struct DmReportRow {
 // matched Hydra record's when the leaderboard entry is an "unknown" one.
 std::vector<DmReportRow> collect_dm_rows(store::RecordStore& store,
                                          const std::vector<net::DmScore>& scores,
-                                         const std::string& chartmode);
+                                         const std::string& chartmode,
+                                         const store::Lens& lens);
 
 // The self-contained comparison page. Same __SUBTITLE__/__FOOTER__/__DATA__
 // placeholder mechanism as report::build_html, with its own columns.
@@ -73,6 +74,7 @@ struct GeneratedDmReport {
 GeneratedDmReport generate_dm_report(store::RecordStore& store,
                                      const std::vector<net::DmScore>& scores,
                                      const std::string& chartmode,
+                                     const store::Lens& lens,
                                      const std::string& username);
 
 }  // namespace hydra::app::dm_report

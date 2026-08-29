@@ -373,6 +373,8 @@ TEST_CASE("rate_activation: SqIns warn late, SqOuts early, with no backend rows"
     ActivationRating rate = rate_activation(act, nullptr, 85.0);
     CHECK(rate.late_warns);
     CHECK_FALSE(rate.early_warns);
+    CHECK(rate.late_note_warns);
+    CHECK_FALSE(rate.late_backend_warns);
     CHECK(rate.backends.empty());
 
     act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -50.0});
@@ -419,6 +421,8 @@ TEST_CASE("rate_activation: stored scales, materiality-gated warns and rows") {
     scaled.transfer_post.late = 0.5;
     r = rate_activation(scaled, nullptr, 85.0);
     CHECK(r.late_warns);
+    CHECK(r.late_backend_warns);
+    CHECK_FALSE(r.late_note_warns);
     CHECK_FALSE(r.early_warns);
     REQUIRE(r.backends.size() == 1);
     CHECK(r.backends[0].scale == doctest::Approx(0.5));
@@ -443,6 +447,8 @@ TEST_CASE("rate_activation: stored scales, materiality-gated warns and rows") {
     sqout.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -50.0});
     r = rate_activation(sqout, nullptr, 85.0);
     CHECK(r.early_warns);
+    CHECK(r.early_note_warns);
+    CHECK_FALSE(r.early_backend_warns);
     CHECK_FALSE(r.late_warns);
 }
 

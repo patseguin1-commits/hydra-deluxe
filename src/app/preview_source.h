@@ -9,8 +9,11 @@
 //     stems, ...);
 //   * a .sng container — audio lives in the same XOR-masked file table the
 //     notes come from;
-//   * a .srb container — audio is in the trailing DEFLATE streams past the
-//     notes stream, identified by magic bytes since the streams are unnamed.
+//   * a .srb container — art (image) streams follow the notes stream in the
+//     same DEFLATE chain and are skipped by magic bytes; the actual song
+//     audio lives past those in a separate, per-track-encrypted record
+//     section this module cannot read. A .srb chart therefore falls back to
+//     a loose audio file beside the chart, same as a folder chart.
 //
 // The audio bytes/paths produced here are decoded and mixed by the audio engine
 // (Phase 3); this module does no decoding.
@@ -45,10 +48,12 @@ struct PreviewSource {
     std::vector<PreviewAudioStem> stems;
 };
 
-// Parse `notespath` (any supported chart kind) and gather its audio. pro/bass2x
-// mirror the analysis toggles so the previewed notes match the analyzed ones.
+// Parse `notespath` (any supported chart kind) and gather its audio.
+// pro/bass2x/difficulty mirror the analysis toggles so the previewed notes
+// match the analyzed ones.
 PreviewSource resolve_preview_source(const std::string& notespath, bool pro,
-                                     bool bass2x);
+                                     bool bass2x,
+                                     Difficulty difficulty = Difficulty::Expert);
 
 // ---- pieces, exposed for testing and reuse -------------------------------
 
@@ -69,9 +74,14 @@ std::vector<PreviewAudioStem> find_loose_audio(const std::string& folder);
 // XOR-demasked to their original bytes. Labels are the entries' base filenames.
 std::vector<PreviewAudioStem> extract_sng_audio(const std::string& path);
 
-// Audio blobs embedded in a .srb container: the trailing DEFLATE streams past
-// the notes stream, inflated and kept when they look like audio. Labels tag the
-// stream index.
+// Audio blobs embedded in a .srb container's DEFLATE chain, past the notes
+// stream, inflated and kept when they look like audio. In practice this chain
+// holds only art (a JPEG or two); the real song audio sits in a separate,
+// per-track-encrypted section past the chain that this function does not
+// touch, so it returns empty for every known .srb. Kept as a named piece (see
+// preview_source.h's top comment) so resolve_preview_source has something to
+// fall back from, and for whatever chart tools eventually put readable audio
+// in that chain. Labels tag the stream index.
 std::vector<PreviewAudioStem> extract_srb_audio(const std::string& path);
 
 }  // namespace hydra::app

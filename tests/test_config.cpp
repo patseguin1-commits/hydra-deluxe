@@ -41,6 +41,8 @@ TEST_CASE("settings round-trip through an INI file") {
     s.depth_mode = 1;
     s.mslimit_enabled = false;
     s.mslimit_value = 42;
+    s.backendlimit_enabled = true;
+    s.backendlimit_value = 42;
     s.hit_window_ms = 79;
     s.preview_volume = 23;
     s.sp_cap = 16;
@@ -61,6 +63,8 @@ TEST_CASE("settings round-trip through an INI file") {
     CHECK(r.depth_mode == s.depth_mode);
     CHECK(r.mslimit_enabled == s.mslimit_enabled);
     CHECK(r.mslimit_value == s.mslimit_value);
+    CHECK(r.backendlimit_enabled == s.backendlimit_enabled);
+    CHECK(r.backendlimit_value == s.backendlimit_value);
     CHECK(r.hit_window_ms == s.hit_window_ms);
     CHECK(r.preview_volume == s.preview_volume);
     CHECK(r.sp_cap == s.sp_cap);
@@ -78,6 +82,8 @@ TEST_CASE("a missing INI yields defaults") {
     CHECK(r.mslimit_enabled == d.mslimit_enabled);
     CHECK(r.mslimit_value == d.mslimit_value);
     CHECK(r.mslimit_value == 10);
+    CHECK(r.backendlimit_enabled == false);
+    CHECK(r.backendlimit_value == 50);
     CHECK(r.hit_window_ms == 85);
     CHECK(r.preview_volume == 40);
 }
@@ -105,23 +111,80 @@ TEST_CASE("malformed INI lines are tolerated") {
 }
 
 TEST_CASE("chartmode_key names the view flags") {
+    // All four Expert keys, byte for byte: every record already in a user's
+    // store is filed under one of these, so none of them may ever move.
     Settings s;
     CHECK(s.chartmode_key() == "Expert Pro Drums, 2x Bass");
-    s.view_prodrums = false;
-    CHECK(s.chartmode_key() == "Expert Drums, 2x Bass");
     s.view_bass2x = false;
+    CHECK(s.chartmode_key() == "Expert Pro Drums, 1x Bass");
+    s.view_prodrums = false;
     CHECK(s.chartmode_key() == "Expert Drums, 1x Bass");
+    s.view_bass2x = true;
+    CHECK(s.chartmode_key() == "Expert Drums, 2x Bass");
 }
 
-TEST_CASE("record_key carries the chartmode and the SP cap setting") {
+TEST_CASE("chartmode_key: a non-Expert difficulty is always 1x Bass") {
+    Settings s;
+    s.view_difficulty = "Hard";
+    s.view_prodrums = true;
+    s.view_bass2x = true;  // stored true, but 2x is an Expert-only concept
+    CHECK(s.difficulty() == hydra::Difficulty::Hard);
+    CHECK(s.effective_bass2x() == false);
+    CHECK(s.chartmode_key() == "Hard Pro Drums, 1x Bass");
+    CHECK(s.to_analysis_settings().bass2x == false);
+    CHECK(s.to_analysis_settings().difficulty == hydra::Difficulty::Hard);
+
+    s.view_prodrums = false;
+    CHECK(s.chartmode_key() == "Hard Drums, 1x Bass");
+    s.view_difficulty = "Medium";
+    CHECK(s.chartmode_key() == "Medium Drums, 1x Bass");
+    s.view_difficulty = "Easy";
+    CHECK(s.chartmode_key() == "Easy Drums, 1x Bass");
+
+    // Back on Expert the stored 2x flag is still there and takes effect again.
+    s.view_difficulty = "Expert";
+    s.view_prodrums = true;
+    CHECK(s.effective_bass2x() == true);
+    CHECK(s.chartmode_key() == "Expert Pro Drums, 2x Bass");
+}
+
+TEST_CASE("view_difficulty round-trips, and a junk value normalizes to Expert") {
+    const std::string path = temp_ini("difficulty");
+
+    Settings s;
+    s.view_difficulty = "Hard";
+    REQUIRE(s.save_file(path));
+    Settings r = Settings::load_file(path);
+    CHECK(r.view_difficulty == "Hard");
+    CHECK(r.difficulty() == hydra::Difficulty::Hard);
+
+    // A hand-edited INI can hold anything; the loaded settings never do, so a
+    // junk word can't reach chartmode_key and invent a chartmode.
+    {
+        std::ofstream f(path, std::ios::trunc);
+        f << "view_difficulty=Legendary\n";
+    }
+    Settings junk = Settings::load_file(path);
+    CHECK(junk.view_difficulty == "Expert");
+    CHECK(junk.difficulty() == hydra::Difficulty::Expert);
+    CHECK(junk.chartmode_key() == "Expert Pro Drums, 2x Bass");
+    std::remove(path.c_str());
+}
+
+TEST_CASE("record_key carries the chartmode, the SP cap and the lens") {
     namespace store = hydra::store;
 
     Settings s;
     s.sp_cap = std::nullopt;
+    s.mslimit_enabled = true;
+    s.mslimit_value = 10;
+    s.depth_mode = 0;
+    s.depth_value = 4;
     store::RecordKey auto_key = s.record_key("abc");
     CHECK(auto_key.hyhash == "abc");
     CHECK(auto_key.chartmode == s.chartmode_key());
     CHECK(auto_key.cap == store::CapQuery::automatic());
+    CHECK(auto_key.lens == store::Lens::from(10, 0, 4));
 
     // A fixed cap asks for exactly that cap, and the chartmode follows the
     // view flags.
@@ -130,6 +193,37 @@ TEST_CASE("record_key carries the chartmode and the SP cap setting") {
     store::RecordKey exact_key = s.record_key("abc");
     CHECK(exact_key.chartmode == "Expert Drums, 2x Bass");
     CHECK(exact_key.cap == store::CapQuery::at(32));
+
+    // Each searched-over setting moves the lens...
+    s.depth_mode = 1;
+    s.depth_value = 5000;
+    CHECK(s.record_key("abc").lens == store::Lens::from(10, 1, 5000));
+
+    // ...and switching the ms limit off drops its number, because the search
+    // stops reading it.
+    s.mslimit_enabled = false;
+    CHECK(s.record_key("abc").lens == store::Lens::from(std::nullopt, 1, 5000));
+    CHECK(s.lens().ms_value == 0);
+    s.mslimit_value = 42;
+    CHECK(s.lens() == store::Lens::from(std::nullopt, 1, 5000));
+}
+
+TEST_CASE("lens_from(AnalysisSettings) agrees with Settings::lens()") {
+    // The GUI keys a record off Settings; a batch run keys it off the
+    // AnalysisSettings it derived. If these two ever disagreed, the CLI would
+    // file results under a key the app never looks up.
+    Settings s;
+    for (bool ms_on : {true, false}) {
+        for (int mode : {0, 1}) {
+            for (int value : {0, 4, 5000}) {
+                s.mslimit_enabled = ms_on;
+                s.mslimit_value = 25;
+                s.depth_mode = mode;
+                s.depth_value = value;
+                CHECK(hydra::app::lens_from(s.to_analysis_settings()) == s.lens());
+            }
+        }
+    }
 }
 
 TEST_CASE("sp_cap round-trips as a number or auto; pre-1.6 keys are ignored") {

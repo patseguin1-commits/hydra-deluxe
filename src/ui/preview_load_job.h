@@ -13,6 +13,7 @@
 #include "app/preview_view.h"
 #include "audio/decode.h"
 #include "core/model.h"
+#include "parse/song.h"
 #include "store/record_store.h"
 #include "ui/job_base.h"
 
@@ -26,7 +27,7 @@ namespace hydra::ui {
 class PreviewLoadJob : public ResultJobBase {
 public:
     PreviewLoadJob(store::ChartLibraryEntry entry, bool pro, bool bass2x,
-                   std::optional<Path> path);
+                   Difficulty difficulty, std::optional<Path> path);
     ~PreviewLoadJob() { shutdown(); }
 
     void start();
@@ -34,6 +35,9 @@ public:
     struct Result {
         app::PreviewScene scene;
         audio::DecodedAudio mixed;
+        // The parsed song the scene was built from. The controller keeps it so
+        // a later path selection can rebuild the overlay without re-parsing.
+        Song song;
     };
 
     // Valid once finished() && ok(); moves the result out (call once).
@@ -61,6 +65,7 @@ private:
     store::ChartLibraryEntry entry_;
     bool pro_;
     bool bass2x_;
+    Difficulty difficulty_;
     std::optional<Path> path_;
     std::optional<Result> result_;
 

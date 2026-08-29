@@ -338,11 +338,13 @@ std::pair<std::string, std::string> tier_for(const std::optional<double>& ms,
 }
 
 std::vector<ReportRow> collect_rows(store::RecordStore& store, int64_t max_paths,
-                                    const store::CapQuery& cap, double hit_window_ms) {
+                                    const store::CapQuery& cap, const store::Lens& lens,
+                                    double hit_window_ms) {
     std::vector<ReportRow> rows;
 
-    store.for_each_blob(std::nullopt, cap, [&](const store::RecordStore::BlobRow& meta,
-                                               const HydraRecord* record) {
+    store.for_each_blob(std::nullopt, cap, lens,
+                        [&](const store::RecordStore::BlobRow& meta,
+                            const HydraRecord* record) {
         // Only rows the store calls Ready have a decoded record; anything
         // else (a stale stamp) is skipped, as record.is_version_compatible()
         // did in Python.
@@ -459,7 +461,7 @@ GeneratedReport generate_report(store::RecordStore& store,
 
     const double w = static_cast<double>(options.hit_window_ms);
     std::vector<ReportRow> rows =
-        collect_rows(store, options.max_paths, options.cap, w);
+        collect_rows(store, options.max_paths, options.cap, options.lens, w);
     out.rows = static_cast<int64_t>(rows.size());
     if (rows.empty()) return out;
 

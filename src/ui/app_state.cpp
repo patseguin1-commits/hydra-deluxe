@@ -14,7 +14,8 @@ AppState::AppState(app::Settings initial_settings,
     : settings(std::move(initial_settings)),
       store(std::move(initial_store)),
       committed_chartmode_(settings.chartmode_key()),
-      committed_cap_(settings.cap_query()) {
+      committed_cap_(settings.cap_query()),
+      committed_lens_(settings.lens()) {
     refresh_page();
 }
 
@@ -146,6 +147,7 @@ void AppState::start_dm_report(const std::string& discord_id, const std::string&
     if (dm_report_job && !dm_report_job->finished()) return;
     dm_report_job = std::make_unique<DmReportJob>(*store, discord_id, username,
                                                   settings.chartmode_key(),
+                                                  settings.lens(),
                                                   settings.auto_open_report);
     // Remember the choice so the picker can pre-select it next time.
     settings.dm_last_user = discord_id;
@@ -163,25 +165,28 @@ void AppState::commit_settings() {
         set_status("Settings could not be saved — " + app::ini_path() +
                    " is not writable.");
 
-    // Which record a chart shows is (chart, chart mode, SP cap). When either
-    // of the last two moves, every cached lookup is answering the old
+    // Which record a chart shows is (chart, chart mode, SP cap, lens). When
+    // any of the last three moves, every cached lookup is answering the old
     // question and has to be re-asked.
     std::string chartmode = settings.chartmode_key();
     store::CapQuery cap = settings.cap_query();
+    store::Lens lens = settings.lens();
     if (chartmode != committed_chartmode_) {
         // A different chart mode is a different library listing, so the user
         // starts over at page one.
         table_viewpage = 0;
         refresh_page();
         refresh_viewed_record();
-    } else if (cap != committed_cap_) {
-        // The cap box lives in the details modal. Resetting the page here
-        // would yank the library out from under a user who never touched it.
+    } else if (cap != committed_cap_ || lens != committed_lens_) {
+        // The cap box and the search controls live in the details modal.
+        // Resetting the page here would yank the library out from under a
+        // user who never touched it.
         refresh_page();
         refresh_viewed_record();
     }
     committed_chartmode_ = std::move(chartmode);
     committed_cap_ = cap;
+    committed_lens_ = lens;
 }
 
 }  // namespace hydra::ui

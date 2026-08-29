@@ -58,6 +58,7 @@ int main(int argc, char** argv) {
     hydra::app::report::ReportOptions options;
     options.max_paths = max_paths;
     options.cap = settings.cap_query();
+    options.lens = settings.lens();
     options.hit_window_ms = settings.hit_window_ms;
     options.db_path = db;
 

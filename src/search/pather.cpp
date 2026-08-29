@@ -80,7 +80,7 @@ std::vector<Path> search_allzero(const ScoreGraph& graph,
     // depth_value 0 keeps only the top score; its tied peers still merge into
     // variants (up to MAX_TIED_PATHS), which is where the E / + / - variations
     // of one all-0 path come from. The 0 ms limit is the point of the feature,
-    // so it is fixed here and ignores the user's "Limit timings" setting --
+    // so it is fixed here and ignores the user's "Path limit" setting --
     // and it is applied hard. The default soft filter only prefers paths inside
     // the limit and still reports an over-limit one while nothing outscores it,
     // which in a no-skips search (a tiny candidate set, usually one path per
@@ -233,7 +233,7 @@ HydraRecord analyze_auto_cap(const Song& song, DepthMode depth_mode, int depth_v
 HydraRecord analyze_chart(const Song& song, const SearchSettings& settings,
                           const std::function<void(float)>& on_progress) {
     if (song.is_empty())
-        throw ChartFileError("No Expert pro drums notes in this chart.");
+        throw ChartFileError("No drum notes in this chart.");
 
     const std::optional<int> sp_cap = settings.sp_cap;
     const DepthMode depth_mode = settings.depth_mode;

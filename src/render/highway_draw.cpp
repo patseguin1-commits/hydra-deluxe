@@ -251,17 +251,28 @@ std::vector<DrawCommand> build_highway_draws(const TrackState& state, const Prev
                            tex_mat(tex), 1.0f, DepthMode::Always));
     }
 
-    // 4. Lane strips (depth off): every fill window lights all four lanes
-    //    (Onyx's BRE look); the activated fill lights its activation lane
-    //    again on top.
+    // 4. Lane strips (depth off): a fill window lights all four lanes (Onyx's
+    //    BRE look), dimmed to fill_offered_alpha for a fill the path passed
+    //    over and at full strength for the one it activates on. That fill's
+    //    activation lane then draws once more in the lit target texture, so
+    //    the lane to hit stands out from the other three.
     {
-        auto strip = [&](Pad pad, double t1, double t2, float alpha) {
+        auto strip_tex = [&](Pad pad, double t1, double t2, TextureId tex, float alpha) {
             float x1, x2;
             pad_x(cfg, pad, x1, x2);
-            out.push_back(flat(x1, T.y, z_of(t1), x2, z_of(t2), tex_mat(lane_tex(pad)), alpha,
+            out.push_back(flat(x1, T.y, z_of(t1), x2, z_of(t2), tex_mat(tex), alpha,
                                DepthMode::Always));
         };
+        auto strip = [&](Pad pad, double t1, double t2, float alpha) {
+            strip_tex(pad, t1, t2, lane_tex(pad), alpha);
+        };
         for (const ToggleSpan& s : state.make_toggle_bounds(win, near_t, far_t, &TrackInstant::fill)) {
+            if (!s.on) continue;
+            for (Pad p : {Pad::Red, Pad::Yellow, Pad::Blue, Pad::Green})
+                strip(p, s.t1, s.t2, cfg.hydra.fill_offered_alpha);
+        }
+        for (const ToggleSpan& s :
+             state.make_toggle_bounds(win, near_t, far_t, &TrackInstant::fill_taken)) {
             if (!s.on) continue;
             for (Pad p : {Pad::Red, Pad::Yellow, Pad::Blue, Pad::Green}) strip(p, s.t1, s.t2, 1.0f);
         }
@@ -273,7 +284,7 @@ std::vector<DrawCommand> build_highway_draws(const TrackState& state, const Prev
             if (!pad)
                 for (const TrackInstant& inst : win)
                     if (inst.fill_lane_pad) { pad = inst.fill_lane_pad; break; }
-            if (pad) strip(*pad, s.t1, s.t2, cfg.hydra.fill_activation_lane_boost);
+            if (pad) strip_tex(*pad, s.t1, s.t2, target_tex(*pad, true), 1.0f);
         }
     }
 

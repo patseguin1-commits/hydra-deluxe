@@ -35,10 +35,10 @@ RecordStatusView build_record_status(const store::RecordLookup& lookup) {
     view.lines.push_back("Paths kept:  " +
                          std::to_string((int)record.all_paths().size()));
     if (record.ms_limit)
-        view.lines.push_back("Limit timings:  " +
+        view.lines.push_back("Path limit:  " +
                              std::to_string((int)*record.ms_limit) + " ms");
     else
-        view.lines.push_back("Limit timings:  off");
+        view.lines.push_back("Path limit:  off");
     if (record.sp_cap)
         view.lines.push_back("SP cap:  " + std::to_string(*record.sp_cap) + " bars");
     return view;
@@ -65,7 +65,8 @@ const char* const kTransferScaleHint =
 
 ActivationsView build_activations(const Path& path, const HydraRecord& record,
                                   const SongTiming* timing,
-                                  double hit_window_ms) {
+                                  double hit_window_ms,
+                                  std::optional<double> backend_limit_ms) {
     ActivationsView view;
     const double W = hit_window_ms;
 
@@ -102,36 +103,77 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
 
         ActivationRating rate = rate_activation(act, timing, W);
 
-        if (rate.late_warns || rate.early_warns) {
-            bool show_late = rate.late_warns;
-            bool show_early = rate.early_warns;
-            const TransferScale& scale = rate.scales.post;
-            char buf[192];
-            if (show_late && show_early &&
-                std::abs(scale.late - scale.early) > 0.005) {
-                std::snprintf(buf, sizeof(buf),
-                              "Frontend timing scales x%.2f (late) / x%.2f "
-                              "(early) at the SP end.",
-                              scale.late, scale.early);
-            } else if (show_late && show_early) {
-                // Both directions apply and are (nearly) equal.
-                std::snprintf(buf, sizeof(buf),
-                              "Frontend timing scales x%.2f to the SP end: "
-                              "10ms at the frontend moves the SP end %s%.1fms.",
-                              scale.late,
-                              scale.late < 1.0 ? "only " : "",
-                              10.0 * scale.late);
-            } else {
-                double r = show_late ? scale.late : scale.early;
+        // The line prints the scale(s) that actually tripped the warn:
+        // backend rows are judged at the post (deact-node) end, SqIn/SqOut
+        // phrase notes at the pre (pre-extension) end -- different numbers
+        // when a SqIn extended SP. A scale that still displays as x1.00 has
+        // nothing to say (a bare over-budget gap trips materiality too), so
+        // it is dropped; with no claims left there is no line at all.
+        struct ScaleClaim { double r; bool late; bool note; };
+        std::vector<ScaleClaim> claims;
+        auto claim = [&claims](double r, bool late, bool note) {
+            if (std::abs(r - 1.0) < 0.005) return;  // renders as x1.00
+            for (const ScaleClaim& c : claims)
+                if (c.late == late && std::abs(c.r - r) <= 0.005) return;
+            claims.push_back({r, late, note});
+        };
+        if (rate.late_backend_warns) claim(rate.scales.post.late, true, false);
+        if (rate.late_note_warns) claim(rate.scales.pre.late, true, true);
+        if (rate.early_backend_warns) claim(rate.scales.post.early, false, false);
+        if (rate.early_note_warns) claim(rate.scales.pre.early, false, true);
+
+        // A note claim needs its end named only when the post end disagrees.
+        auto ends_agree = [&rate](const ScaleClaim& c) {
+            double post = c.late ? rate.scales.post.late : rate.scales.post.early;
+            return std::abs(c.r - post) <= 0.005;
+        };
+
+        char buf[192];
+        if (claims.size() == 1) {
+            const ScaleClaim& c = claims[0];
+            if (!c.note || ends_agree(c)) {
                 std::snprintf(buf, sizeof(buf),
                               "Frontend timing scales x%.2f to the SP end: "
                               "%s at the frontend moves the SP end %s%s%.1fms.",
-                              r,
-                              show_late ? "+10ms (late)" : "-10ms (early)",
-                              r < 1.0 ? "only " : "",
-                              show_late ? "+" : "-", 10.0 * r);
+                              c.r, c.late ? "+10ms (late)" : "-10ms (early)",
+                              c.r < 1.0 ? "only " : "", c.late ? "+" : "-",
+                              10.0 * c.r);
+            } else {
+                std::snprintf(buf, sizeof(buf),
+                              "Frontend timing scales x%.2f at the %s's SP end: "
+                              "%s at the frontend moves that end %s%s%.1fms.",
+                              c.r, c.late ? "SqIn" : "SqOut",
+                              c.late ? "+10ms (late)" : "-10ms (early)",
+                              c.r < 1.0 ? "only " : "", c.late ? "+" : "-",
+                              10.0 * c.r);
             }
             av.scale_warning = buf;
+        } else if (claims.size() == 2 && claims[0].late != claims[1].late &&
+                   ends_agree(claims[0]) && ends_agree(claims[1])) {
+            const ScaleClaim& lc = claims[0].late ? claims[0] : claims[1];
+            const ScaleClaim& ec = claims[0].late ? claims[1] : claims[0];
+            if (std::abs(lc.r - ec.r) > 0.005) {
+                std::snprintf(buf, sizeof(buf),
+                              "Frontend timing scales x%.2f (late) / x%.2f "
+                              "(early) at the SP end.",
+                              lc.r, ec.r);
+            } else {
+                std::snprintf(buf, sizeof(buf),
+                              "Frontend timing scales x%.2f to the SP end: "
+                              "10ms at the frontend moves the SP end %s%.1fms.",
+                              lc.r, lc.r < 1.0 ? "only " : "", 10.0 * lc.r);
+            }
+            av.scale_warning = buf;
+        } else if (!claims.empty()) {
+            std::string parts;
+            for (const ScaleClaim& c : claims) {
+                std::snprintf(buf, sizeof(buf), "x%.2f (%s, %s)", c.r,
+                              c.late ? "late" : "early",
+                              c.note ? (c.late ? "SqIn" : "SqOut") : "backends");
+                if (!parts.empty()) parts += " / ";
+                parts += buf;
+            }
+            av.scale_warning = "Frontend timing scales " + parts + ".";
         }
 
         for (const SPSqueeze& sq : act.sqinouts)
@@ -140,6 +182,14 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
         av.backends.reserve(rate.backends.size());
         for (const BackendRating& br : rate.backends) {
             const BackendSqueeze& bsq = br.row;
+
+            // The display window the user asked for. It only drops rows from
+            // the table: the ratings above (and the warns feeding the scale
+            // line) still read every stored row. A squeezed-out note is the
+            // reason the row matters, so it always shows.
+            if (backend_limit_ms && !br.squeezed_out &&
+                std::fabs(bsq.offset_ms.value_or(0.0)) > *backend_limit_ms)
+                continue;
 
             BackendRowView row;
             char tbuf[32];
@@ -269,7 +319,7 @@ PathListView build_path_list(const HydraRecord& record) {
     view.more_label = "More Paths";
     if (record.ms_limit)
         view.more_label +=
-            " (Limit timings: " + std::to_string((int)*record.ms_limit) + " ms)";
+            " (Path limit: " + std::to_string((int)*record.ms_limit) + " ms)";
 
     // The all-0 section is only worth showing when the generated list does
     // not already contain that path: same score and same notation is the same

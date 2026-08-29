@@ -60,6 +60,13 @@ void end_disabled_button(bool disabled);
 void begin_disabled_input(bool disabled);
 void end_disabled_input(bool disabled);
 
+// Same, for a Checkbox: the box takes the disabled input's flat dark face and
+// the label goes dim. The label uses kNewSongColor rather than the (50,50,50)
+// disabled_text gray, which on the window background is all but unreadable —
+// a dimmed label still has to be legible enough to say what is switched off.
+void begin_disabled_checkbox(bool disabled);
+void end_disabled_checkbox(bool disabled);
+
 }  // namespace hydra::ui
 
 #endif  // HYDRA_UI_THEME_H

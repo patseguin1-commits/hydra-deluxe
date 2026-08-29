@@ -23,10 +23,12 @@ The search that computes a chart's paths and stores the result as a record.
 
 **Record**:
 The stored result of one analysis: the kept paths, their scores, and the
-settings the analysis ran with. A chart keeps one record per SP cap. A record
-is stale when an older Hydra version produced it. A lookup reports it as one
-of three statuses: not analyzed, stale, or ready. Its key is the chart, the
-chart mode, and the SP cap.
+settings the analysis ran with. Its key is the chart, the chart mode, the SP
+cap, and the analysis settings (the ms limit and the score range). A chart
+keeps one record per settings combination; records share their stored paths,
+so a path found under several combinations is stored once. A record is stale
+when an older Hydra version produced it. A lookup reports it as one of three
+statuses: not analyzed, stale, or ready.
 
 **SP cap**:
 The Star Power meter ceiling an analysis runs under, in bars. 4 is Clone
@@ -144,9 +146,14 @@ Star Power is being spent. Comes from the path, not the chart; drawn as a
 tinted floor.
 
 **Path overlay**:
-Hydra's own analysis drawn on the note highway: the active SP windows, every
-fill window as lit lanes, and the lane of the activation note on the fill the
-path activates on.
+Hydra's own analysis drawn on the note highway: the active SP windows and the
+fills as a player following the path would see them. A fill the path
+activates on is *taken* (all four lanes lit, the activation note's lane
+highlighted); a fill the path had enough SP for but passed over is *offered*
+(lanes lit dimly); every other candidate fill is hidden, because the game would
+not have shown it. Offered fills come from the activation's skip count, not a
+re-derived SP meter; fills after the last activation are hidden because the
+engine records nothing about them.
 
 **Stem**:
 One of the several audio files a chart may ship instead of a single mix (e.g.

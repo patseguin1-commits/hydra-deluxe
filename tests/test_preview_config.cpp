@@ -88,7 +88,7 @@ TEST_CASE("the shipped 3d-config.json loads to the Onyx values") {
     check_is_onyx(c);
     CHECK(c.hydra.msaa == 4);
     CHECK(c.hydra.sp_active_darken == doctest::Approx(0.2));
-    CHECK(c.hydra.fill_activation_lane_boost == doctest::Approx(1.0));
+    CHECK(c.hydra.fill_offered_alpha == doctest::Approx(0.35));
 }
 
 TEST_CASE("load_preview_config keeps defaults for missing keys and overrides present ones") {

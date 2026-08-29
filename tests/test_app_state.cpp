@@ -105,7 +105,9 @@ std::unique_ptr<RecordStore> seeded_store(const std::string& db) {
 
     HydraRecord record;
     record.sp_cap = kSeededCap;
-    store->add_record(RecordKey{library_entry(0).md5, kChartMode, CapQuery::at(kSeededCap)},
+    record.ms_limit = Settings{}.mslimit_value;
+    store->add_record(RecordKey{library_entry(0).md5, kChartMode, CapQuery::at(kSeededCap),
+                                Settings{}.lens()},
                       record);
     return store;
 }
@@ -169,6 +171,42 @@ TEST_CASE("commit_settings refreshes on an SP cap change without resetting the p
     CHECK(app->table_viewpage == 3);
 }
 
+TEST_CASE("commit_settings refreshes when the ms limit or the score range changes") {
+    ScratchPaths paths("appstate_lens");
+    std::unique_ptr<AppState> app = app_on(paths);
+
+    GenerationWatcher records;
+    records.changed(app->record_generation);
+    app->table_viewpage = 3;
+
+    // The stored result answered "best path under a 10 ms limit". Move the
+    // limit and the question changes, so the answer no longer applies.
+    const int seeded_ms = app->settings.mslimit_value;
+    app->settings.mslimit_value = seeded_ms + 5;
+    app->commit_settings();
+    CHECK(app->viewed.status == RecordStatus::NotAnalyzed);
+    CHECK(app->table_viewpage == 3);  // the library stays where the user left it
+    CHECK(records.changed(app->record_generation));
+    CHECK(Settings::load_file(paths.ini).mslimit_value == seeded_ms + 5);
+
+    // Moving it back is instant: the old result is still stored, and nothing
+    // has to be analyzed again.
+    app->settings.mslimit_value = seeded_ms;
+    app->commit_settings();
+    CHECK(app->viewed.status == RecordStatus::Ready);
+    CHECK(app->analyze_job == nullptr);
+
+    // The score range is part of the same identity.
+    const int seeded_depth = app->settings.depth_value;
+    app->settings.depth_value = seeded_depth + 1;
+    app->commit_settings();
+    CHECK(app->viewed.status == RecordStatus::NotAnalyzed);
+    app->settings.depth_value = seeded_depth;
+    app->commit_settings();
+    CHECK(app->viewed.status == RecordStatus::Ready);
+    CHECK(app->analyze_job == nullptr);
+}
+
 TEST_CASE("commit_settings with a non-identity change does not bump the record generation") {
     ScratchPaths paths("appstate_plain");
     std::unique_ptr<AppState> app = app_on(paths);
@@ -176,11 +214,11 @@ TEST_CASE("commit_settings with a non-identity change does not bump the record g
     GenerationWatcher records;
     records.changed(app->record_generation);
 
-    // The score range is a search parameter, not part of a record's identity:
-    // nothing cached goes stale, so nothing is re-read.
-    app->settings.depth_value += 1;
+    // The hit window is a display setting -- it never reaches the search, so
+    // nothing cached goes stale and nothing is re-read.
+    app->settings.hit_window_ms += 1;
     app->commit_settings();
     CHECK_FALSE(records.changed(app->record_generation));
     CHECK(app->viewed.status == RecordStatus::Ready);
-    CHECK(Settings::load_file(paths.ini).depth_value == app->settings.depth_value);
+    CHECK(Settings::load_file(paths.ini).hit_window_ms == app->settings.hit_window_ms);
 }

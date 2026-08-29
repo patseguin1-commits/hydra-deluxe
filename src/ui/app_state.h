@@ -188,7 +188,8 @@ public:
     // invalidated.
     //
     // This is the single place that knows which settings change a record's
-    // identity — the chart mode and the SP cap. Every widget just mutates
+    // identity — the chart mode, the SP cap, and the lens (the ms limit and
+    // the score range a result ran under). Every widget just mutates
     // `settings` and calls this, so none of them can forget a refresh. That
     // forgetting is exactly the bug class here: the 1.5.1 SP-cap crash came
     // from this path, and the Pro Drums / 2x Bass checkboxes used to refresh
@@ -203,6 +204,7 @@ private:
     // can tell an identity change from any other settings edit.
     std::string committed_chartmode_;
     store::CapQuery committed_cap_;
+    store::Lens committed_lens_;
 };
 
 }  // namespace hydra::ui

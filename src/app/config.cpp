@@ -93,6 +93,9 @@ Settings Settings::load_file(const std::string& path) {
         else if (key == "depth_mode") s.depth_mode = std::atoi(value.c_str());
         else if (key == "mslimit_enabled") s.mslimit_enabled = (value == "1");
         else if (key == "mslimit_value") s.mslimit_value = std::atoi(value.c_str());
+        else if (key == "backendlimit_enabled") s.backendlimit_enabled = (value == "1");
+        else if (key == "backendlimit_value")
+            s.backendlimit_value = std::atoi(value.c_str());
         else if (key == "preview_volume") {
             int v = std::atoi(value.c_str());
             if (v >= 0 && v <= 100) s.preview_volume = v;
@@ -108,6 +111,9 @@ Settings Settings::load_file(const std::string& path) {
         else if (key == "auto_open_report") s.auto_open_report = (value == "1");
         else if (key == "dm_last_user") s.dm_last_user = value;
     }
+    // Normalize the difficulty word: whatever was in the file, what the app
+    // carries (and bakes into chartmode_key) is one of the four real names.
+    s.view_difficulty = difficulty_name(s.difficulty());
     return s;
 }
 
@@ -125,6 +131,8 @@ bool Settings::save_file(const std::string& path) const {
     f << "depth_mode=" << depth_mode << "\n";
     f << "mslimit_enabled=" << (mslimit_enabled ? 1 : 0) << "\n";
     f << "mslimit_value=" << mslimit_value << "\n";
+    f << "backendlimit_enabled=" << (backendlimit_enabled ? 1 : 0) << "\n";
+    f << "backendlimit_value=" << backendlimit_value << "\n";
     f << "hit_window_ms=" << hit_window_ms << "\n";
     f << "preview_volume=" << preview_volume << "\n";
     if (sp_cap) f << "sp_cap=" << *sp_cap << "\n";
@@ -135,16 +143,30 @@ bool Settings::save_file(const std::string& path) const {
     return f.good();
 }
 
+Difficulty Settings::difficulty() const {
+    if (view_difficulty == "Hard") return Difficulty::Hard;
+    if (view_difficulty == "Medium") return Difficulty::Medium;
+    if (view_difficulty == "Easy") return Difficulty::Easy;
+    return Difficulty::Expert;
+}
+
+bool Settings::effective_bass2x() const {
+    return view_bass2x && difficulty() == Difficulty::Expert;
+}
+
 std::string Settings::chartmode_key() const {
     std::string prodrums = view_prodrums ? "Pro Drums" : "Drums";
-    std::string bass = view_bass2x ? "2x Bass" : "1x Bass";
+    // Only Expert can be 2x, so every other difficulty's key ends "1x Bass" —
+    // and the four Expert keys are byte-for-byte the ones already in the store.
+    std::string bass = effective_bass2x() ? "2x Bass" : "1x Bass";
     return view_difficulty + " " + prodrums + ", " + bass;
 }
 
 AnalysisSettings Settings::to_analysis_settings() const {
     AnalysisSettings s;
     s.prodrums = view_prodrums;
-    s.bass2x = view_bass2x;
+    s.bass2x = effective_bass2x();
+    s.difficulty = difficulty();
     s.depth_mode = depth_mode == 1 ? DepthMode::Points : DepthMode::Scores;
     s.depth_value = depth_value;
     s.ms_filter = mslimit_enabled ? std::optional<double>(mslimit_value) : std::nullopt;
@@ -156,12 +178,24 @@ AnalysisSettings Settings::to_analysis_settings() const {
     return s;
 }
 
+std::optional<double> Settings::backend_limit() const {
+    return backendlimit_enabled
+               ? std::optional<double>(std::abs(backendlimit_value))
+               : std::nullopt;
+}
+
 store::CapQuery Settings::cap_query() const {
     return store::CapQuery::from_setting(sp_cap);
 }
 
+store::Lens Settings::lens() const {
+    return store::Lens::from(
+        mslimit_enabled ? std::optional<int>(mslimit_value) : std::nullopt,
+        depth_mode, depth_value);
+}
+
 store::RecordKey Settings::record_key(const std::string& hyhash) const {
-    return store::RecordKey{hyhash, chartmode_key(), cap_query()};
+    return store::RecordKey{hyhash, chartmode_key(), cap_query(), lens()};
 }
 
 }  // namespace hydra::app

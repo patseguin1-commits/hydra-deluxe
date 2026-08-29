@@ -123,6 +123,15 @@ void emit_chord_timestamp(Song& song, Chord& chord, int64_t tick,
 
 }  // namespace
 
+const char* difficulty_name(Difficulty difficulty) {
+    switch (difficulty) {
+        case Difficulty::Hard: return "Hard";
+        case Difficulty::Medium: return "Medium";
+        case Difficulty::Easy: return "Easy";
+        default: return "Expert";
+    }
+}
+
 // ---- Song::check_activations -------------------------------------------
 
 void Song::check_activations() {
@@ -217,9 +226,25 @@ struct MOp {
     std::function<void()> run;
 };
 
-bool is_handled_note(int note) {
+// All four difficulties share the one "PART DRUMS" track; each owns a block of
+// five pitches starting here (kick, then the four pads).
+int difficulty_base_pitch(Difficulty difficulty) {
+    switch (difficulty) {
+        case Difficulty::Hard: return 84;
+        case Difficulty::Medium: return 72;
+        case Difficulty::Easy: return 60;
+        default: return 96;
+    }
+}
+
+// `base` is the difficulty's kick pitch. The five note pitches follow it; every
+// other pitch here is a marker shared by all four difficulties (95 is the 2x
+// kick, which only Expert charts carry). A pitch outside this set belongs to
+// another difficulty (or to another instrument) and is dropped.
+bool is_handled_note(int note, int base) {
+    if (note >= base && note <= base + 4) return true;
     switch (note) {
-        case 95: case 96: case 97: case 98: case 99: case 100:
+        case 95:
         case 103:
         case 109: case 110: case 111: case 112:
         case 116:
@@ -232,7 +257,7 @@ bool is_handled_note(int note) {
 
 class MidiParser {
 public:
-    Song parse(const MidiFile& mid, bool pro, bool bass2x);
+    Song parse(const MidiFile& mid, bool pro, bool bass2x, Difficulty difficulty);
 
 private:
     MOp optype(const Message& msg, int64_t tick);
@@ -289,6 +314,7 @@ private:
     Song* song_ = nullptr;
     bool mode_pro_ = false;
     bool mode_bass2x_ = false;
+    int base_ = 96;
 
     Chord chord_;
     std::vector<const Message*> msg_buffer_;
@@ -307,7 +333,7 @@ MOp MidiParser::optype(const Message& msg, int64_t tick) {
 
     if (is_channel) {
         int note = msg.note;
-        if (!is_handled_note(note)) return {};
+        if (!is_handled_note(note, base_)) return {};
 
         int velocity = msg.velocity;
         bool is_noteon = (msg.type == "note_on" && velocity > 0);
@@ -317,23 +343,24 @@ MOp MidiParser::optype(const Message& msg, int64_t tick) {
         if (is_noteoff && note < 103) return {};
 
         if (is_noteon) {
+            // The difficulty's own five pitches come first: base is the kick,
+            // the next four are Red/Yellow/Blue/Green.
+            if (note == base_) {
+                return {MPhase::Notes, [this] {
+                            op_note(NoteColor::Kick,
+                                    NoteDynamicType::Normal, false);
+                        }};
+            }
+            if (note > base_ && note <= base_ + 4) {
+                // base+1 -> Red(2), as 97 -> Red(2) on Expert.
+                NoteColor color = static_cast<NoteColor>(note - base_ + 1);
+                NoteDynamicType dyn = NoteDynamicType::Normal;
+                if (velocity == 127) dyn = NoteDynamicType::Accent;
+                else if (velocity == 1) dyn = NoteDynamicType::Ghost;
+                return {MPhase::Notes,
+                        [this, color, dyn] { op_note(color, dyn, false); }};
+            }
             switch (note) {
-                case 96:
-                    return {MPhase::Notes, [this] {
-                                op_note(NoteColor::Kick,
-                                        NoteDynamicType::Normal, false);
-                            }};
-                case 97:
-                case 98:
-                case 99:
-                case 100: {
-                    NoteColor color = static_cast<NoteColor>(note - 95);  // 97->Red(2)
-                    NoteDynamicType dyn = NoteDynamicType::Normal;
-                    if (velocity == 127) dyn = NoteDynamicType::Accent;
-                    else if (velocity == 1) dyn = NoteDynamicType::Ghost;
-                    return {MPhase::Notes,
-                            [this, color, dyn] { op_note(color, dyn, false); }};
-                }
                 case 95:
                     if (mode_bass2x_)
                         return {MPhase::Notes, [this] {
@@ -482,9 +509,11 @@ void MidiParser::push_timestamp(int64_t tick) {
     msg_buffer_.clear();
 }
 
-Song MidiParser::parse(const MidiFile& mid, bool pro, bool bass2x) {
+Song MidiParser::parse(const MidiFile& mid, bool pro, bool bass2x,
+                       Difficulty difficulty) {
     mode_pro_ = pro;
     mode_bass2x_ = bass2x;
+    base_ = difficulty_base_pitch(difficulty);
 
     Song song(mid.ticks_per_beat);
     song_ = &song;
@@ -637,7 +666,8 @@ struct COp {
 
 class ChartParser {
 public:
-    Song parse(const std::vector<uint8_t>& data, bool pro, bool bass2x);
+    Song parse(const std::vector<uint8_t>& data, bool pro, bool bass2x,
+               Difficulty difficulty);
 
 private:
     void load_sections(const std::vector<uint8_t>& data);
@@ -859,7 +889,7 @@ void ChartParser::push_timestamp(int64_t tick,
 }
 
 Song ChartParser::parse(const std::vector<uint8_t>& data, bool pro,
-                        bool bass2x) {
+                        bool bass2x, Difficulty difficulty) {
     load_sections(data);
     mode_pro_ = pro;
     mode_bass2x_ = bass2x;
@@ -891,7 +921,10 @@ Song ChartParser::parse(const std::vector<uint8_t>& data, bool pro,
     flag_solo_ = false;
     flag_disco_ = false;
 
-    auto ed_it = sections_.find("ExpertDrums");
+    // Each difficulty is its own section ("ExpertDrums", "HardDrums", ...);
+    // everything inside one — notes, dynamics, cymbals, SP, fills, solos —
+    // follows for free. A chart missing the section parses as an empty song.
+    auto ed_it = sections_.find(std::string(difficulty_name(difficulty)) + "Drums");
     if (ed_it != sections_.end()) {
         const ChartSection& ed = ed_it->second;
         for (int64_t tk : ed.tick_order)
@@ -907,27 +940,30 @@ Song ChartParser::parse(const std::vector<uint8_t>& data, bool pro,
 // ---- public loaders -----------------------------------------------------
 
 Song load_songbytes_mid(const std::vector<uint8_t>& data, bool pro,
-                        bool bass2x) {
+                        bool bass2x, Difficulty difficulty) {
     MidiFile mid(data);
-    return MidiParser().parse(mid, pro, bass2x);
+    return MidiParser().parse(mid, pro, bass2x, difficulty);
 }
 
 Song load_songbytes_chart(const std::vector<uint8_t>& data, bool pro,
-                          bool bass2x) {
-    return ChartParser().parse(data, pro, bass2x);
+                          bool bass2x, Difficulty difficulty) {
+    return ChartParser().parse(data, pro, bass2x, difficulty);
 }
 
-Song load_songpath_mid(const std::string& path, bool pro, bool bass2x) {
+Song load_songpath_mid(const std::string& path, bool pro, bool bass2x,
+                       Difficulty difficulty) {
     MidiFile mid = MidiFile::from_file(path);
-    return MidiParser().parse(mid, pro, bass2x);
+    return MidiParser().parse(mid, pro, bass2x, difficulty);
 }
 
-Song load_songpath_chart(const std::string& path, bool pro, bool bass2x) {
+Song load_songpath_chart(const std::string& path, bool pro, bool bass2x,
+                         Difficulty difficulty) {
     std::vector<uint8_t> data = read_file_bytes(path);
-    return ChartParser().parse(data, pro, bass2x);
+    return ChartParser().parse(data, pro, bass2x, difficulty);
 }
 
-Song load_songpath_sng(const std::string& path, bool pro, bool bass2x) {
+Song load_songpath_sng(const std::string& path, bool pro, bool bass2x,
+                       Difficulty difficulty) {
     std::vector<uint8_t> buf = read_file_bytes(path);
 
     auto read_u64 = [&buf](size_t pos) {
@@ -989,11 +1025,12 @@ Song load_songpath_sng(const std::string& path, bool pro, bool bass2x) {
     }
 
     if (loader == Loader::Mid)
-        return load_songbytes_mid(notebytes, pro, bass2x);
-    return load_songbytes_chart(notebytes, pro, bass2x);
+        return load_songbytes_mid(notebytes, pro, bass2x, difficulty);
+    return load_songbytes_chart(notebytes, pro, bass2x, difficulty);
 }
 
-Song load_songpath_srb(const std::string& path, bool pro, bool bass2x) {
+Song load_songpath_srb(const std::string& path, bool pro, bool bass2x,
+                       Difficulty difficulty) {
     std::vector<uint8_t> buf = read_file_bytes(path);
     if (buf.size() <= kSrbHeaderSize)
         throw std::runtime_error("Truncated SRB file.");
@@ -1023,20 +1060,21 @@ Song load_songpath_srb(const std::string& path, bool pro, bool bass2x) {
     else  // Unexpected filename: sniff the payload instead.
         is_mid = notebytes.size() >= 4 && std::memcmp(notebytes.data(), "MThd", 4) == 0;
 
-    if (is_mid) return load_songbytes_mid(notebytes, pro, bass2x);
-    return load_songbytes_chart(notebytes, pro, bass2x);
+    if (is_mid) return load_songbytes_mid(notebytes, pro, bass2x, difficulty);
+    return load_songbytes_chart(notebytes, pro, bass2x, difficulty);
 }
 
-Song load_songpath(const std::string& path, bool pro, bool bass2x) {
+Song load_songpath(const std::string& path, bool pro, bool bass2x,
+                   Difficulty difficulty) {
     std::string low = ascii_casefold(path);
     auto ends_with = [&low](const char* suf) {
         size_t n = std::strlen(suf);
         return low.size() >= n && low.compare(low.size() - n, n, suf) == 0;
     };
-    if (ends_with(".mid")) return load_songpath_mid(path, pro, bass2x);
-    if (ends_with(".chart")) return load_songpath_chart(path, pro, bass2x);
-    if (ends_with(".sng")) return load_songpath_sng(path, pro, bass2x);
-    if (ends_with(".srb")) return load_songpath_srb(path, pro, bass2x);
+    if (ends_with(".mid")) return load_songpath_mid(path, pro, bass2x, difficulty);
+    if (ends_with(".chart")) return load_songpath_chart(path, pro, bass2x, difficulty);
+    if (ends_with(".sng")) return load_songpath_sng(path, pro, bass2x, difficulty);
+    if (ends_with(".srb")) return load_songpath_srb(path, pro, bass2x, difficulty);
     throw std::runtime_error("unexpected chart type: " + path);
 }
 

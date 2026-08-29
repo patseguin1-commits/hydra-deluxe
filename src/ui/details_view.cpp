@@ -103,8 +103,9 @@ void render_record_status(AppState& app, float width) {
 void render_controls(AppState& app) {
     bool file_ok = file_exists_utf8(app.selected->notespath);
 
-    // The missing-file warning line needs one more row when it shows.
-    float panel_h = px(200.0f);
+    // The missing-file warning line needs one more row when it shows; the
+    // backend-limit row needs one more frame of height than the panel had.
+    float panel_h = px(200.0f) + ImGui::GetFrameHeightWithSpacing();
     if (!file_ok) panel_h += ImGui::GetTextLineHeightWithSpacing();
     ImGui::BeginChild("controls", ImVec2(0, panel_h), ImGuiChildFlags_Borders);
     ImGui::SeparatorText("More Paths settings");
@@ -125,7 +126,7 @@ void render_controls(AppState& app) {
         app.commit_settings();
     }
 
-    ImGui::TextUnformatted("Limit timings:");
+    ImGui::TextUnformatted("Path limit:");
     ImGui::SameLine(px(100));
     if (ImGui::Checkbox("##mslimit", &app.settings.mslimit_enabled)) app.commit_settings();
     ImGui::SameLine();
@@ -141,6 +142,28 @@ void render_controls(AppState& app) {
     // InputInt's own disabled Text color) whenever mslimit is unchecked.
     ImGui::TextUnformatted("ms");
     end_disabled_input(mslimit_disabled);
+
+    // The backend tables' display window. Purely a filter on what the
+    // Activations tables draw -- it never reaches the search, so it never
+    // re-keys or invalidates a stored record.
+    ImGui::TextUnformatted("Backend limit:");
+    ImGui::SameLine(px(100));
+    if (ImGui::Checkbox("##backendlimit", &app.settings.backendlimit_enabled))
+        app.commit_settings();
+    ImGui::SameLine();
+    bool backendlimit_disabled = !app.settings.backendlimit_enabled;
+    begin_disabled_input(backendlimit_disabled);
+    ImGui::SetNextItemWidth(px(100));
+    if (ImGui::InputInt("##backendlimitvalue", &app.settings.backendlimit_value)) {
+        app.settings.backendlimit_value =
+            std::clamp(app.settings.backendlimit_value, 0, 200);
+        app.commit_settings();
+    }
+    ImGui::SameLine();
+    ImGui::TextUnformatted("ms");
+    end_disabled_input(backendlimit_disabled);
+    hint("Hides backend rows beyond +/- this many ms; squeezed-out notes always "
+         "show. Display only: changing it never re-analyzes.");
 
     // The SP meter ceiling in bars: 4 is Clone Hero's rule; other values are
     // what-ifs. "Auto" raises the ceiling until the score settles. Records are
@@ -247,7 +270,8 @@ void render_activations_section(const Path* path, const HydraRecord& record,
     if (begin_section("Activations")) {
         app::ActivationsView view = app::build_activations(
             *path, record, timing,
-            static_cast<double>(settings.hit_window_ms));
+            static_cast<double>(settings.hit_window_ms),
+            settings.backend_limit());
 
         if (view.acts.empty()) ImGui::TextDisabled("None.");
         for (const app::ActivationDetailsView& av : view.acts) {
@@ -427,7 +451,7 @@ void render_path_panel(AppState& app, const Path*& selected_path) {
 
     // The all-0 path section, appended below the generated list.
     if (list.show_allzero) {
-        ImGui::SeparatorText("Best All-0 Path (Limit timings: 0 ms)");
+        ImGui::SeparatorText("Best All-0 Path (Path limit: 0 ms)");
         ImGui::PushID("allzero");
         ImGui::PushFont(g_mono_font, 0.0f);
         bool open = ImGui::TreeNodeEx(list.allzero_label.c_str(),
@@ -450,7 +474,12 @@ void render_path_panel(AppState& app, const Path*& selected_path) {
     ImGui::EndChild();
 }
 
-void render_analyze_progress(AppState& app) {
+// The analyze job's lifecycle: store the finished result, reap the job.
+// Runs every frame from render_details_modal, before any tab draws.
+// Persisting and reaping a finished analysis must not depend on which tab is
+// drawn -- when this lived in the Paths tab body, a finished job on the
+// Preview tab was never stored and never reaped (the uitest 300 s hang).
+void update_analyze_job(AppState& app) {
     // Keyed on the job generation, not the job's address: a freed AnalyzeJob's
     // block can be handed straight back to the next make_unique, and a pointer
     // compare then carries `stored`/`done_at` over from the previous job --
@@ -462,12 +491,36 @@ void render_analyze_progress(AppState& app) {
     bool& stored = app.details_ui.stored;
     std::string& store_error = app.details_ui.store_error;
 
-    AnalyzeJob* job = app.analyze_job.get();
     if (generation.changed(app.analyze_generation)) {
         done_at = -1.0;
         stored = false;
         store_error.clear();
     }
+    AnalyzeJob* job = app.analyze_job.get();
+    if (!job || !job->finished()) return;
+
+    if (job->is_cancelled()) {
+        // Cancelled runs have nothing to show or store.
+        app.analyze_job.reset();
+        return;
+    }
+    // An error stays until the user clicks Continue in the Paths tab.
+    if (!job->ok()) return;
+
+    if (!stored) {
+        stored = true;
+        // Persistence belongs to AppState, not to a draw call; the view
+        // only shows the outcome.
+        store_error = app.store_finished_analysis();
+        if (store_error.empty()) done_at = ImGui::GetTime();
+    }
+    if (store_error.empty() && done_at >= 0 && ImGui::GetTime() - done_at > 0.5)
+        app.analyze_job.reset();
+}
+
+// Display only; the state machine above owns storing and reaping.
+void render_analyze_progress(AppState& app) {
+    AnalyzeJob* job = app.analyze_job.get();
     if (!job) return;
 
     ImGui::BeginChild("analyzeprogress", ImVec2(0, px(140)), ImGuiChildFlags_Borders);
@@ -491,32 +544,16 @@ void render_analyze_progress(AppState& app) {
             // isn't killing the app.
             if (ImGui::Button("Cancel")) job->cancel();
         }
-    } else if (job->is_cancelled()) {
-        // Cancelled runs have nothing to show or store.
-        ImGui::EndChild();
-        app.analyze_job.reset();
-        return;
     } else if (!job->ok()) {
         ImGui::TextColored(kWarningColor, "An error occurred:");
         ImGui::TextWrapped("%s", job->error().c_str());
         if (ImGui::Button("Continue")) app.analyze_job.reset();
+    } else if (!app.details_ui.store_error.empty()) {
+        ImGui::TextColored(kWarningColor, "An error occurred:");
+        ImGui::TextWrapped("%s", app.details_ui.store_error.c_str());
+        if (ImGui::Button("Continue")) app.analyze_job.reset();
     } else {
-        if (!stored) {
-            stored = true;
-            // Persistence belongs to AppState, not to a draw call; the view
-            // only shows the outcome.
-            store_error = app.store_finished_analysis();
-            if (store_error.empty()) done_at = ImGui::GetTime();
-        }
-
-        if (!store_error.empty()) {
-            ImGui::TextColored(kWarningColor, "An error occurred:");
-            ImGui::TextWrapped("%s", store_error.c_str());
-            if (ImGui::Button("Continue")) app.analyze_job.reset();
-        } else {
-            ImGui::TextUnformatted("Done!");
-            if (done_at >= 0 && ImGui::GetTime() - done_at > 0.5) app.analyze_job.reset();
-        }
+        ImGui::TextUnformatted("Done!");
     }
 
     ImGui::EndChild();
@@ -539,8 +576,8 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
     // Open (or keep open) for the current selection; a no-op once running for
     // this chart. This is where the async decode starts.
     pc->set_volume(app.settings.preview_volume);  // before the audio exists too
-    pc->open(*app.selected, app.settings.view_prodrums, app.settings.view_bass2x,
-             selected_path);
+    pc->open(*app.selected, app.settings.view_prodrums, app.settings.effective_bass2x(),
+             app.settings.difficulty(), selected_path);
     pc->poll();
 
     if (pc->has_error()) {
@@ -638,6 +675,10 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
 }  // namespace
 
 void render_details_modal(AppState& app) {
+    // Job lifecycle first, every frame -- even with the modal closed or a
+    // different tab in front.
+    update_analyze_job(app);
+
     // All of this modal's own state lives on AppState (see DetailsViewState):
     // a static here would outlive the AppState it describes.
     bool& prev_open = app.details_ui.prev_open;

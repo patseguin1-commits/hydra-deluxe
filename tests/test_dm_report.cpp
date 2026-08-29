@@ -81,7 +81,7 @@ TEST_CASE("collect_dm_rows joins scores to records and labels them") {
                                 123456));                      // unmatched
 
     std::vector<DmReportRow> rows =
-        app::dm_report::collect_dm_rows(store, scores, kMode);
+        app::dm_report::collect_dm_rows(store, scores, kMode, store::Lens{});
     REQUIRE(rows.size() == 3);
 
     // These exact strings are load-bearing: ui/dm_jobs.cpp tallies the finished
@@ -114,7 +114,7 @@ TEST_CASE("collect_dm_rows: no pct off 100% speed; store identity fallback") {
     unknown_meta.known = false;  // "unknown song" entry: no usable metadata
 
     std::vector<DmReportRow> rows = app::dm_report::collect_dm_rows(
-        store, {fast, unknown_meta}, kMode);
+        store, {fast, unknown_meta}, kMode, store::Lens{});
     REQUIRE(rows.size() == 2);
 
     CHECK_FALSE(rows[0].pct.has_value());  // speed != 100
@@ -177,7 +177,7 @@ TEST_CASE("build_dm_html substitutes every placeholder") {
     const int64_t optimal = fill_store(store);
 
     std::vector<DmReportRow> rows = app::dm_report::collect_dm_rows(
-        store, {make_score(kHash, optimal - 1)}, kMode);
+        store, {make_score(kHash, optimal - 1)}, kMode, store::Lens{});
     REQUIRE(rows.size() == 1);
 
     const std::string subtitle = "Subtitle marker 5151";
@@ -204,7 +204,7 @@ TEST_CASE("generate_dm_report: tally and framing behind one seam") {
                                 123456));                 // unmatched
 
     app::dm_report::GeneratedDmReport result =
-        app::dm_report::generate_dm_report(store, scores, kMode, "TestUser");
+        app::dm_report::generate_dm_report(store, scores, kMode, store::Lens{}, "TestUser");
     CHECK(result.stats.total == 3);
     CHECK(result.stats.matched == 1);
     CHECK(result.stats.above == 1);
@@ -220,7 +220,7 @@ TEST_CASE("generate_dm_report: tally and framing behind one seam") {
 
     // No scores: zero stats, no page.
     app::dm_report::GeneratedDmReport none =
-        app::dm_report::generate_dm_report(store, {}, kMode, "TestUser");
+        app::dm_report::generate_dm_report(store, {}, kMode, store::Lens{}, "TestUser");
     CHECK(none.stats.total == 0);
     CHECK(none.html.empty());
 }

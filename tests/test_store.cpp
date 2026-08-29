@@ -325,7 +325,7 @@ TEST_CASE("RecordStore maintenance: has_record, list_records, reindex, drop_stal
     CHECK_FALSE(store.has_record(RecordKey{"h1", "Expert Pro Drums, 2x Bass", CapQuery::automatic()}));
 
     std::vector<RecordListing> listing =
-        store.list_records(std::nullopt, at4, SortColumn::Score, true);
+        store.list_records(std::nullopt, at4, Lens{}, SortColumn::Score, true);
     REQUIRE(listing.size() == 1);
     CHECK(listing[0].ref_name == "Song A");
     CHECK(listing[0].bestpath == record->best_path().pathstring());
@@ -337,7 +337,7 @@ TEST_CASE("RecordStore maintenance: has_record, list_records, reindex, drop_stal
     int touched = store.reindex();
     CHECK(touched == 1);
     std::vector<RecordListing> relisted =
-        store.list_records(std::nullopt, at4, SortColumn::Score, true);
+        store.list_records(std::nullopt, at4, Lens{}, SortColumn::Score, true);
     REQUIRE(relisted.size() == 1);
     CHECK(relisted[0].summary.score == listing[0].summary.score);
 
@@ -422,7 +422,9 @@ void write_legacy_db(const std::string& path, const std::string& main_stamp,
         INFO(msg);
         REQUIRE(rc == SQLITE_OK);
     };
-    exec("DROP TABLE records; DROP TABLE meta; PRAGMA user_version = 0;"
+    exec("DROP TABLE IF EXISTS records; DROP TABLE IF EXISTS results;"
+         "DROP TABLE IF EXISTS path_refs; DROP TABLE IF EXISTS paths;"
+         "DROP TABLE IF EXISTS meta; PRAGMA user_version = 0;"
          "CREATE TABLE records (hyhash TEXT NOT NULL, chartmode TEXT NOT NULL,"
          " hyversion TEXT NOT NULL, bestpath TEXT NOT NULL, blob BLOB NOT NULL,"
          " score INTEGER, actcount INTEGER, maxskip INTEGER, hardest_ms REAL, avgmult REAL,"
@@ -431,6 +433,8 @@ void write_legacy_db(const std::string& path, const std::string& main_stamp,
 
     auto insert = [&](const char* hash, const std::string& stamp, const HydraRecord& rec) {
         PreparedRow row = prepare_row(RecordKey{hash, "mode", CapQuery::automatic()}, rec);
+        // The old table held one nested blob per record, not a structure blob.
+        const std::vector<uint8_t> blob = write_record(rec);
         sqlite3_stmt* s = nullptr;
         REQUIRE(sqlite3_prepare_v2(db,
                     "INSERT INTO records (hyhash, chartmode, hyversion, bestpath, blob, score)"
@@ -439,7 +443,7 @@ void write_legacy_db(const std::string& path, const std::string& main_stamp,
         sqlite3_bind_text(s, 2, "mode", -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(s, 3, stamp.c_str(), -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(s, 4, row.bestpath.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_blob(s, 5, row.blob.data(), (int)row.blob.size(), SQLITE_TRANSIENT);
+        sqlite3_bind_blob(s, 5, blob.data(), (int)blob.size(), SQLITE_TRANSIENT);
         sqlite3_bind_int64(s, 6, row.summary.score.value_or(0));
         REQUIRE(sqlite3_step(s) == SQLITE_DONE);
         sqlite3_finalize(s);
@@ -449,16 +453,81 @@ void write_legacy_db(const std::string& path, const std::string& main_stamp,
     sqlite3_close(db);
 }
 
-int user_version(const std::string& path) {
+// One integer straight out of a closed database file — how these tests look at
+// the paths/path_refs tables without the store growing an accessor for them.
+int64_t scalar(const std::string& path, const char* sql) {
     sqlite3* db = nullptr;
     REQUIRE(sqlite3_open(path.c_str(), &db) == SQLITE_OK);
     sqlite3_stmt* s = nullptr;
-    REQUIRE(sqlite3_prepare_v2(db, "PRAGMA user_version", -1, &s, nullptr) == SQLITE_OK);
+    REQUIRE(sqlite3_prepare_v2(db, sql, -1, &s, nullptr) == SQLITE_OK);
     REQUIRE(sqlite3_step(s) == SQLITE_ROW);
-    int v = sqlite3_column_int(s, 0);
+    int64_t v = sqlite3_column_int64(s, 0);
     sqlite3_finalize(s);
     sqlite3_close(db);
     return v;
+}
+
+int user_version(const std::string& path) {
+    return static_cast<int>(scalar(path, "PRAGMA user_version"));
+}
+
+// Writes a 1.6-era database by hand: one `records` table keyed by cap, no
+// results/paths/path_refs. This is the shape the v1 -> v2 migration reads.
+void write_v1_db(const std::string& path, const std::string& stamp, int cap) {
+    std::remove(path.c_str());
+    {
+        RecordStore seed(path);
+        seed.add_song("v1", "V1 Song", "A", "C", fixture().song);
+        seed.add_song("other", "Other Song", "A", "C", fixture().song);
+    }
+    sqlite3* db = nullptr;
+    REQUIRE(sqlite3_open(path.c_str(), &db) == SQLITE_OK);
+    auto exec = [&](const char* sql) {
+        char* err = nullptr;
+        int rc = sqlite3_exec(db, sql, nullptr, nullptr, &err);
+        std::string msg = err ? err : "";
+        INFO(msg);
+        REQUIRE(rc == SQLITE_OK);
+    };
+    exec("DROP TABLE IF EXISTS results; DROP TABLE IF EXISTS path_refs;"
+         "DROP TABLE IF EXISTS paths; PRAGMA user_version = 1;"
+         "CREATE TABLE records (hyhash TEXT NOT NULL, chartmode TEXT NOT NULL,"
+         " hyversion TEXT NOT NULL, sp_cap INTEGER NOT NULL, bestpath TEXT NOT NULL,"
+         " blob BLOB NOT NULL,"
+         " score INTEGER, actcount INTEGER, maxskip INTEGER, hardest_ms REAL, avgmult REAL,"
+         " notecount INTEGER, sqin_count INTEGER, sqout_count INTEGER, pathcount INTEGER,"
+         " PRIMARY KEY (hyhash, chartmode, sp_cap));");
+
+    HydraRecord rec = at_cap(cap);
+    const std::vector<uint8_t> blob = write_record(rec);
+    const std::string bestpath = rec.best_path().pathstring();
+    sqlite3_stmt* s = nullptr;
+    REQUIRE(sqlite3_prepare_v2(db,
+                "INSERT INTO records (hyhash, chartmode, hyversion, sp_cap, bestpath, blob,"
+                " score) VALUES (?,?,?,?,?,?,?)", -1, &s, nullptr) == SQLITE_OK);
+    sqlite3_bind_text(s, 1, "v1", -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(s, 2, "mode", -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(s, 3, stamp.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(s, 4, cap);
+    sqlite3_bind_text(s, 5, bestpath.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_blob(s, 6, blob.data(), (int)blob.size(), SQLITE_TRANSIENT);
+    sqlite3_bind_int64(s, 7, rec.best_path().totalscore());
+    REQUIRE(sqlite3_step(s) == SQLITE_DONE);
+    sqlite3_finalize(s);
+    sqlite3_close(db);
+}
+
+// The two lenses the coexistence tests use: same chart, same cap, different
+// searches. Lens C is a third nobody stored anything under.
+const Lens kLensA = Lens::from(10, 0, 20);
+const Lens kLensB = Lens::from(std::nullopt, 1, 5000);
+const Lens kLensC = Lens::from(25, 0, 3);
+
+// at_cap plus the ms limit lens A claims, so prepare_row's guard is satisfied.
+HydraRecord at_cap_ms10(int cap) {
+    HydraRecord r = at_cap(cap);
+    r.ms_limit = 10.0;
+    return r;
 }
 
 }  // namespace
@@ -489,11 +558,11 @@ TEST_CASE("records at different caps coexist; Auto picks the newest current one"
     store.add_row(stale);
     CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic()}).record->sp_cap == 32);
     std::vector<RecordListing> listed =
-        store.list_records(std::nullopt, CapQuery::automatic(), SortColumn::Score, true);
+        store.list_records(std::nullopt, CapQuery::automatic(), Lens{}, SortColumn::Score, true);
     REQUIRE(listed.size() == 1);
     CHECK(listed[0].sp_cap == 32);
     int seen = 0;
-    store.for_each_blob(std::nullopt, CapQuery::automatic(),
+    store.for_each_blob(std::nullopt, CapQuery::automatic(), Lens{},
                         [&](const RecordStore::BlobRow& meta, const HydraRecord*) {
                             CHECK(meta.sp_cap == 32);
                             ++seen;
@@ -511,7 +580,7 @@ TEST_CASE("records at different caps coexist; Auto picks the newest current one"
     // for_each_blob still yields the stale row (at its own cap), with a null
     // record pointer.
     int stale_seen = 0;
-    store.for_each_blob(std::nullopt, CapQuery::at(64),
+    store.for_each_blob(std::nullopt, CapQuery::at(64), Lens{},
                         [&](const RecordStore::BlobRow& meta, const HydraRecord* rec) {
                             CHECK(meta.status == RecordStatus::Stale);
                             CHECK(rec == nullptr);
@@ -529,7 +598,7 @@ TEST_CASE("records at different caps coexist; Auto picks the newest current one"
 
     // reindex touches each cap's own row.
     CHECK(store.reindex() == 3);
-    CHECK(store.list_records(std::nullopt, CapQuery::at(4), SortColumn::Score, true)[0]
+    CHECK(store.list_records(std::nullopt, CapQuery::at(4), Lens{}, SortColumn::Score, true)[0]
               .summary.score == fixture().record.best_path().totalscore());
 }
 
@@ -548,11 +617,11 @@ TEST_CASE("an Auto run that settles below an existing row becomes the Auto answe
 
     CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic()}).record->sp_cap == 16);
     std::vector<RecordListing> listed =
-        store.list_records(std::nullopt, CapQuery::automatic(), SortColumn::Score, true);
+        store.list_records(std::nullopt, CapQuery::automatic(), Lens{}, SortColumn::Score, true);
     REQUIRE(listed.size() == 1);
     CHECK(listed[0].sp_cap == 16);
     int seen = 0;
-    store.for_each_blob(std::nullopt, CapQuery::automatic(),
+    store.for_each_blob(std::nullopt, CapQuery::automatic(), Lens{},
                         [&](const RecordStore::BlobRow& meta, const HydraRecord*) {
                             CHECK(meta.sp_cap == 16);
                             ++seen;
@@ -583,16 +652,54 @@ TEST_CASE("prepare_row refuses a key whose exact cap isn't the record's") {
     CHECK(prepare_row(RecordKey{"h", "mode", CapQuery::at(4)}, rec).sp_cap == 4);
 }
 
-TEST_CASE("RecordKey compares on all three parts of the identity") {
-    const RecordKey key{"h", "mode", CapQuery::at(4)};
-    CHECK(key == RecordKey{"h", "mode", CapQuery::at(4)});
-    CHECK_FALSE(key == RecordKey{"other", "mode", CapQuery::at(4)});
-    CHECK_FALSE(key == RecordKey{"h", "other mode", CapQuery::at(4)});
-    CHECK_FALSE(key == RecordKey{"h", "mode", CapQuery::at(8)});
-    CHECK_FALSE(key == RecordKey{"h", "mode", CapQuery::automatic()});
+TEST_CASE("prepare_row refuses a key whose ms limit isn't the record's") {
+    // Same failure mode as the cap guard: the row would claim settings the
+    // search never ran under, and every later lookup would believe it.
+    HydraRecord none = at_cap(4);  // analyzed with no ms limit
+    CHECK_THROWS_AS(prepare_row(RecordKey{"h", "mode", CapQuery::at(4), kLensA}, none),
+                    std::invalid_argument);
+
+    HydraRecord ten = at_cap_ms10(4);
+    CHECK_THROWS_AS(prepare_row(RecordKey{"h", "mode", CapQuery::at(4), kLensC}, ten),
+                    std::invalid_argument);
+
+    // The matching lens is fine, and rides onto the row.
+    PreparedRow row = prepare_row(RecordKey{"h", "mode", CapQuery::at(4), kLensA}, ten);
+    CHECK(row.lens == kLensA);
+
+    // A lens with the limit off says nothing about the record's ms_limit, so
+    // there is nothing to disagree with.
+    CHECK(prepare_row(RecordKey{"h", "mode", CapQuery::at(4), kLensB}, ten).lens == kLensB);
+}
+
+TEST_CASE("RecordKey compares on every part of the identity") {
+    const RecordKey key{"h", "mode", CapQuery::at(4), kLensA};
+    CHECK(key == RecordKey{"h", "mode", CapQuery::at(4), kLensA});
+    CHECK_FALSE(key == RecordKey{"other", "mode", CapQuery::at(4), kLensA});
+    CHECK_FALSE(key == RecordKey{"h", "other mode", CapQuery::at(4), kLensA});
+    CHECK_FALSE(key == RecordKey{"h", "mode", CapQuery::at(8), kLensA});
+    CHECK_FALSE(key == RecordKey{"h", "mode", CapQuery::automatic(), kLensA});
+    CHECK_FALSE(key == RecordKey{"h", "mode", CapQuery::at(4), kLensB});
     CHECK(CapQuery::at(4) != CapQuery::automatic());
     CHECK(CapQuery::automatic() == CapQuery::from_setting(std::nullopt));
     CHECK(CapQuery::at(8) == CapQuery::from_setting(8));
+
+    // Each of the lens's four fields is part of the identity...
+    CHECK(kLensA == Lens::from(10, 0, 20));
+    CHECK(kLensA != Lens::from(11, 0, 20));
+    CHECK(kLensA != Lens::from(10, 1, 20));
+    CHECK(kLensA != Lens::from(10, 0, 21));
+    CHECK(kLensA != Lens::from(std::nullopt, 0, 20));
+
+    // ...except the ms value when the limit is off, which the engine ignores:
+    // "off at 10" and "off at 42" ran the same search.
+    CHECK(Lens::from(std::nullopt, 0, 4) == Lens::from(std::nullopt, 0, 4));
+    CHECK(Lens::from(std::nullopt, 0, 4).ms_value == 0);
+
+    // The sentinel is its own thing and never equals a real lens.
+    CHECK(Lens::sentinel().is_sentinel());
+    CHECK_FALSE(Lens{}.is_sentinel());
+    CHECK(Lens::sentinel() != Lens{});
 }
 
 TEST_CASE("a current-version record with no paths is Ready, not Stale") {
@@ -621,24 +728,71 @@ TEST_CASE("a pre-1.6 database migrates to the cap key on open") {
 
     {
         RecordStore store(path);
-        // Both rows survive, each under the cap its blob records, and the
-        // Uncapped stamp is gone.
+        // Both rows survive, each under the cap its blob records. Neither
+        // says which ms limit or score range produced it, so both land with
+        // the sentinel lens and read Stale: there is a result here, but
+        // nothing that says what question it answered.
         CHECK(store.counts().second == 2);
         RecordLookup main_row = store.get_record(RecordKey{"legacy", "mode", CapQuery::at(4)});
-        REQUIRE(main_row.status == RecordStatus::Ready);
-        CHECK_FALSE(main_row.record->paths.empty());
+        CHECK(main_row.status == RecordStatus::Stale);
+        CHECK_FALSE(main_row.record.has_value());
         RecordLookup unc_row = store.get_record(RecordKey{"legacy_unc", "mode", CapQuery::at(16)});
-        REQUIRE(unc_row.status == RecordStatus::Ready);  // restamped: reads as current
-        CHECK_FALSE(unc_row.record->paths.empty());
-        CHECK(store.has_record(RecordKey{"legacy_unc", "mode", CapQuery::automatic()}));
+        CHECK(unc_row.status == RecordStatus::Stale);
+        CHECK_FALSE(unc_row.record.has_value());
+        CHECK_FALSE(store.has_record(RecordKey{"legacy_unc", "mode", CapQuery::automatic()}));
     }
-    CHECK(user_version(path) == 1);
+    CHECK(user_version(path) == 2);
 
-    // A second open is a no-op (the column exists).
+    // A second open is a no-op (the records table is gone).
     {
         RecordStore again(path);
         CHECK(again.counts().second == 2);
     }
+    std::remove(path.c_str());
+}
+
+TEST_CASE("a 1.6 database migrates to results + shared paths on open") {
+    const std::string path = temp_db("migrate_v1");
+    write_v1_db(path, current_record_version(), 8);
+    CHECK(user_version(path) == 1);
+
+    {
+        RecordStore store(path);
+        // The row is kept, at its cap, as a sentinel: unknown settings, so it
+        // answers no lens and never has its blob decoded.
+        CHECK(store.counts().second == 1);
+        for (const Lens& lens : {Lens{}, kLensA, kLensB}) {
+            RecordLookup row = store.get_record(RecordKey{"v1", "mode", CapQuery::at(8), lens});
+            CHECK(row.status == RecordStatus::Stale);
+            CHECK_FALSE(row.record.has_value());
+            CHECK(store.get_summary(RecordKey{"v1", "mode", CapQuery::at(8), lens}).status ==
+                  RecordStatus::Stale);
+            CHECK_FALSE(store.has_record(RecordKey{"v1", "mode", CapQuery::at(8), lens}));
+        }
+
+        // The set queries still show it, with no record to hand out.
+        std::vector<RecordListing> listed =
+            store.list_records(std::nullopt, CapQuery::at(8), kLensA, SortColumn::Score, true);
+        CHECK(listed.size() == 1);
+        int seen = 0;
+        store.for_each_blob(std::nullopt, CapQuery::at(8), kLensA,
+                            [&](const RecordStore::BlobRow& meta, const HydraRecord* rec) {
+                                CHECK(meta.status == RecordStatus::Stale);
+                                CHECK(rec == nullptr);
+                                ++seen;
+                            });
+        CHECK(seen == 1);
+
+        // A real run at that cap is the answer the placeholder stood in for.
+        store.add_record(RecordKey{"v1", "mode", CapQuery::at(8), kLensA}, at_cap_ms10(8));
+        CHECK(store.counts().second == 1);
+        CHECK(store.get_record(RecordKey{"v1", "mode", CapQuery::at(8), kLensA}).status ==
+              RecordStatus::Ready);
+        CHECK(store.has_record(RecordKey{"v1", "mode", CapQuery::at(8), kLensA}));
+    }
+    CHECK(user_version(path) == 2);
+    // The migration is one-way: nothing re-reads a records table afterwards.
+    CHECK(scalar(path, "SELECT COUNT(*) FROM sqlite_master WHERE name='records'") == 0);
     std::remove(path.c_str());
 }
 
@@ -671,9 +825,12 @@ TEST_CASE("import_legacy_uncapped copies current-version rows once, under their 
     {
         RecordStore store(main_path);
         CHECK(store.import_legacy_uncapped(unc_path) == 1);
+        // The old file records the cap and nothing else, so the copied row is
+        // a sentinel: a result exists, but not the settings behind it, and it
+        // reads Stale until the user re-analyzes.
         RecordLookup row = store.get_record(RecordKey{"legacy_unc", "mode", CapQuery::at(64)});
-        REQUIRE(row.status == RecordStatus::Ready);  // restamped to the current version
-        CHECK_FALSE(row.record->paths.empty());
+        CHECK(row.status == RecordStatus::Stale);
+        CHECK_FALSE(row.record.has_value());
         CHECK(store.counts().first == 1);  // its song came along (not the stale one's)
         // The stale row (0.0.0) stayed behind.
         CHECK(store.get_record(RecordKey{"legacy", "mode", CapQuery::at(4)}).status ==
@@ -685,4 +842,219 @@ TEST_CASE("import_legacy_uncapped copies current-version rows once, under their 
     }
     std::remove(main_path.c_str());
     std::remove(unc_path.c_str());
+}
+
+// ---- lens identity --------------------------------------------------------
+//
+// The lens is the rest of a result's identity: the ms limit and the score
+// range it ran under. These cases pin that two lenses coexist, that each
+// lookup gets its own answer, and that the shared paths table stays honest
+// while results come and go.
+
+TEST_CASE("the same chart at the same cap keeps one result per lens") {
+    RecordStore store(":memory:");
+    store.add_song("h", "Song", "Artist", "Charter", fixture().song);
+
+    // The two records differ in the one field that says which search ran:
+    // lens A's ms limit is 10, lens B's is off.
+    store.add_record(RecordKey{"h", "mode", CapQuery::at(4), kLensA}, at_cap_ms10(4));
+    store.add_record(RecordKey{"h", "mode", CapQuery::at(4), kLensB}, at_cap(4));
+    CHECK(store.counts().second == 2);
+
+    RecordLookup a = store.get_record(RecordKey{"h", "mode", CapQuery::at(4), kLensA});
+    REQUIRE(a.status == RecordStatus::Ready);
+    CHECK(a.record->ms_limit == 10.0);
+    RecordLookup b = store.get_record(RecordKey{"h", "mode", CapQuery::at(4), kLensB});
+    REQUIRE(b.status == RecordStatus::Ready);
+    CHECK_FALSE(b.record->ms_limit.has_value());
+
+    // A lens nobody ran under has no answer here, and no stored row stands in
+    // for it -- this is what stops a batch run skipping the chart.
+    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::at(4), kLensC}).status ==
+          RecordStatus::NotAnalyzed);
+    CHECK(store.has_record(RecordKey{"h", "mode", CapQuery::at(4), kLensA}));
+    CHECK(store.has_record(RecordKey{"h", "mode", CapQuery::at(4), kLensB}));
+    CHECK_FALSE(store.has_record(RecordKey{"h", "mode", CapQuery::at(4), kLensC}));
+
+    // Re-running one lens replaces that row and leaves the other alone.
+    HydraRecord redone = at_cap_ms10(4);
+    redone.paths.clear();
+    redone.allzero_paths.clear();
+    store.add_record(RecordKey{"h", "mode", CapQuery::at(4), kLensA}, redone);
+    CHECK(store.counts().second == 2);
+    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::at(4), kLensA})
+              .record->paths.empty());
+    CHECK_FALSE(store.get_record(RecordKey{"h", "mode", CapQuery::at(4), kLensB})
+                    .record->paths.empty());
+}
+
+TEST_CASE("Auto answers inside the lens it was asked about") {
+    RecordStore store(":memory:");
+    store.add_song("h", "Song", "Artist", "Charter", fixture().song);
+    store.add_record(RecordKey{"h", "mode", CapQuery::at(32), kLensA}, at_cap_ms10(32));
+    store.add_record(RecordKey{"h", "mode", CapQuery::at(64), kLensB}, at_cap(64));
+
+    // Auto reaches for the tall rows, but only the ones its own lens wrote.
+    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic(), kLensA})
+              .record->sp_cap == 32);
+    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic(), kLensB})
+              .record->sp_cap == 64);
+    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic(), kLensC}).status ==
+          RecordStatus::NotAnalyzed);
+    CHECK(store.has_record(RecordKey{"h", "mode", CapQuery::automatic(), kLensA}));
+    CHECK_FALSE(store.has_record(RecordKey{"h", "mode", CapQuery::automatic(), kLensC}));
+
+    auto auto_caps = [&](const Lens& lens) {
+        std::vector<int> caps;
+        for (const RecordListing& r : store.list_records(std::nullopt, CapQuery::automatic(),
+                                                         lens, SortColumn::Score, true))
+            caps.push_back(r.sp_cap);
+        return caps;
+    };
+    CHECK(auto_caps(kLensA) == std::vector<int>{32});
+    CHECK(auto_caps(kLensB) == std::vector<int>{64});
+    CHECK(auto_caps(kLensC).empty());
+
+    // A stale 128-bar row in lens A does not outrank the current 32-bar one.
+    PreparedRow stale =
+        prepare_row(RecordKey{"h", "mode", CapQuery::at(128), kLensA}, at_cap_ms10(128));
+    stale.hyversion = "0.0.0";
+    store.add_row(stale);
+    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic(), kLensA})
+              .record->sp_cap == 32);
+    CHECK(auto_caps(kLensA) == std::vector<int>{32});
+
+    // An Auto run that settles below the existing row is still the answer --
+    // per lens, so the other lens's taller row is untouched.
+    store.add_record(RecordKey{"h", "mode", CapQuery::automatic(), kLensA}, at_cap_ms10(16));
+    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic(), kLensA})
+              .record->sp_cap == 16);
+    CHECK(auto_caps(kLensA) == std::vector<int>{16});
+    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic(), kLensB})
+              .record->sp_cap == 64);
+    CHECK(auto_caps(kLensB) == std::vector<int>{64});
+}
+
+TEST_CASE("a path stored under two lenses is stored once") {
+    const std::string path = temp_db("dedup");
+    std::remove(path.c_str());
+
+    {
+        RecordStore store(path);
+        store.add_song("h", "Song", "Artist", "Charter", fixture().song);
+        store.add_record(RecordKey{"h", "mode", CapQuery::at(4), kLensA}, at_cap_ms10(4));
+    }
+    const int64_t nodes = scalar(path, "SELECT COUNT(*) FROM paths");
+    const int64_t refs = scalar(path, "SELECT COUNT(*) FROM path_refs");
+    REQUIRE(nodes > 0);
+    CHECK(refs == nodes);
+
+    {
+        RecordStore store(path);
+        store.add_record(RecordKey{"h", "mode", CapQuery::at(4), kLensB}, at_cap(4));
+    }
+    // The second result names the identical nodes, so only the references
+    // grow: a path is written once no matter how many results point at it.
+    CHECK(scalar(path, "SELECT COUNT(*) FROM paths") == nodes);
+    CHECK(scalar(path, "SELECT COUNT(*) FROM path_refs") == refs * 2);
+    std::remove(path.c_str());
+}
+
+TEST_CASE("replacing one lens's result leaves the other's bytes untouched") {
+    const std::string path = temp_db("gc");
+    std::remove(path.c_str());
+
+    std::vector<uint8_t> before;
+    {
+        RecordStore store(path);
+        store.add_song("h", "Song", "Artist", "Charter", fixture().song);
+        store.add_record(RecordKey{"h", "mode", CapQuery::at(4), kLensA}, at_cap_ms10(4));
+        store.add_record(RecordKey{"h", "mode", CapQuery::at(4), kLensB}, at_cap(4));
+        before = write_record(
+            *store.get_record(RecordKey{"h", "mode", CapQuery::at(4), kLensB}).record);
+    }
+    const int64_t shared = scalar(path, "SELECT COUNT(*) FROM paths");
+    REQUIRE(shared > 0);
+
+    {
+        RecordStore store(path);
+        HydraRecord redone = at_cap_ms10(4);
+        redone.paths.clear();
+        redone.allzero_paths.clear();
+        store.add_record(RecordKey{"h", "mode", CapQuery::at(4), kLensA}, redone);
+        // Lens B loads exactly the bytes it loaded before: the collection that
+        // followed A's rewrite took nothing B still points at.
+        CHECK(write_record(*store.get_record(RecordKey{"h", "mode", CapQuery::at(4), kLensB})
+                                .record) == before);
+    }
+    CHECK(scalar(path, "SELECT COUNT(*) FROM paths") == shared);
+
+    // With B replaced too, nothing points at those nodes and they go.
+    {
+        RecordStore store(path);
+        HydraRecord redone = at_cap(4);
+        redone.paths.clear();
+        redone.allzero_paths.clear();
+        store.add_record(RecordKey{"h", "mode", CapQuery::at(4), kLensB}, redone);
+    }
+    CHECK(scalar(path, "SELECT COUNT(*) FROM paths") == 0);
+    CHECK(scalar(path, "SELECT COUNT(*) FROM path_refs") == 0);
+
+    // drop_stale_records collects the orphans it makes.
+    {
+        RecordStore store(path);
+        PreparedRow stale =
+            prepare_row(RecordKey{"h", "mode", CapQuery::at(8), kLensB}, at_cap(8));
+        stale.hyversion = "0.0.0";
+        store.add_row(stale);
+    }
+    CHECK(scalar(path, "SELECT COUNT(*) FROM paths") == shared);
+    {
+        RecordStore store(path);
+        CHECK(store.drop_stale_records() == 1);
+    }
+    CHECK(scalar(path, "SELECT COUNT(*) FROM paths") == 0);
+    CHECK(scalar(path, "SELECT COUNT(*) FROM path_refs") == 0);
+    std::remove(path.c_str());
+}
+
+TEST_CASE("a current-version write purges the chart's old-version rows and their paths") {
+    const std::string path = temp_db("purge");
+    std::remove(path.c_str());
+
+    {
+        RecordStore store(path);
+        store.add_song("h", "Song", "Artist", "Charter", fixture().song);
+        store.add_song("other", "Other", "Artist", "Charter", fixture().song);
+        for (const char* hash : {"h", "other"}) {
+            PreparedRow old_row =
+                prepare_row(RecordKey{hash, "mode", CapQuery::at(4), kLensB}, at_cap(4));
+            old_row.hyversion = "0.0.0";
+            store.add_row(old_row);
+        }
+        CHECK(store.counts().second == 2);
+    }
+    const int64_t others = scalar(path, "SELECT COUNT(*) FROM paths WHERE hyhash='other'");
+    REQUIRE(others > 0);
+    REQUIRE(scalar(path, "SELECT COUNT(*) FROM paths WHERE hyhash='h'") == others);
+
+    {
+        RecordStore store(path);
+        HydraRecord fresh = at_cap_ms10(32);
+        fresh.paths.clear();
+        fresh.allzero_paths.clear();
+        store.add_record(RecordKey{"h", "mode", CapQuery::at(32), kLensA}, fresh);
+
+        // This build cannot read what another version wrote for this chart, so
+        // the write supersedes it -- at every cap and lens...
+        CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::at(4), kLensB}).status ==
+              RecordStatus::NotAnalyzed);
+        // ...while another chart's old row is none of this write's business.
+        CHECK(store.get_record(RecordKey{"other", "mode", CapQuery::at(4), kLensB}).status ==
+              RecordStatus::Stale);
+        CHECK(store.counts().second == 2);
+    }
+    CHECK(scalar(path, "SELECT COUNT(*) FROM paths WHERE hyhash='h'") == 0);
+    CHECK(scalar(path, "SELECT COUNT(*) FROM paths WHERE hyhash='other'") == others);
+    std::remove(path.c_str());
 }

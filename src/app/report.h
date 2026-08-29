@@ -53,11 +53,11 @@ std::string plain(const std::string& text);
 std::pair<std::string, std::string> tier_for(const std::optional<double>& ms,
                                              double hit_window_ms = kDefaultHitWindowMs);
 
-// Reads every stored record at the wanted cap (skipping ones stamped by
-// another version) and produces up to max_paths rows per chart, best score
+// Reads every stored record at the wanted cap and lens (skipping ones the
+// store calls stale) and produces up to max_paths rows per chart, best score
 // first. hit_window_ms feeds the tier labels only.
 std::vector<ReportRow> collect_rows(store::RecordStore& store, int64_t max_paths,
-                                    const store::CapQuery& cap,
+                                    const store::CapQuery& cap, const store::Lens& lens,
                                     double hit_window_ms = kDefaultHitWindowMs);
 
 // The self-contained page: the PAGE template with subtitle/footer escaped in
@@ -75,8 +75,9 @@ std::string build_html(const std::vector<ReportRow>& rows, const std::string& su
 
 struct ReportOptions {
     int64_t max_paths = 5;
-    // Which records the page lists: the user's current SP cap.
+    // Which records the page lists: the user's current SP cap and lens.
     store::CapQuery cap = store::CapQuery::at(kCloneHeroSpCap);
+    store::Lens lens;
     int hit_window_ms = static_cast<int>(kDefaultHitWindowMs);
     std::string db_path;  // names the footer's source database
 };

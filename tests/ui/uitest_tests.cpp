@@ -5,10 +5,12 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 #include "uitest_harness.h"
 
 #include "app/config.h"
+#include "app/preview_view.h"
 #include "app/report_files.h"
 #include "ui/app_state.h"
 #include "ui/preview_controller.h"
@@ -48,6 +50,9 @@ void open_details(ImGuiTestContext* ctx, size_t index) {
     IM_CHECK(h.app->selected && h.app->selected->title == title);
     ctx->SetRef("//$FOCUSED");
     IM_CHECK(visible_text(h).find("Song Details") != std::string::npos);
+    // The ImGui context outlives reset_app, so the tab bar remembers the tab a
+    // previous test left selected. Land on Paths deterministically.
+    ctx->ItemClick("##DetailsTabs/Paths");
 }
 
 void test_scan(ImGuiTestContext* ctx) {
@@ -207,6 +212,100 @@ bool open_preview(ImGuiTestContext* ctx) {
     return true;
 }
 
+// An analysis started while the Preview tab is visible must still store its
+// record and reap the job: persistence must not depend on the Paths tab
+// drawing. Pre-fix, analyze_job sat "finished" forever and the record was
+// never stored (the preview-then-analyze 300 s hang).
+void test_analyze_on_preview(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_preview(ctx)) return;
+    ctx->ItemClick("**/Analyze paths!");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
+    IM_CHECK(h.app->viewed.record.has_value());
+    IM_CHECK(!h.app->viewed.record->paths.empty());
+    // Switching to Paths shows the stored result, no re-analyze.
+    ctx->ItemClick("##DetailsTabs/Paths");
+    std::string best = h.app->viewed.record->best_path().pathstring();
+    IM_CHECK(wait_until(ctx, [&] { return visible_text(h).find(best) != std::string::npos; }, 5));
+}
+
+// The path overlay follows the Paths tab's selection. Re-opening the Preview
+// for a chart that was already open used to be a plain no-op, so the overlay
+// stayed on whatever path had been selected the first time -- the record's
+// optimal path. Picking another path must swap the overlay in place: no
+// re-parse, no audio re-decode, and the playhead left where it was.
+void test_preview_path_overlay(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    open_details(ctx, 0);
+    if (ctx->IsError()) return;
+    ctx->ItemClick("**/Analyze paths!");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
+    IM_CHECK(h.app->viewed.record.has_value());
+
+    // A second path to switch to. Path rows are labeled by pathstring, so the
+    // one picked must differ from the first path's and be unique among every
+    // row the panel draws (the all-0 section included).
+    std::vector<const hydra::Path*> paths = h.app->viewed.record->all_paths();
+    std::vector<const hydra::Path*> rows = paths;
+    for (const hydra::Path* p : h.app->viewed.record->all_allzero_paths())
+        rows.push_back(p);
+    const hydra::Path* other = nullptr;
+    for (size_t i = 1; i < paths.size() && other == nullptr; ++i) {
+        std::string label = paths[i]->pathstring();
+        if (label == paths[0]->pathstring()) continue;
+        size_t seen = 0;
+        for (const hydra::Path* p : rows)
+            if (p->pathstring() == label) ++seen;
+        if (seen == 1) other = paths[i];
+    }
+    IM_CHECK(other != nullptr);  // the fixture must keep 2+ distinguishable paths
+    const std::string first_key = hydra::app::path_overlay_key(paths[0]);
+    const std::string other_key = hydra::app::path_overlay_key(other);
+    const std::string first_label = paths[0]->pathstring();
+    const std::string other_label = other->pathstring();
+    IM_CHECK(first_key != other_key);
+    size_t first_rows = 0;
+    for (const hydra::Path* p : rows)
+        if (p->pathstring() == first_label) ++first_rows;
+    IM_CHECK_EQ(first_rows, (size_t)1);  // the first path's row is addressable too
+
+    // The Preview opens on the default selection: the record's first path.
+    ctx->ItemClick("##DetailsTabs/Preview");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->preview && h.app->preview->active(); }, 10));
+    IM_CHECK(wait_until(ctx, [&] { return !h.app->preview->loading(); }, 120));
+    IM_CHECK_STR_EQ(h.app->preview->error().c_str(), "");
+    IM_CHECK_STR_EQ(h.app->preview->overlay_path_key().c_str(), first_key.c_str());
+
+    // Park the playhead mid-song: a reload would rewind it to zero.
+    IM_CHECK(h.app->preview->length_ms() > 0.0);
+    h.app->preview->seek_ms(h.app->preview->length_ms() * 0.5);
+    ctx->Yield(2);
+    double held = h.app->preview->position_ms();
+    IM_CHECK(held > 0.0);
+
+    // Pick the other path and come back to the Preview.
+    ctx->ItemClick("##DetailsTabs/Paths");
+    ctx->ItemClick(("**/" + escape_ref(other_label)).c_str());
+    ctx->Yield(2);
+    ctx->ItemClick("##DetailsTabs/Preview");
+    ctx->Yield(2);
+    IM_CHECK(!h.app->preview->loading());  // swapped in place, not reloaded
+    IM_CHECK_FLOAT_NEAR_EQ(h.app->preview->position_ms(), held, 1.0);
+    IM_CHECK_STR_EQ(h.app->preview->overlay_path_key().c_str(), other_key.c_str());
+
+    // The same chart still previews the first path when it is selected again.
+    ctx->ItemClick("##DetailsTabs/Paths");
+    ctx->ItemClick(("**/" + escape_ref(first_label)).c_str());
+    ctx->Yield(2);
+    ctx->ItemClick("##DetailsTabs/Preview");
+    ctx->Yield(2);
+    IM_CHECK(!h.app->preview->loading());
+    IM_CHECK_STR_EQ(h.app->preview->overlay_path_key().c_str(), first_key.c_str());
+}
+
 // Click-and-hold on the time bar while playing. Onyx pauses playback for the
 // hold; Hydra used to keep playing and re-seek the audio to the held time
 // every frame, which came out as a buzz. The transport must be paused while
@@ -296,6 +395,72 @@ void test_batch_modal_drift(ImGuiTestContext* ctx) {
     ctx->ItemClick("Continue");
 }
 
+// The View row's difficulty dropdown: it drives the chartmode everything else
+// is keyed by, and it disables 2x Bass (an Expert-only charting concept)
+// without forgetting the user's stored setting.
+void test_difficulty(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    ctx->SetRef("//Hydra");
+
+    IM_CHECK(h.app->settings.view_bass2x);  // the default the test relies on
+    IM_CHECK((ctx->ItemInfo("2x Bass").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+    ctx->ComboClick("##difficulty/Hard");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->settings.view_difficulty == "Hard"; }, 5));
+    IM_CHECK_STR_EQ(hydra::app::Settings::load_file(h.ini_path).view_difficulty.c_str(),
+                    "Hard");
+    IM_CHECK_STR_EQ(h.app->settings.chartmode_key().c_str(), "Hard Pro Drums, 1x Bass");
+
+    // Visibly disabled, unchecked, and the stored flag is untouched.
+    ImGuiTestItemInfo bass = ctx->ItemInfo("2x Bass");
+    IM_CHECK((bass.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+    IM_CHECK(h.app->settings.view_bass2x);
+    IM_CHECK(!h.app->settings.effective_bass2x());
+
+    // Back on Expert the box is live again, still carrying the user's own
+    // setting. (Checked here rather than at the end of the test: the details
+    // modal opened below has no close button the harness can address.)
+    ctx->ComboClick("##difficulty/Expert");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->settings.view_difficulty == "Expert"; }, 5));
+    IM_CHECK((ctx->ItemInfo("2x Bass").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+    IM_CHECK(h.app->settings.effective_bass2x());
+    IM_CHECK_STR_EQ(h.app->settings.chartmode_key().c_str(), "Expert Pro Drums, 2x Bass");
+
+    ctx->ComboClick("##difficulty/Hard");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->settings.view_difficulty == "Hard"; }, 5));
+
+    // Narrow to a chart that actually has a [HardDrums] section, so the
+    // analysis below has notes to work with.
+    ctx->ItemInputValue("##search", "Pokemon Theme");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->search == "Pokemon Theme"; }, 5));
+    IM_CHECK(wait_until(ctx, [&] { return !h.app->current_page.rows.empty(); }, 5));
+    open_details(ctx, 0);
+    if (ctx->IsError()) return;
+    // The details title carries the chartmode, so it names the difficulty.
+    IM_CHECK(visible_text(h).find("Hard Pro Drums, 1x Bass") != std::string::npos);
+
+    ctx->ItemClick("**/Analyze paths!");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
+    IM_CHECK(h.app->viewed.record.has_value());
+    IM_CHECK(!h.app->viewed.record->paths.empty());
+    std::string best = h.app->viewed.record->best_path().pathstring();
+    IM_CHECK(wait_until(ctx, [&] { return visible_text(h).find(best) != std::string::npos; }, 5));
+    // The Hard record is filed under the Hard chartmode, so the library row
+    // now reads Ready under it.
+    IM_CHECK(h.app->current_page.summaries[0].state ==
+             hydra::store::RecordStatus::Ready);
+
+    // The Preview follows the selected difficulty: Hard's notes must load,
+    // with no "Preview failed".
+    ctx->ItemClick("**/Preview");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->preview && h.app->preview->active(); }, 10));
+    IM_CHECK(wait_until(ctx, [&] { return !h.app->preview->loading(); }, 120));
+    IM_CHECK_STR_EQ(h.app->preview->error().c_str(), "");
+}
+
 void test_settings_and_reports(ImGuiTestContext* ctx) {
     Harness& h = harness(ctx);
     reset_app(h);
@@ -345,6 +510,51 @@ void test_settings_and_reports(ImGuiTestContext* ctx) {
     IM_CHECK_EQ(h.opened_urls.size(), (size_t)1);  // still: auto-open is off
 }
 
+// The backend limit is a display-only setting: it filters the Backends tables
+// and nothing else, so flipping it must persist to the INI without touching
+// the stored record. Also pins the renamed "Path limit" status line.
+void test_backend_limit(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    open_details(ctx, 0);
+    if (ctx->IsError()) return;
+    ctx->ItemClick("**/Analyze paths!");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
+    IM_CHECK(h.app->viewed.record.has_value());
+
+    // The stored-result panel says "Path limit", not the old "Limit timings".
+    IM_CHECK(wait_until(
+        ctx, [&] { return visible_text(h).find("Path limit:") != std::string::npos; }, 5));
+
+    // Off by default, and the number box is inert until it is ticked.
+    IM_CHECK(!h.app->settings.backendlimit_enabled);
+    IM_CHECK_EQ(h.app->settings.backendlimit_value, 50);
+    IM_CHECK((ctx->ItemInfo("**/##backendlimitvalue").ItemFlags &
+              ImGuiItemFlags_Disabled) != 0);
+
+    ctx->ItemClick("**/##backendlimit");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->settings.backendlimit_enabled; }, 5));
+    IM_CHECK(hydra::app::Settings::load_file(h.ini_path).backendlimit_enabled);
+
+    ctx->ItemInputValue("**/##backendlimitvalue", 30);
+    IM_CHECK(wait_until(ctx, [&] { return h.app->settings.backendlimit_value == 30; }, 5));
+    IM_CHECK_EQ(hydra::app::Settings::load_file(h.ini_path).backendlimit_value, 30);
+    IM_CHECK(h.app->settings.backend_limit() == 30.0);
+
+    // Display-only: the record the modal shows is still the analyzed one.
+    IM_CHECK(h.app->viewed.record.has_value());
+    IM_CHECK(h.app->current_page.summaries[0].state ==
+             hydra::store::RecordStatus::Ready);
+
+    // Unticking turns the filter off again, and that persists too.
+    ctx->ItemClick("**/##backendlimit");
+    IM_CHECK(wait_until(ctx, [&] { return !h.app->settings.backendlimit_enabled; }, 5));
+    IM_CHECK(!hydra::app::Settings::load_file(h.ini_path).backendlimit_enabled);
+    IM_CHECK(!h.app->settings.backend_limit().has_value());
+}
+
 }  // namespace
 
 void register_tests(Harness& h) {
@@ -357,10 +567,14 @@ void register_tests(Harness& h) {
         {"analyze", test_analyze},
         {"cap-switch", test_cap_switch},
         {"preview", test_preview},
+        {"difficulty", test_difficulty},
+        {"analyze-on-preview", test_analyze_on_preview},
+        {"preview-path-overlay", test_preview_path_overlay},
         {"scrub-hold", test_scrub_hold},
         {"layout-drift", test_layout_drift},
         {"batch-modal-drift", test_batch_modal_drift},
         {"settings-and-reports", test_settings_and_reports},
+        {"backend-limit", test_backend_limit},
     };
     for (const Entry& e : entries) {
         ImGuiTest* t = IM_REGISTER_TEST(h.engine, "hydra", e.name);

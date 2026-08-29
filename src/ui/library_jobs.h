@@ -147,8 +147,10 @@ private:
 class ReportJob : public ResultJobBase {
 public:
     // hit_window_ms feeds the page's timing-tier bands (settings.hit_window_ms).
-    // cap: which records the page lists (the user's current SP cap).
-    ReportJob(store::RecordStore& store, store::CapQuery cap, bool open_when_done,
+    // cap/lens: which records the page lists (the user's current SP cap, ms
+    // limit and score range).
+    ReportJob(store::RecordStore& store, store::CapQuery cap, store::Lens lens,
+              bool open_when_done,
               int hit_window_ms = static_cast<int>(kDefaultHitWindowMs));
     ~ReportJob() { shutdown(); }
 
@@ -159,6 +161,7 @@ private:
 
     store::RecordStore& store_;
     store::CapQuery cap_;
+    store::Lens lens_;
     bool open_when_done_;
     int hit_window_ms_;
 };

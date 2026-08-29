@@ -23,11 +23,12 @@ void DmFetchUsersJob::run() {
 // ---- DmReportJob ------------------------------------------------------
 
 DmReportJob::DmReportJob(store::RecordStore& store, std::string discord_id, std::string username,
-                         std::string chartmode, bool open_when_done)
+                         std::string chartmode, store::Lens lens, bool open_when_done)
     : store_(store),
       discord_id_(std::move(discord_id)),
       username_(std::move(username)),
       chartmode_(std::move(chartmode)),
+      lens_(lens),
       open_when_done_(open_when_done) {}
 
 void DmReportJob::start() { spawn([this] { run(); }); }
@@ -39,7 +40,7 @@ void DmReportJob::run() {
         // Join, tally, and framing all live behind generate_dm_report; the
         // job only fetches, forwards the counts, and writes the file.
         app::dm_report::GeneratedDmReport report =
-            app::dm_report::generate_dm_report(store_, scores, chartmode_,
+            app::dm_report::generate_dm_report(store_, scores, chartmode_, lens_,
                                                username_);
         if (report.stats.total == 0)
             throw std::runtime_error("this user has no scores to compare");
