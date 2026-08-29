@@ -440,6 +440,20 @@ TEST_CASE("rate_activation: stored scales, materiality-gated warns and rows") {
     CHECK_FALSE(r.late_warns);
     CHECK_FALSE(r.backends[0].effective_ms.has_value());
 
+    // An over-budget gap at the flat 1.0 scale still warns (it exceeds the
+    // 170 ms combined budget) but reads at face value: an eff. figure would
+    // just repeat the raw ms, so it stays unset.
+    Activation overbudget = flat;
+    overbudget.backends.clear();
+    BackendSqueeze over_row;
+    over_row.offset_ms = 222.2;
+    overbudget.backends.push_back(over_row);
+    r = rate_activation(overbudget, nullptr, 85.0);
+    CHECK(r.late_backend_warns);
+    REQUIRE(r.backends.size() == 1);
+    CHECK(r.backends[0].scale == doctest::Approx(1.0));
+    CHECK_FALSE(r.backends[0].effective_ms.has_value());
+
     // A SqOut phrase note reads the pre-end early scale.
     Activation sqout = flat;
     sqout.backends.clear();

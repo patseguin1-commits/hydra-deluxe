@@ -142,8 +142,8 @@ ActivationRating rate_activation(const Activation& act,
     // positive rows a late one. Both live at the (possibly SqIn-extended) SP
     // end, so they read `post`. effective_ms maps the row's raw ms onto the
     // nominal 2*W budget the ratings assume (the real combined budget is
-    // W*(1+r)); it engages only when the scale is material to the row, and a
-    // row whose scale is material is exactly what makes its direction warn.
+    // W*(1+r)); it engages only when the scale actually moves the number (an
+    // over-budget row still warns at x1.00 but reads at face value).
     std::vector<BackendSqueeze> backends = act.display_backends();
     out.backends.reserve(backends.size());
     for (const BackendSqueeze& bsq : backends) {
@@ -163,8 +163,11 @@ ActivationRating rate_activation(const Activation& act,
                                                hit_window_ms);
                 out.late_backend_warns |= applies;
             }
-            if (applies)
-                row.effective_ms = effective_backend_ms(*bsq.offset_ms, row.scale);
+            if (applies) {
+                double eff = effective_backend_ms(*bsq.offset_ms, row.scale);
+                if (std::abs(eff - std::abs(*bsq.offset_ms)) > kTransferImpactMs)
+                    row.effective_ms = eff;
+            }
         }
         row.budget_ms = squeeze_budget_ms(row.scale, hit_window_ms);
         out.backends.push_back(std::move(row));
