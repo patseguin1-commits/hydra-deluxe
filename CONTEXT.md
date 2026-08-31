@@ -28,7 +28,8 @@ cap, and the analysis settings (the ms limit and the score range). A chart
 keeps one record per settings combination; records share their stored paths,
 so a path found under several combinations is stored once. A record is stale
 when an older Hydra version produced it. A lookup reports it as one of three
-statuses: not analyzed, stale, or ready.
+statuses: not analyzed, stale, or ready. A listing returns only ready records,
+so a stale record reads the same as no record at all.
 
 **SP cap**:
 The Star Power meter ceiling an analysis runs under, in bars. 4 is Clone

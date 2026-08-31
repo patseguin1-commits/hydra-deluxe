@@ -328,6 +328,11 @@ public:
     // Recomputes the summary columns from stored paths. Returns rows touched.
     int reindex();
 
+    // The library listing: one row per chart and mode -- the same row a lookup
+    // for those settings would pick -- and only the Ready ones. A chart whose
+    // best row is stale is left out entirely, so a report reads it the same as
+    // a chart nobody has analyzed. `limit` caps the rows returned after that
+    // filtering; a negative limit means no limit.
     std::vector<RecordListing> list_records(
         const std::optional<std::string>& chartmode, const CapQuery& cap, const Lens& lens,
         SortColumn order_by, bool descending, std::optional<int> limit = std::nullopt);

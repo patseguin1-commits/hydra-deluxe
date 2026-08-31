@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "core/model.h"
@@ -594,6 +595,12 @@ TEST_CASE("records at different caps coexist; Auto picks the newest current one"
                         });
     CHECK(stale_seen == 1);
 
+    // The listing does not. A stale row takes its chart out of the listing
+    // entirely, so a report counts it as never analyzed rather than reading
+    // numbers this build cannot vouch for.
+    CHECK(store.list_records(std::nullopt, CapQuery::at(64), Lens{}, SortColumn::Score, true)
+              .empty());
+
     // With only a 4-bar row, Auto has nothing to reuse.
     RecordStore only4(":memory:");
     only4.add_song("h", "Song", "Artist", "Charter", fixture().song);
@@ -640,6 +647,108 @@ TEST_CASE("an Auto run that settles below an existing row becomes the Auto answe
     // Re-analyzing at the taller cap makes it the newest again.
     store.add_record(RecordKey{"h", "mode", CapQuery::at(32)}, at_cap(32));
     CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic()}).record->sp_cap == 32);
+}
+
+TEST_CASE("a legacy-imported sentinel row is left out of the listing") {
+    // The case the reports hit: a row came across from an older database
+    // carrying a result but not the settings behind it. Nothing can read it,
+    // so the listing must not offer it as the chart's answer.
+    RecordStore store(":memory:");
+    store.add_song("h", "Song", "Artist", "Charter", fixture().song);
+    PreparedRow imported = prepare_row(RecordKey{"h", "mode", CapQuery::at(8)}, at_cap(8));
+    imported.lens = Lens::sentinel();
+    store.add_row(imported);
+    CHECK(store.counts().second == 1);
+
+    // A lookup still says the row is there, as Stale -- that is what the
+    // library's status column shows.
+    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::at(8)}).status ==
+          RecordStatus::Stale);
+    CHECK(store.get_summary(RecordKey{"h", "mode", CapQuery::at(8)}).status ==
+          RecordStatus::Stale);
+
+    // The listing leaves the chart out, so a report counts it as unanalyzed.
+    CHECK(store.list_records(std::nullopt, CapQuery::at(8), Lens{}, SortColumn::Score, true)
+              .empty());
+
+    // The export path keeps yielding it, with no record to hand out.
+    int seen = 0;
+    store.for_each_blob(std::nullopt, CapQuery::at(8), Lens{},
+                        [&](const RecordStore::BlobRow& meta, const HydraRecord* rec) {
+                            CHECK(meta.status == RecordStatus::Stale);
+                            CHECK(rec == nullptr);
+                            ++seen;
+                        });
+    CHECK(seen == 1);
+
+    // A real run at that cap is the answer the placeholder stood in for, and
+    // the listing shows it.
+    store.add_record(RecordKey{"h", "mode", CapQuery::at(8)}, at_cap(8));
+    CHECK(store.list_records(std::nullopt, CapQuery::at(8), Lens{}, SortColumn::Score, true)
+              .size() == 1);
+}
+
+TEST_CASE("the listing and a lookup agree on which row is a chart's answer") {
+    // The lock between the two paths. Each chart below holds several
+    // candidates; whatever get_record picks is what the listing must show, and
+    // when that pick is not readable the chart must not be listed at all.
+    RecordStore store(":memory:");
+    const std::vector<const char*> charts = {"newest", "over_stale", "over_sentinel",
+                                             "all_stale"};
+    for (const char* hash : charts)
+        store.add_song(hash, hash, "Artist", "Charter", fixture().song);
+
+    // Two current rows: the newer write wins, not the taller cap.
+    store.add_record(RecordKey{"newest", "mode", CapQuery::at(32)}, at_cap(32));
+    store.add_record(RecordKey{"newest", "mode", CapQuery::at(16)}, at_cap(16));
+
+    // A current row and a taller stale one: this build's stamp wins. The stale
+    // row goes in second because a current-version write purges the chart's
+    // other-version rows.
+    store.add_record(RecordKey{"over_stale", "mode", CapQuery::at(8)}, at_cap(8));
+    PreparedRow stale =
+        prepare_row(RecordKey{"over_stale", "mode", CapQuery::at(64)}, at_cap(64));
+    stale.hyversion = "0.0.0";
+    store.add_row(stale);
+
+    // A current row and a taller sentinel: a real result wins.
+    PreparedRow sentinel =
+        prepare_row(RecordKey{"over_sentinel", "mode", CapQuery::at(64)}, at_cap(64));
+    sentinel.lens = Lens::sentinel();
+    store.add_row(sentinel);
+    store.add_record(RecordKey{"over_sentinel", "mode", CapQuery::at(8)}, at_cap(8));
+
+    // Nothing readable at all.
+    PreparedRow only_stale =
+        prepare_row(RecordKey{"all_stale", "mode", CapQuery::at(16)}, at_cap(16));
+    only_stale.hyversion = "0.0.0";
+    store.add_row(only_stale);
+
+    std::unordered_map<std::string, int> listed;
+    for (const RecordListing& r : store.list_records(std::nullopt, CapQuery::automatic(),
+                                                     Lens{}, SortColumn::Score, true))
+        listed[r.hyhash] = r.sp_cap;
+
+    for (const char* hash : charts) {
+        INFO(hash);
+        const RecordKey key{hash, "mode", CapQuery::automatic()};
+        const RecordLookup rec = store.get_record(key);
+        CHECK(store.get_summary(key).status == rec.status);
+        if (rec.status == RecordStatus::Ready) {
+            REQUIRE(listed.count(hash) == 1);
+            CHECK(listed[hash] == rec.record->sp_cap);
+        } else {
+            CHECK(listed.count(hash) == 0);
+        }
+    }
+
+    // Spelled out, so a comparator change that moves both paths together still
+    // has to answer for itself.
+    CHECK(listed.at("newest") == 16);
+    CHECK(listed.at("over_stale") == 8);
+    CHECK(listed.at("over_sentinel") == 8);
+    CHECK(store.get_record(RecordKey{"all_stale", "mode", CapQuery::automatic()}).status ==
+          RecordStatus::Stale);
 }
 
 TEST_CASE("prepare_row refuses a key whose exact cap isn't the record's") {
@@ -776,10 +885,11 @@ TEST_CASE("a 1.6 database migrates to results + shared paths on open") {
             CHECK_FALSE(store.has_record(RecordKey{"v1", "mode", CapQuery::at(8), lens}));
         }
 
-        // The set queries still show it, with no record to hand out.
-        std::vector<RecordListing> listed =
-            store.list_records(std::nullopt, CapQuery::at(8), kLensA, SortColumn::Score, true);
-        CHECK(listed.size() == 1);
+        // The export path still shows it, with no record to hand out. The
+        // listing does not: nothing here can be read, so the chart reads the
+        // same as one nobody has analyzed.
+        CHECK(store.list_records(std::nullopt, CapQuery::at(8), kLensA, SortColumn::Score, true)
+                  .empty());
         int seen = 0;
         store.for_each_blob(std::nullopt, CapQuery::at(8), kLensA,
                             [&](const RecordStore::BlobRow& meta, const HydraRecord* rec) {

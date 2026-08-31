@@ -3,6 +3,7 @@
 #include <sqlite3.h>
 
 #include <algorithm>
+#include <map>
 #include <stdexcept>
 
 #include "core/version.h"
@@ -242,63 +243,61 @@ int bind_lens(sqlite3_stmt* s, int idx, const Lens& lens) {
     return idx + 4;
 }
 
-// The filter for a single-row lookup (get_summary / get_record). Appended
-// after "WHERE hyhash=? AND chartmode=?"; its placeholders are filled by the
-// bind_ twin below, which is where the lens's values go in. Auto takes the
-// best row: a real row
-// before a sentinel, then current version, then the newest. Newest, not
-// tallest: an Auto run that settles below an older, taller row (an imported
-// uncapped result, a what-if the user typed) is the result the user just
-// asked for, so every Auto lookup must show it. The tallest rule showed the
-// old row forever and "Analyze paths!" could never replace it. Write order is
-// result_id: add_row deletes and re-inserts, so a rewritten row is newest.
-void append_lookup_filter(std::string& sql, const CapQuery& cap) {
-    sql += " AND " + lens_or_sentinel("");
-    if (cap.exact)
-        sql += " AND sp_cap=? ORDER BY (ms_enabled!=-1) DESC LIMIT 1";
-    else
-        sql += " AND sp_cap>" + std::to_string(kCloneHeroSpCap) +
-               " ORDER BY (ms_enabled!=-1) DESC, (hyversion=?) DESC, result_id DESC LIMIT 1";
-}
-int bind_lookup_filter(sqlite3_stmt* s, int idx, const CapQuery& cap, const Lens& lens) {
-    idx = bind_lens(s, idx, lens);
-    if (cap.exact) sqlite3_bind_int(s, idx, *cap.exact);
-    else bind_text(s, idx, current_record_version());
-    return idx + 1;
+// The three facts that decide how a row places among the candidates for one
+// key. The first two also decide whether the row is readable at all, which is
+// why they are read off the row exactly here.
+struct Candidate {
+    bool real = false;     // not a sentinel: it says which settings it ran under
+    bool current = false;  // stamped by this build
+    int64_t result_id = 0;
+};
+
+Candidate rank_row(const std::string& hyversion, int ms_enabled, int64_t result_id) {
+    return Candidate{ms_enabled != -1, hyversion == current_record_version(), result_id};
 }
 
-// The filter for a set query over alias r (list_records / for_each_blob):
-// exact keeps that cap's rows; Auto keeps, per (hyhash, chartmode), the one
-// row an Auto lookup would pick -- no other candidate outranks it, ranked
-// exactly as append_lookup_filter ranks. Binds 5 parameters for exact, 12 for
-// Auto.
-void append_cap_set_filter(std::string& sql, const CapQuery& cap) {
-    sql += " AND " + lens_or_sentinel("r.");
-    if (cap.exact) {
-        sql += " AND r.sp_cap = ?";
-        return;
-    }
-    std::string four = std::to_string(kCloneHeroSpCap);
-    sql += " AND r.sp_cap > " + four +
-           " AND NOT EXISTS (SELECT 1 FROM results x"
-           "   WHERE x.hyhash = r.hyhash AND x.chartmode = r.chartmode"
-           "     AND x.sp_cap > " + four +
-           "     AND " + lens_or_sentinel("x.") +
-           "     AND ((x.ms_enabled!=-1) > (r.ms_enabled!=-1)"
-           "          OR ((x.ms_enabled!=-1) = (r.ms_enabled!=-1)"
-           "              AND ((x.hyversion = ?) > (r.hyversion = ?)"
-           "                   OR ((x.hyversion = ?) = (r.hyversion = ?)"
-           "                       AND x.result_id > r.result_id)))))";
+// Is this row's content trustworthy? Only when this build wrote it and it says
+// which settings it ran under. Everything else is Stale: another version's
+// bytes, or a migrated row whose question nobody recorded. Every path that
+// classifies a row asks here -- drop_stale_records is the one exception, and
+// spells out the negation in SQL because a DELETE has to pick its rows in the
+// database.
+bool row_is_ready(const std::string& hyversion, int ms_enabled) {
+    const Candidate c = rank_row(hyversion, ms_enabled, 0);
+    return c.real && c.current;
 }
-int bind_cap_set_filter(sqlite3_stmt* s, int idx, const CapQuery& cap, const Lens& lens) {
+
+// Does `a` beat `b`? A real row before a sentinel, then this version before
+// another, then the newest write. Newest, not tallest: an Auto run that
+// settles below an older, taller row (an imported uncapped result, a what-if
+// the user typed) is the result the user just asked for, so every lookup must
+// show it. The tallest rule showed the old row forever and "Analyze paths!"
+// could never replace it. Write order is result_id: add_row deletes and
+// re-inserts, so a rewritten row is newest.
+bool outranks(const Candidate& a, const Candidate& b) {
+    if (a.real != b.real) return a.real;
+    if (a.current != b.current) return a.current;
+    return a.result_id > b.result_id;
+}
+
+// Which chart a set query's winner is picked for: one per chart and mode.
+using GroupKey = std::pair<std::string, std::string>;
+
+// Every row that could answer a lookup: the wanted lens or a sentinel, at the
+// wanted cap. Which of them wins is `outranks`'s decision and not SQL's, so
+// there is deliberately no ORDER BY or LIMIT here. `a` is the table alias,
+// "" or "r.". Appended after a WHERE that already has a term.
+void append_candidate_filter(std::string& sql, const char* a, const CapQuery& cap) {
+    const std::string p = a;
+    sql += " AND " + lens_or_sentinel(a);
+    if (cap.exact) sql += " AND " + p + "sp_cap=?";
+    else sql += " AND " + p + "sp_cap>" + std::to_string(kCloneHeroSpCap);
+}
+// Binds the lens's four parameters, plus one more for an exact cap.
+int bind_candidate_filter(sqlite3_stmt* s, int idx, const CapQuery& cap, const Lens& lens) {
     idx = bind_lens(s, idx, lens);
-    if (cap.exact) {
-        sqlite3_bind_int(s, idx, *cap.exact);
-        return idx + 1;
-    }
-    idx = bind_lens(s, idx, lens);
-    for (int i = 0; i < 4; ++i) bind_text(s, idx + i, current_record_version());
-    return idx + 4;
+    if (cap.exact) sqlite3_bind_int(s, idx++, *cap.exact);
+    return idx;
 }
 
 bool ends_with(const std::string& s, const std::string& suffix) {
@@ -879,21 +878,41 @@ void RecordStore::add_row(const PreparedRow& row) {
 SummaryLookup RecordStore::get_summary(const RecordKey& key) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     std::string sql =
-        "SELECT hyversion, ms_enabled, bestpath FROM results WHERE hyhash=? AND chartmode=?";
-    append_lookup_filter(sql, key.cap);
+        "SELECT hyversion, ms_enabled, bestpath, result_id FROM results"
+        " WHERE hyhash=? AND chartmode=?";
+    append_candidate_filter(sql, "", key.cap);
     Stmt s = prepare(db_, sql.c_str());
     bind_text(s, 1, key.hyhash);
     bind_text(s, 2, key.chartmode);
-    bind_lookup_filter(s, 3, key.cap, key.lens);
-    if (sqlite3_step(s) != SQLITE_ROW) return SummaryLookup{};
+    bind_candidate_filter(s, 3, key.cap, key.lens);
+
+    struct Winner {
+        Candidate rank;
+        std::string hyversion;
+        int ms_enabled = 0;
+        std::string bestpath;
+    };
+    std::optional<Winner> best;
+    while (sqlite3_step(s) == SQLITE_ROW) {
+        Winner w;
+        w.hyversion = column_text(s, 0);
+        w.ms_enabled = sqlite3_column_int(s, 1);
+        w.bestpath = column_text(s, 2);
+        w.rank = rank_row(w.hyversion, w.ms_enabled, sqlite3_column_int64(s, 3));
+        if (!best || outranks(w.rank, best->rank)) best = std::move(w);
+    }
+    if (!best) return SummaryLookup{};
 
     SummaryLookup out;
-    if (column_text(s, 0) != current_record_version() || sqlite3_column_int(s, 1) == -1) {
+    // A stale winner is reported as Stale, not hidden: the library's status
+    // column has to tell "analyzed by another build" apart from "never
+    // analyzed", and only a lookup can say which this is.
+    if (!row_is_ready(best->hyversion, best->ms_enabled)) {
         out.status = RecordStatus::Stale;
         return out;
     }
     out.status = RecordStatus::Ready;
-    out.bestpath = column_text(s, 2);
+    out.bestpath = best->bestpath;
     return out;
 }
 
@@ -907,24 +926,42 @@ RecordLookup RecordStore::get_record(const RecordKey& key) {
         std::string sql =
             "SELECT result_id, hyversion, ms_enabled, structure FROM results"
             " WHERE hyhash=? AND chartmode=?";
-        append_lookup_filter(sql, key.cap);
+        append_candidate_filter(sql, "", key.cap);
         Stmt s = prepare(db_, sql.c_str());
         bind_text(s, 1, key.hyhash);
         bind_text(s, 2, key.chartmode);
-        bind_lookup_filter(s, 3, key.cap, key.lens);
-        if (sqlite3_step(s) != SQLITE_ROW) return RecordLookup{};
+        bind_candidate_filter(s, 3, key.cap, key.lens);
 
-        out.hyversion = column_text(s, 1);
+        struct Winner {
+            Candidate rank;
+            int64_t result_id = 0;
+            std::string hyversion;
+            int ms_enabled = 0;
+            std::vector<uint8_t> structure;
+        };
+        std::optional<Winner> best;
+        while (sqlite3_step(s) == SQLITE_ROW) {
+            Winner w;
+            w.result_id = sqlite3_column_int64(s, 0);
+            w.hyversion = column_text(s, 1);
+            w.ms_enabled = sqlite3_column_int(s, 2);
+            w.structure = column_blob(s, 3);
+            w.rank = rank_row(w.hyversion, w.ms_enabled, w.result_id);
+            if (!best || outranks(w.rank, best->rank)) best = std::move(w);
+        }
+        if (!best) return RecordLookup{};
+
+        out.hyversion = best->hyversion;
         // Stamped by a different version, or migrated in with unknown
         // settings: nothing stored is decoded at all, matching
         // hydata.json_load's short-circuit on hyversion mismatch. Callers see
         // Stale and prompt a re-analyze.
-        if (out.hyversion != current_record_version() || sqlite3_column_int(s, 2) == -1) {
+        if (!row_is_ready(best->hyversion, best->ms_enabled)) {
             out.status = RecordStatus::Stale;
             return out;
         }
-        result_id = sqlite3_column_int64(s, 0);
-        structure = column_blob(s, 3);
+        result_id = best->result_id;
+        structure = std::move(best->structure);
     }
 
     out.status = RecordStatus::Ready;
@@ -987,7 +1024,7 @@ void RecordStore::for_each_blob(
             "r.chartmode, r.hyversion, r.sp_cap, r.result_id, r.structure, r.ms_enabled "
             "FROM results r JOIN songmeta s ON s.hyhash = r.hyhash WHERE 1=1";
         if (chartmode) sql += " AND r.chartmode = ?";
-        append_cap_set_filter(sql, cap);
+        append_candidate_filter(sql, "r.", cap);
         // Python's iter_blobs has no ORDER BY and gets insertion order from
         // sqlite's table scan; say so explicitly here.
         sql += " ORDER BY r.result_id";
@@ -995,8 +1032,11 @@ void RecordStore::for_each_blob(
         Stmt s = prepare(db_, sql.c_str());
         int idx = 1;
         if (chartmode) bind_text(s, idx++, *chartmode);
-        bind_cap_set_filter(s, idx, cap, lens);
-        const std::string current = current_record_version();
+        bind_candidate_filter(s, idx, cap, lens);
+
+        std::vector<Row> candidates;
+        std::vector<Candidate> ranks;
+        std::map<GroupKey, size_t> winner;  // chart+mode -> index of its best row
         while (sqlite3_step(s) == SQLITE_ROW) {
             Row row;
             row.meta.hyhash = column_text(s, 0);
@@ -1008,12 +1048,27 @@ void RecordStore::for_each_blob(
             row.meta.sp_cap = sqlite3_column_int(s, 6);
             row.result_id = sqlite3_column_int64(s, 7);
             row.structure = column_blob(s, 8);
-            row.meta.status =
-                (row.meta.hyversion == current && sqlite3_column_int(s, 9) != -1)
-                    ? RecordStatus::Ready
-                    : RecordStatus::Stale;
-            rows.push_back(std::move(row));
+            const int ms_enabled = sqlite3_column_int(s, 9);
+            row.meta.status = row_is_ready(row.meta.hyversion, ms_enabled)
+                                  ? RecordStatus::Ready
+                                  : RecordStatus::Stale;
+
+            const Candidate rank = rank_row(row.meta.hyversion, ms_enabled, row.result_id);
+            const GroupKey key{row.meta.hyhash, row.meta.chartmode};
+            auto it = winner.find(key);
+            if (it == winner.end()) winner.emplace(key, candidates.size());
+            else if (outranks(rank, ranks[it->second])) it->second = candidates.size();
+            ranks.push_back(rank);
+            candidates.push_back(std::move(row));
         }
+
+        // One row per chart and mode, the same one a lookup would pick, kept
+        // in result_id order. A stale winner is still yielded: this is the
+        // export path, and dropping a row here would lose it for good.
+        std::vector<bool> keep(candidates.size(), false);
+        for (const auto& kv : winner) keep[kv.second] = true;
+        for (size_t i = 0; i < candidates.size(); ++i)
+            if (keep[i]) rows.push_back(std::move(candidates[i]));
     }
 
     for (const Row& row : rows) {
@@ -1036,6 +1091,8 @@ int RecordStore::drop_stale_records() {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     // Stale is two things now: a stamp from another Hydra version, and a
     // sentinel migrated in from an older database. Neither can ever be read.
+    // This is row_is_ready negated, spelled in SQL because a DELETE has to
+    // pick its rows in the database; the two must be changed together.
     const char* kWhere = "hyversion != ? OR ms_enabled = -1";
 
     {
@@ -1083,13 +1140,12 @@ int RecordStore::reindex() {
                             sqlite3_column_int(s, 2), column_blob(s, 3)});
     }
 
-    std::string current = current_record_version();
     int done = 0;
     for (const Row& row : rows) {
         // A stale or sentinel row gets empty summaries: its stored bytes are
         // not this build's to read, so there is nothing to recompute from.
         PathSummary summary;
-        if (row.hyversion == current && row.ms_enabled != -1) {
+        if (row_is_ready(row.hyversion, row.ms_enabled)) {
             const std::unordered_map<std::string, std::vector<uint8_t>> nodes =
                 load_nodes(row.result_id);
             summary = summarize_record(rebuild_record(
@@ -1120,35 +1176,70 @@ std::vector<RecordListing> RecordStore::list_records(
     std::string sql =
         "SELECT s.hyhash, s.ref_name, s.ref_artist, s.ref_charter, r.chartmode, r.bestpath, "
         "r.score, r.actcount, r.maxskip, r.hardest_ms, r.avgmult, r.notecount, "
-        "r.sqin_count, r.sqout_count, r.pathcount, r.sp_cap "
+        "r.sqin_count, r.sqout_count, r.pathcount, r.sp_cap, "
+        "r.hyversion, r.ms_enabled, r.result_id "
         "FROM results r JOIN songmeta s ON s.hyhash = r.hyhash WHERE 1=1";
     if (chartmode) sql += " AND r.chartmode = ?";
-    append_cap_set_filter(sql, cap);
+    append_candidate_filter(sql, "r.", cap);
 
+    // The sort stays in SQL, so the listing keeps sqlite's own ordering; the
+    // passes below only drop rows, never reorder them. The limit cannot stay
+    // here: a SQL LIMIT would count rows that are about to be dropped and hand
+    // back fewer than the caller asked for.
     const char* prefix = sort_column_is_songmeta(order_by) ? "s." : "r.";
     sql += " ORDER BY ";
     sql += prefix;
     sql += sort_column_name(order_by);
     sql += descending ? " DESC" : " ASC";
-    if (limit) sql += " LIMIT " + std::to_string(*limit);
 
     Stmt s = prepare(db_, sql.c_str());
     int idx = 1;
     if (chartmode) bind_text(s, idx++, *chartmode);
-    bind_cap_set_filter(s, idx, cap, lens);
+    bind_candidate_filter(s, idx, cap, lens);
 
-    std::vector<RecordListing> out;
+    struct Row {
+        RecordListing listing;
+        Candidate rank;
+        bool ready = false;
+    };
+    std::vector<Row> candidates;
+    std::map<GroupKey, size_t> winner;  // chart+mode -> index of its best row
     while (sqlite3_step(s) == SQLITE_ROW) {
-        RecordListing rl;
-        rl.hyhash = column_text(s, 0);
-        rl.ref_name = column_text(s, 1);
-        rl.ref_artist = column_text(s, 2);
-        rl.ref_charter = column_text(s, 3);
-        rl.chartmode = column_text(s, 4);
-        rl.bestpath = column_text(s, 5);
-        rl.summary = read_summary(s, 6);
-        rl.sp_cap = sqlite3_column_int(s, 15);
-        out.push_back(std::move(rl));
+        Row row;
+        row.listing.hyhash = column_text(s, 0);
+        row.listing.ref_name = column_text(s, 1);
+        row.listing.ref_artist = column_text(s, 2);
+        row.listing.ref_charter = column_text(s, 3);
+        row.listing.chartmode = column_text(s, 4);
+        row.listing.bestpath = column_text(s, 5);
+        row.listing.summary = read_summary(s, 6);
+        row.listing.sp_cap = sqlite3_column_int(s, 15);
+
+        const std::string hyversion = column_text(s, 16);
+        const int ms_enabled = sqlite3_column_int(s, 17);
+        row.rank = rank_row(hyversion, ms_enabled, sqlite3_column_int64(s, 18));
+        row.ready = row_is_ready(hyversion, ms_enabled);
+
+        const GroupKey key{row.listing.hyhash, row.listing.chartmode};
+        auto it = winner.find(key);
+        if (it == winner.end()) winner.emplace(key, candidates.size());
+        else if (outranks(row.rank, candidates[it->second].rank)) it->second = candidates.size();
+        candidates.push_back(std::move(row));
+    }
+
+    std::vector<bool> keep(candidates.size(), false);
+    for (const auto& kv : winner) keep[kv.second] = true;
+
+    // A listing shows only what this build can read. A stale winner takes its
+    // chart out of the listing rather than handing the place to the next
+    // candidate -- a chart whose answer nobody can read must read the same as
+    // a chart nobody has analyzed. A negative limit means no limit, matching
+    // sqlite's own LIMIT convention.
+    std::vector<RecordListing> out;
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        if (!keep[i] || !candidates[i].ready) continue;
+        if (limit && *limit >= 0 && out.size() >= static_cast<size_t>(*limit)) break;
+        out.push_back(std::move(candidates[i].listing));
     }
     return out;
 }
