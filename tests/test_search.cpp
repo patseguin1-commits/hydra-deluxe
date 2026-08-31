@@ -97,6 +97,41 @@ TEST_CASE("search invariants hold across the corpus and config knobs") {
 // copy-out; the details view recomputes them from the song timing on demand.
 // Both go through frontend_transfer_scales, so this pins the stored values
 // against a live recompute across the corpus -- and with them the ratios the
+// The legacy Clone Hero 1.0 fill rule is a whole different spawn deadline, so
+// it reshapes which activations exist at all. That must still produce a normal,
+// complete record -- the score itself is not pinned here (it is a different
+// game's answer, and tests/test_fill_deadline.cpp pins the math instead).
+TEST_CASE("legacy fill deadline analyzes a chart end to end") {
+    int analyzed = 0;
+
+    for (const std::string& path : corpus::chart_paths()) {
+        Song song = load_songpath(path, true, true);
+        if (song.is_empty()) continue;
+
+        std::optional<HydraRecord> legacy;
+        try {
+            SearchSettings cfg;
+            cfg.sp_cap = 4;
+            cfg.depth_value = 0;
+            cfg.legacy_fill_deadline = true;
+            legacy = analyze_chart(song, cfg);
+        } catch (const ChartFileError&) {
+            continue;
+        }
+
+        // A record came back, and its paths are real ones the engine scored.
+        REQUIRE(legacy.has_value());
+        CHECK(legacy->sp_cap == 4);
+        if (!legacy->paths.empty()) {
+            CHECK(legacy->best_path().totalscore() > 0);
+            ++analyzed;
+        }
+        if (analyzed >= 3) break;  // three charts is enough to prove the path
+    }
+
+    CHECK(analyzed > 0);
+}
+
 // squeeze detail lines and eff. figures show.
 TEST_CASE("stored transfer scales match the display-layer recomputation") {
     int charts = 0, acts = 0, nonflat = 0, mismatches = 0;

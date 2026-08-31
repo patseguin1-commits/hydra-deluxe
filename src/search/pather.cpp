@@ -116,11 +116,14 @@ namespace {
 // Mirrors hyutil._analyze_at_cap.
 HydraRecord analyze_at_cap(const Song& song, int sp_cap, DepthMode depth_mode,
                            int depth_value, std::optional<double> ms_filter,
-                           std::optional<int> build_cap, bool want_allzero = false,
+                           std::optional<int> build_cap, bool legacy_fills,
+                           bool want_allzero = false,
                            const std::function<void(float)>& on_progress = {}) {
     std::optional<int> cap = build_cap.has_value() ? build_cap
                                                    : std::optional<int>(sp_cap);
-    ScoreGraph graph(song, cap);
+    ScoreGraph graph(song, cap,
+                     legacy_fills ? FillDeadlineRule::Ch10
+                                  : FillDeadlineRule::Ch11);
     const bool split = want_allzero && static_cast<bool>(on_progress);
     HydraRecord record = read(
         graph, depth_mode, depth_value, ms_filter,
@@ -144,7 +147,7 @@ HydraRecord analyze_at_cap(const Song& song, int sp_cap, DepthMode depth_mode,
 // want_allzero runs the all-0 pass once, after the ladder settles, at the
 // settled ceiling -- never per rung.
 HydraRecord analyze_auto_cap(const Song& song, DepthMode depth_mode, int depth_value,
-                             std::optional<double> ms_filter,
+                             std::optional<double> ms_filter, bool legacy_fills,
                              bool want_allzero = false,
                              const std::function<void(float)>& on_progress = {},
                              std::optional<double> time_budget_s = std::nullopt) {
@@ -184,7 +187,7 @@ HydraRecord analyze_auto_cap(const Song& song, DepthMode depth_mode, int depth_v
         HydraRecord candidate;
         try {
             candidate = analyze_at_cap(song, sp_cap, depth_mode, depth_value,
-                                       ms_filter, build_cap,
+                                       ms_filter, build_cap, legacy_fills,
                                        /*want_allzero=*/false, wrapped);
         } catch (const CapBudgetExceeded&) {
             // Out of time partway up. Keep the best rung that finished; the
@@ -219,7 +222,9 @@ HydraRecord analyze_auto_cap(const Song& song, DepthMode depth_mode, int depth_v
     if (record.has_value()) {
         record->sp_cap_converged = converged;
         if (want_allzero) {
-            ScoreGraph graph(song, settled_build_cap);
+            ScoreGraph graph(song, settled_build_cap,
+                             legacy_fills ? FillDeadlineRule::Ch10
+                                          : FillDeadlineRule::Ch11);
             attach_allzero(graph, *record,
                            split ? scaled_progress(on_progress, kMainProgressShare, 1.0f)
                                  : on_progress);
@@ -244,7 +249,8 @@ HydraRecord analyze_chart(const Song& song, const SearchSettings& settings,
     // always was so a fresh 4-bar record matches every stored one.
     if (sp_cap == kCloneHeroSpCap)
         return analyze_at_cap(song, kCloneHeroSpCap, depth_mode, depth_value, ms_filter,
-                              std::nullopt, /*want_allzero=*/true, on_progress);
+                              std::nullopt, settings.legacy_fill_deadline,
+                              /*want_allzero=*/true, on_progress);
     // Any other fixed cap runs a single pass at that ceiling. The graph is
     // still only built as tall as the song has phrases to bank -- no run can
     // exceed that -- so a huge cap on a short song stays cheap and exact. A
@@ -253,9 +259,11 @@ HydraRecord analyze_chart(const Song& song, const SearchSettings& settings,
     if (sp_cap.has_value()) {
         int build_cap = std::min(*sp_cap, std::max(count_sp_phrases(song), 1));
         return analyze_at_cap(song, *sp_cap, depth_mode, depth_value, ms_filter,
-                              build_cap, /*want_allzero=*/true, on_progress);
+                              build_cap, settings.legacy_fill_deadline,
+                              /*want_allzero=*/true, on_progress);
     }
     return analyze_auto_cap(song, depth_mode, depth_value, ms_filter,
+                            settings.legacy_fill_deadline,
                             /*want_allzero=*/true, on_progress,
                             settings.time_budget_s);
 }

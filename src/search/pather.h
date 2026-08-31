@@ -29,6 +29,10 @@ struct SearchSettings {
     // Auto only: seconds before a too-slow ladder rung is abandoned
     // (hymisc.SP_CAP_TIME_BUDGET). nullopt runs every rung to completion.
     std::optional<double> time_budget_s;
+    // Score fills by Clone Hero 1.0's spawn deadline instead of 1.1's flat 4
+    // beats (FillDeadlineRule in search/graph.h). CLI-only: it is not part of
+    // a record's identity, so a legacy run needs its own db (docs/adr/0010).
+    bool legacy_fill_deadline = false;
 };
 
 // The best all-0 path over an already-built graph: the highest-scoring path

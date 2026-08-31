@@ -24,6 +24,34 @@ namespace hydra {
 // its settings header.
 constexpr double kSqueezeWindowMs = 500.0;
 
+// Which game version's rule decides whether a drum fill spawns at all.
+//
+// A fill only appears in-game if the player's SP meter was already full by
+// some deadline before the fill. The two versions disagree on that deadline:
+//
+//   * Ch11 — Clone Hero 1.1 and later: a flat 4 beats before the fill starts.
+//     This is Hydra's normal rule and the default everywhere.
+//   * Ch10 — Clone Hero 1.0, as Python Hydra 1.2 modelled it: roughly one
+//     fill-length of lead time before the fill, clamped to 250..10000 ms.
+//
+// Ch10 exists only so the CLI can answer "what could a 1.0 player have
+// reached?". It is never part of a stored record's identity (docs/adr/0010),
+// so a legacy run must be written to its own database file.
+enum class FillDeadlineRule { Ch11, Ch10 };
+
+// The engine_mode string hydra_batch stamps into a database's meta table so
+// hydra_fillcompare can tell which rule produced it later (docs/adr/0010).
+inline const char* engine_mode_stamp(FillDeadlineRule rule) {
+    return rule == FillDeadlineRule::Ch10 ? "ch10" : "ch11";
+}
+
+// The latest a player's SP may become ready and still have this fill spawn.
+// `fill_end_tick` is the fill marker's end; `fill_length_ticks` its length.
+double activation_fill_deadline_ms(const SongTiming& timing,
+                                   int64_t fill_end_tick,
+                                   int64_t fill_length_ticks,
+                                   FillDeadlineRule rule);
+
 struct ScoreGraphEdge;
 
 struct ScoreGraphNode {
@@ -67,12 +95,15 @@ struct ScoreGraphEdge {
 class ScoreGraph {
 public:
     // sp_meter_cap: bars the meter holds, or nullopt for no ceiling.
-    ScoreGraph(const Song& song, std::optional<int> sp_meter_cap);
+    // rule: which game version decides when a fill spawns (default Ch11).
+    ScoreGraph(const Song& song, std::optional<int> sp_meter_cap,
+               FillDeadlineRule rule = FillDeadlineRule::Ch11);
 
     ScoreGraphNode* start() const { return start_; }
     ScoreGraphNode* sp_start() const { return sp_start_; }
     int length() const { return length_; }
     std::optional<int> sp_meter_cap() const { return sp_meter_cap_; }
+    FillDeadlineRule fill_rule() const { return rule_; }
     const SongTiming& timing() const { return song_.timing(); }
 
     // The notes left in the squeeze window (kSqueezeWindowMs) before the song's
@@ -123,6 +154,7 @@ private:
 
     const Song& song_;
     std::optional<int> sp_meter_cap_;
+    FillDeadlineRule rule_ = FillDeadlineRule::Ch11;
 
     // Stable-address storage for the graph. deque never invalidates element
     // references on push_back.

@@ -335,6 +335,15 @@ public:
     // {songs, results} row counts.
     std::pair<int64_t, int64_t> counts();
 
+    // Which fill-spawn rule wrote this file: "ch11" (Clone Hero 1.1, the
+    // normal one) or "ch10" (the legacy CLI mode, search/graph.h
+    // FillDeadlineRule). Unset on a db nothing has stamped yet, which reads as
+    // "assume the normal rule". This is only a label on the file — the rule is
+    // NOT part of a record's identity, so the two rules must never share a
+    // database (docs/adr/0010). hydra_batch stamps every run.
+    std::optional<std::string> engine_mode();
+    void set_engine_mode(const std::string& mode);
+
     // ---- chart library (scan results) ----------------------------------
 
     // Replaces the whole library with `items`, matching hydra_app.py's

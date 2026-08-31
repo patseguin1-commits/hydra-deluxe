@@ -44,8 +44,38 @@ Timecode ScoreGraph::plusmeasure(const Timecode& tc, int64_t add_measures) {
     return r;
 }
 
-ScoreGraph::ScoreGraph(const Song& song, std::optional<int> sp_meter_cap)
-    : song_(song), sp_meter_cap_(sp_meter_cap) {
+double activation_fill_deadline_ms(const SongTiming& timing,
+                                   int64_t fill_end_tick,
+                                   int64_t fill_length_ticks,
+                                   FillDeadlineRule rule) {
+    if (rule == FillDeadlineRule::Ch11) {
+        // E threshold is 4 beats before the fill marker.
+        int64_t tick_E =
+            fill_end_tick - fill_length_ticks - 4 * timing.tick_resolution();
+        return timing.timecode(tick_E).ms();
+    }
+
+    // Clone Hero 1.0, ported operation-for-operation from Python Hydra 1.2.
+    // The lead time is the fill's own length plus a sixteenth-of-a-beat pad,
+    // measured in real time back from the fill's end, then clamped.
+    //
+    // This uses ms_at_tick_f, which core/timing.h marks as outside the
+    // bit-for-bit scoring surface; the legacy mode is deliberately off that
+    // surface, and never writes the database the GUI reads (docs/adr/0010).
+    const double res = static_cast<double>(timing.tick_resolution());
+    const double fend = timing.ms_index().at(fill_end_tick);
+    const double fst = timing.ms_index().at(fill_end_tick - fill_length_ticks);
+    const double pad = timing.ms_index().ms_at_tick_f(
+        static_cast<double>(fill_end_tick) -
+        (static_cast<double>(fill_length_ticks) + res / 16.0));
+    const double fill_len_ms = fend - fst;
+    const double preroll = std::max(250.0, std::min(fend - pad, 10000.0));
+    return fend - fill_len_ms - preroll;
+}
+
+ScoreGraph::ScoreGraph(const Song& song, std::optional<int> sp_meter_cap,
+                       FillDeadlineRule rule)
+    : song_(song), sp_meter_cap_(sp_meter_cap), rule_(rule) {
     start_ = new_node(song_.start_time(), false);
     base_track_head_ = start_;
     sp_track_head_ = new_node(song_.start_time(), true);
@@ -310,11 +340,9 @@ ScoreGraphEdge* ScoreGraph::add_act_edge(const Chord& frontend_chord,
 
     act_edge->frontend = FrontendSqueeze{frontend_chord, frontend_points};
 
-    // E threshold is 4 beats before the fill marker.
-    int64_t tick_E = act_edge->dest->timecode.ticks() - fill_length_ticks -
-                     4 * song_.tick_resolution();
-    Timecode tc_E = song_.timing().timecode(tick_E);
-    act_edge->activation_fill_deadline_ms = tc_E.ms();
+    act_edge->activation_fill_deadline_ms = activation_fill_deadline_ms(
+        song_.timing(), act_edge->dest->timecode.ticks(), fill_length_ticks,
+        rule_);
 
     for (int sp = 2; sp <= max_sp_bars(); ++sp) {
         act_edge->activation_initial_end_times[sp] =

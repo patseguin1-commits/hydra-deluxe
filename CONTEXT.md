@@ -85,6 +85,17 @@ more valuable notes score on the higher multiplier.
 An activation timing (the `E` notation) where the fill must be summoned by
 hitting early; its window is fixed, not the hit-window setting.
 
+**Fill spawn deadline (CH 1.1)**:
+The latest your SP meter can fill up and still have a fill appear. Clone Hero
+1.1 puts it a flat 4 beats before the fill starts. This is what Hydra scores
+by, always.
+
+**Fill spawn deadline (CH 1.0)**:
+The older rule: roughly one fill-length of lead time before the fill, clamped
+to 250..10000 ms. Short fills got stricter in 1.1 and long fills got looser.
+CLI only (`hydra_batch --legacy-fills`), needs its own database, and
+`hydra_fillcompare` diffs the two. See docs/adr/0010.
+
 **Hit window**:
 The per-side ms window Clone Hero registers a hit in. A setting; feeds the
 squeeze budgets, ratings, and report tiers, never the search.

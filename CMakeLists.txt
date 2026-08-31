@@ -129,6 +129,7 @@ add_library(hydra_core STATIC
     src/core/model.cpp
     src/core/scoring.cpp
     src/core/squeeze_rating.cpp
+    src/core/strutil.cpp
     src/core/winstr.cpp
     src/parse/midi.cpp
     src/parse/song.cpp
@@ -146,6 +147,7 @@ add_library(hydra_core STATIC
     src/app/path_view.cpp
     src/app/preview_view.cpp
     src/app/preview_source.cpp
+    src/app/fill_report.cpp
     src/app/report.cpp
     src/app/report_files.cpp
 )
@@ -286,7 +288,8 @@ target_compile_definitions(Hydra PRIVATE
 # Both read the same settings INI and database the GUI uses.
 add_executable(hydra_batch src/cli/batch.cpp)
 add_executable(hydra_report src/cli/report.cpp)
-foreach(tool IN ITEMS hydra_batch hydra_report)
+add_executable(hydra_fillcompare src/cli/fillcompare.cpp)
+foreach(tool IN ITEMS hydra_batch hydra_report hydra_fillcompare)
     target_link_libraries(${tool} PRIVATE hydra_core hydra_warnings)
 endforeach()
 
@@ -322,6 +325,8 @@ add_executable(hydra_tests
     tests/test_report.cpp
     tests/test_config.cpp
     tests/test_dm_report.cpp
+    tests/test_fill_deadline.cpp
+    tests/test_fill_report.cpp
     tests/test_app_state.cpp
 )
 # hydra_dm: test_dm_report exercises the leaderboards join and JSON parsers.
@@ -373,7 +378,7 @@ add_test(NAME hydra_uitest COMMAND hydra_uitest --all)
 # the GUI, both CLI tools, resource/, LICENSE and README, all in one folder.
 # User data (hydra*.db/.ini) is created next to the exe at runtime and never
 # lives in the package, so a rebuilt zip can't clobber anyone's records.
-install(TARGETS Hydra hydra_batch hydra_report RUNTIME DESTINATION .)
+install(TARGETS Hydra hydra_batch hydra_report hydra_fillcompare RUNTIME DESTINATION .)
 install(DIRECTORY resource/ DESTINATION resource)
 install(DIRECTORY assets/ DESTINATION assets)
 install(FILES LICENSE README.md DESTINATION .)

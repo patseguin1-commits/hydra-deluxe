@@ -476,6 +476,16 @@ void RecordStore::meta_set(const std::string& key, const std::string& value) {
         throw std::runtime_error(std::string("meta_set failed: ") + sqlite3_errmsg(db_));
 }
 
+std::optional<std::string> RecordStore::engine_mode() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    return meta_get("engine_mode");
+}
+
+void RecordStore::set_engine_mode(const std::string& mode) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    meta_set("engine_mode", mode);
+}
+
 void RecordStore::migrate_records_to_cap_key() {
     // A pre-1.6 table is keyed (hyhash, chartmode) with no sp_cap column.
     // SQLite can't change a primary key in place, so: add the column, fill it
