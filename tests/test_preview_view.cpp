@@ -5,6 +5,7 @@
 
 #include "doctest.h"
 
+#include <algorithm>
 #include <map>
 #include <optional>
 #include <string>
@@ -95,6 +96,59 @@ Activation act_at(const Song& song, int64_t tick, int skips) {
     a.timecode = song.timecode(tick);
     a.skips = skips;
     return a;
+}
+
+// ---- SP meter fixtures --------------------------------------------------
+//
+// Same 4/4, 120 BPM grid as make_hand_song: a note every 480 ticks out to
+// `last_tick`, with an SP phrase ending on each tick in `phrase_ends`. One
+// measure is 1920 ticks = 2000 ms, so one SP bar (two measures) burns 4000 ms
+// at this tempo. `extra_bpm` adds tempo changes before the timing is built.
+Song make_sp_song(const std::vector<int64_t>& phrase_ends, int64_t last_tick,
+                  const std::map<int64_t, double>& extra_bpm = {}) {
+    Song song(480);
+    song.bpm_changes[0] = 120.0;
+    for (const auto& kv : extra_bpm) song.bpm_changes[kv.first] = kv.second;
+    song.build_timing();
+
+    for (int64_t t = 0; t <= last_tick; t += 480) {
+        Chord c;
+        c.add_note(NoteColor::Red);
+        SongTimestamp ts;
+        ts.timecode = song.timecode(t);
+        ts.chord = std::move(c);
+        if (std::find(phrase_ends.begin(), phrase_ends.end(), t) != phrase_ends.end()) {
+            ts.flag_sp = true;
+            ts.sp_phrase_start = t >= 480 ? t - 480 : 0;
+        }
+        song.sequence.push_back(std::move(ts));
+    }
+    return song;
+}
+
+// An activation the engine could have recorded: a timecode and the bars it
+// spends. With no backend rows, activation_deact_tick falls back to the plain
+// act + 2*sp_meter measures, which is what these fixtures count on.
+Activation sp_act_at(const Song& song, int64_t tick, int sp_meter) {
+    Activation a;
+    a.timecode = song.timecode(tick);
+    a.sp_meter = sp_meter;
+    a.skips = 0;
+    return a;
+}
+
+// The curve must tile the timeline with no gap and no overlap, and never leave
+// the 0..cap band (every fixture here spends no more than the cap).
+void check_curve_well_formed(const SpMeterCurve& curve) {
+    for (size_t i = 1; i < curve.segments.size(); ++i)
+        CHECK(curve.segments[i].start_ms == doctest::Approx(curve.segments[i - 1].end_ms));
+    for (const SpMeterSegment& s : curve.segments) {
+        CHECK(s.end_ms >= s.start_ms);
+        CHECK(s.start_bars >= 0.0);
+        CHECK(s.end_bars >= 0.0);
+        CHECK(s.start_bars <= static_cast<double>(curve.cap) + 1e-9);
+        CHECK(s.end_bars <= static_cast<double>(curve.cap) + 1e-9);
+    }
 }
 
 // One analyzed corpus chart (the first that yields paths), shared across cases.
@@ -362,6 +416,257 @@ TEST_CASE("build_preview_scene: an analyzed chart's overlay matches its path") {
     PreviewScene bare = build_preview_scene(r.song, nullptr);
     CHECK(bare.notes.size() == scene.notes.size());
     CHECK(bare.activations.empty());
+}
+
+TEST_CASE("sp meter curve: each phrase's last note banks one bar") {
+    // Phrases ending at ticks 960 and 2880, i.e. 1000 ms and 3000 ms.
+    Song song = make_sp_song({960, 2880}, /*last_tick=*/5760);
+    PreviewScene scene = build_preview_scene(song, nullptr);
+    const SpMeterCurve& c = scene.sp_meter;
+
+    REQUIRE_FALSE(c.segments.empty());
+    check_curve_well_formed(c);
+    CHECK(c.cap == 4);
+
+    CHECK(sp_meter_bars_at(c, 0.0) == doctest::Approx(0.0));
+    CHECK(sp_meter_bars_at(c, 999.0) == doctest::Approx(0.0));
+    // The step lands ON the phrase's last note: the later segment owns the
+    // shared boundary, so the bar is already banked at exactly 1000 ms.
+    CHECK(sp_meter_bars_at(c, 1000.0) == doctest::Approx(1.0));
+    CHECK(sp_meter_bars_at(c, 1000.001) == doctest::Approx(1.0));
+    CHECK(sp_meter_bars_at(c, 2999.0) == doctest::Approx(1.0));
+    CHECK(sp_meter_bars_at(c, 3000.0) == doctest::Approx(2.0));
+    CHECK(sp_meter_bars_at(c, 6000.0) == doctest::Approx(2.0));
+}
+
+TEST_CASE("sp meter curve: an activation snaps to the recorded bars, then drains") {
+    // One phrase banked (1000 ms), but the record says the activation at tick
+    // 3840 (4000 ms) spent two bars. The record wins.
+    Song song = make_sp_song({960}, /*last_tick=*/13440);
+    Path path;
+    path.activations = {sp_act_at(song, 3840, /*sp_meter=*/2)};
+
+    PreviewScene scene = build_preview_scene(song, &path);
+    const SpMeterCurve& c = scene.sp_meter;
+    check_curve_well_formed(c);
+
+    // Two bars is four measures: 8000 ms at 120 BPM 4/4, ending at tick 11520.
+    REQUIRE(scene.activations.size() == 1);
+    CHECK(scene.activations[0].has_sp_end);
+    CHECK(scene.activations[0].sp_end_tick == 11520);
+    CHECK(scene.activations[0].sp_end_ms == doctest::Approx(12000.0));
+
+    CHECK(sp_meter_bars_at(c, 3999.0) == doctest::Approx(1.0));  // the phrase count
+    CHECK(sp_meter_bars_at(c, 4000.0) == doctest::Approx(2.0));  // the record's bars
+    // One bar's worth of drain is two measures = 4000 ms.
+    CHECK(sp_meter_bars_at(c, 8000.0) == doctest::Approx(1.0));
+    CHECK(sp_meter_bars_at(c, 10000.0) == doctest::Approx(0.5));
+    CHECK(sp_meter_bars_at(c, 12000.0) == doctest::Approx(0.0));
+    CHECK(sp_meter_bars_at(c, 14000.0) == doctest::Approx(0.0));
+}
+
+TEST_CASE("sp meter curve: a phrase collected mid-activation jumps the meter a bar") {
+    // Phrases at 1000 ms and 6000 ms; the second lands inside the activation's
+    // window. The record's SqIn is what says it was collected during SP: the
+    // deact node moves out by two measures, so the window runs six measures
+    // instead of four and the meter steps up a bar at the phrase.
+    Song song = make_sp_song({960, 5760}, /*last_tick=*/17280);
+    Path path;
+    Activation act = sp_act_at(song, 3840, /*sp_meter=*/2);
+    act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, 0.0});
+    path.activations = {act};
+
+    PreviewScene scene = build_preview_scene(song, &path);
+    const SpMeterCurve& c = scene.sp_meter;
+    check_curve_well_formed(c);
+
+    REQUIRE(scene.activations.size() == 1);
+    std::optional<int64_t> deact =
+        activation_deact_tick(path.activations[0], song.timing());
+    REQUIRE(deact.has_value());
+    CHECK(*deact == 15360);  // 3840 + 6 measures
+    CHECK(scene.activations[0].sp_end_ms == doctest::Approx(16000.0));
+
+    // One bar per two measures = 0.25 bars per second here, before the jump...
+    CHECK(sp_meter_bars_at(c, 4000.0) == doctest::Approx(2.0));
+    CHECK(sp_meter_bars_at(c, 5000.0) == doctest::Approx(1.75));
+    // Exactly one bar more at the phrase's last note than just before it.
+    CHECK(sp_meter_bars_at(c, 6000.0 - 1e-6) == doctest::Approx(1.5));
+    CHECK(sp_meter_bars_at(c, 6000.0) == doctest::Approx(2.5));
+    // ...and the same rate after it, all the way to the extended deact node.
+    CHECK(sp_meter_bars_at(c, 8000.0) == doctest::Approx(2.0));
+    CHECK(sp_meter_bars_at(c, 12000.0) == doctest::Approx(1.0));
+    CHECK(sp_meter_bars_at(c, 16000.0 - 1e-6) == doctest::Approx(0.0));
+    CHECK(sp_meter_bars_at(c, 16000.0) == doctest::Approx(0.0));
+}
+
+TEST_CASE("sp meter curve: a squeezed-out phrase does not bank mid-drain") {
+    // The phrase at tick 9600 (10000 ms) has its last note inside the
+    // activation's window, but the deact node sits at the plain act + 4
+    // measures: the engine records no extension, so nothing was collected
+    // during SP. That phrase is the squeezed-out one -- hit late, just after
+    // SP ends, and banked for the next activation. The drain must stay on its
+    // plain line across it, and the bar must arrive when the window closes.
+    Song song = make_sp_song({960, 9600}, /*last_tick=*/15360);
+    Path path;
+    path.activations = {sp_act_at(song, 3840, /*sp_meter=*/2)};
+
+    PreviewScene scene = build_preview_scene(song, &path);
+    const SpMeterCurve& c = scene.sp_meter;
+    check_curve_well_formed(c);
+
+    REQUIRE(scene.activations.size() == 1);
+    CHECK(scene.activations[0].sp_end_tick == 11520);
+    CHECK(scene.activations[0].sp_end_ms == doctest::Approx(12000.0));
+
+    CHECK(sp_meter_bars_at(c, 4000.0) == doctest::Approx(2.0));
+    // Straight through the phrase at one bar per two measures: no step.
+    CHECK(sp_meter_bars_at(c, 10000.0 - 1e-6) == doctest::Approx(0.5));
+    CHECK(sp_meter_bars_at(c, 10000.0) == doctest::Approx(0.5));
+    CHECK(sp_meter_bars_at(c, 11000.0) == doctest::Approx(0.25));
+    // Empty at the deact node, then the squeezed-out phrase's bar lands.
+    CHECK(sp_meter_bars_at(c, 12000.0 - 1e-6) == doctest::Approx(0.0));
+    CHECK(sp_meter_bars_at(c, 12000.0) == doctest::Approx(1.0));
+    CHECK(sp_meter_bars_at(c, 13000.0) == doctest::Approx(1.0));
+}
+
+TEST_CASE("sp meter curve: a phrase ending on the activation note is not counted twice") {
+    // The SP phrase's last note sits exactly on the activation tick. That bar
+    // is already inside the engine's recorded sp_meter, so it must not also
+    // be counted as a mid-SP collection -- the snap should read 2.0, not 3.0.
+    Song song = make_sp_song({3840}, /*last_tick=*/13440);
+    Path path;
+    path.activations = {sp_act_at(song, 3840, /*sp_meter=*/2)};
+
+    PreviewScene scene = build_preview_scene(song, &path);
+    const SpMeterCurve& c = scene.sp_meter;
+    check_curve_well_formed(c);
+
+    // Two bars is four measures: 8000 ms at 120 BPM 4/4, ending at tick 11520.
+    REQUIRE(scene.activations.size() == 1);
+    CHECK(scene.activations[0].has_sp_end);
+    CHECK(scene.activations[0].sp_end_tick == 11520);
+    CHECK(scene.activations[0].sp_end_ms == doctest::Approx(12000.0));
+
+    CHECK(sp_meter_bars_at(c, 4000.0) == doctest::Approx(2.0));   // the snap, no extra bar
+    CHECK(sp_meter_bars_at(c, 8000.0) == doctest::Approx(1.0));   // one bar's drain later
+    CHECK(sp_meter_bars_at(c, 12000.0) == doctest::Approx(0.0));  // the deact node
+    CHECK(sp_meter_bars_at(c, 14000.0) == doctest::Approx(0.0));  // still 0: no double-step
+}
+
+TEST_CASE("sp meter curve: the drain is linear in measures across a tempo change") {
+    // 120 BPM until tick 5760 (6000 ms), then 60 BPM. A measure costs 2000 ms
+    // before the change and 4000 ms after, so the ms slope halves there.
+    Song song = make_sp_song({960}, /*last_tick=*/13440, {{5760, 60.0}});
+    Path path;
+    path.activations = {sp_act_at(song, 3840, /*sp_meter=*/2)};
+
+    PreviewScene scene = build_preview_scene(song, &path);
+    const SpMeterCurve& c = scene.sp_meter;
+    check_curve_well_formed(c);
+
+    REQUIRE(scene.tempos.size() == 2);
+    CHECK(scene.tempos[1].tick == 5760);
+    CHECK(scene.tempos[1].ms == doctest::Approx(6000.0));
+    // Four measures of SP still, but they now stretch to tick 11520 = 18000 ms.
+    CHECK(scene.activations[0].sp_end_tick == 11520);
+    CHECK(scene.activations[0].sp_end_ms == doctest::Approx(18000.0));
+
+    CHECK(sp_meter_bars_at(c, 4000.0) == doctest::Approx(2.0));
+    CHECK(sp_meter_bars_at(c, 5000.0) == doctest::Approx(1.75));  // 0.25 bars per second
+    CHECK(sp_meter_bars_at(c, 6000.0) == doctest::Approx(1.5));   // the tempo change
+    CHECK(sp_meter_bars_at(c, 7000.0) == doctest::Approx(1.375)); // 0.125 bars per second
+    CHECK(sp_meter_bars_at(c, 12000.0) == doctest::Approx(0.75));
+    CHECK(sp_meter_bars_at(c, 18000.0) == doctest::Approx(0.0));
+}
+
+TEST_CASE("sp meter curve: an activation with no recorded bars empties the meter at once") {
+    // A stale record: the activation has a timecode but no sp_meter, so there
+    // is no deact node and no drain to draw. The bank still goes.
+    Song song = make_sp_song({960, 1920, 5760}, /*last_tick=*/9600);
+    Path path;
+    path.activations = {act_at(song, 3840, /*skips=*/0)};
+
+    PreviewScene scene = build_preview_scene(song, &path);
+    const SpMeterCurve& c = scene.sp_meter;
+    check_curve_well_formed(c);
+
+    REQUIRE(scene.activations.size() == 1);
+    CHECK_FALSE(scene.activations[0].has_sp_end);
+
+    CHECK(sp_meter_bars_at(c, 3999.0) == doctest::Approx(2.0));
+    CHECK(sp_meter_bars_at(c, 4000.0) == doctest::Approx(0.0));
+    CHECK(sp_meter_bars_at(c, 5999.0) == doctest::Approx(0.0));
+    CHECK(sp_meter_bars_at(c, 6000.0) == doctest::Approx(1.0));  // banking resumes
+}
+
+TEST_CASE("sp meter curve: the bank stops at the cap") {
+    // Six phrases, at 1000 ms through 6000 ms.
+    Song song = make_sp_song({960, 1920, 2880, 3840, 4800, 5760}, /*last_tick=*/7680);
+
+    PreviewScene scene = build_preview_scene(song, nullptr);
+    CHECK(scene.sp_meter.cap == 4);
+    CHECK(sp_meter_bars_at(scene.sp_meter, 3000.0) == doctest::Approx(3.0));
+    CHECK(sp_meter_bars_at(scene.sp_meter, 4000.0) == doctest::Approx(4.0));
+    CHECK(sp_meter_bars_at(scene.sp_meter, 5000.0) == doctest::Approx(4.0));
+    CHECK(sp_meter_bars_at(scene.sp_meter, 8000.0) == doctest::Approx(4.0));
+
+    // The same chart on a record analyzed at a cap of 2.
+    PreviewScene capped = build_preview_scene(song, nullptr, /*sp_cap=*/2);
+    CHECK(capped.sp_meter.cap == 2);
+    check_curve_well_formed(capped.sp_meter);
+    CHECK(sp_meter_bars_at(capped.sp_meter, 1000.0) == doctest::Approx(1.0));
+    CHECK(sp_meter_bars_at(capped.sp_meter, 2000.0) == doctest::Approx(2.0));
+    CHECK(sp_meter_bars_at(capped.sp_meter, 6000.0) == doctest::Approx(2.0));
+    CHECK(sp_meter_bars_at(capped.sp_meter, 8000.0) == doctest::Approx(2.0));
+}
+
+TEST_CASE("sp meter curve: without a path the meter fills and never drains") {
+    Song song = make_sp_song({960, 1920, 2880, 3840, 4800}, /*last_tick=*/7680);
+    PreviewScene scene = build_preview_scene(song, nullptr);
+    REQUIRE(scene.activations.empty());
+    check_curve_well_formed(scene.sp_meter);
+
+    // Never decreasing anywhere: nothing spends the bank.
+    for (const SpMeterSegment& s : scene.sp_meter.segments) CHECK(s.end_bars >= s.start_bars);
+    double prev = 0.0;
+    for (double ms = 0.0; ms <= 9000.0; ms += 250.0) {
+        const double v = sp_meter_bars_at(scene.sp_meter, ms);
+        CHECK(v >= prev - 1e-9);
+        prev = v;
+    }
+    CHECK(sp_meter_bars_at(scene.sp_meter, 9000.0) == doctest::Approx(4.0));
+}
+
+TEST_CASE("sp meter curve: a chart with no SP and no path has no curve at all") {
+    Song song = make_fill_song();  // fills but no SP phrases
+    PreviewScene scene = build_preview_scene(song, nullptr);
+    CHECK(scene.sp_meter.segments.empty());
+    CHECK(sp_meter_bars_at(scene.sp_meter, 1000.0) == doctest::Approx(0.0));
+}
+
+TEST_CASE("sp_meter_bars_at: before the curve, after it, and on a shared boundary") {
+    CHECK(sp_meter_bars_at(SpMeterCurve{}, 123.0) == doctest::Approx(0.0));
+
+    SpMeterCurve c;
+    c.segments = {{100.0, 200.0, 0.0, 0.0}, {200.0, 400.0, 1.0, 0.0}};
+
+    CHECK(sp_meter_bars_at(c, 50.0) == doctest::Approx(0.0));   // before the first
+    CHECK(sp_meter_bars_at(c, 100.0) == doctest::Approx(0.0));
+    CHECK(sp_meter_bars_at(c, 150.0) == doctest::Approx(0.0));
+    // 200 ms is the boundary: the later segment's 1.0, not the earlier's 0.0.
+    CHECK(sp_meter_bars_at(c, 200.0) == doctest::Approx(1.0));
+    CHECK(sp_meter_bars_at(c, 300.0) == doctest::Approx(0.5));
+    CHECK(sp_meter_bars_at(c, 400.0) == doctest::Approx(0.0));
+    CHECK(sp_meter_bars_at(c, 99999.0) == doctest::Approx(0.0));  // holds the last value
+
+    // A zero-width final segment is how a curve carries its end value when the
+    // last step lands exactly at the end of the chart.
+    SpMeterCurve z;
+    z.segments = {{0.0, 100.0, 0.0, 1.0}, {100.0, 100.0, 3.0, 3.0}};
+    CHECK(sp_meter_bars_at(z, 50.0) == doctest::Approx(0.5));
+    CHECK(sp_meter_bars_at(z, 100.0) == doctest::Approx(3.0));
+    CHECK(sp_meter_bars_at(z, 500.0) == doctest::Approx(3.0));
 }
 
 TEST_CASE("path_overlay_key: no overlay, the same path, and a changed path") {

@@ -166,6 +166,15 @@ not have shown it. Offered fills come from the activation's skip count, not a
 re-derived SP meter; fills after the last activation are hidden because the
 engine records nothing about them.
 
+**SP meter gauge**:
+The vertical gauge on the note highway's right edge showing banked Star Power
+at the playhead: up one bar at each collected phrase, draining through each
+activation to hit empty exactly at the deact node. Anchored to the record's
+per-activation bank and deact node, never re-derived — which phrases SP
+collects is counted off the deact node's own extension, so a squeezed-out
+phrase inside the window banks when SP ends rather than during the drain.
+Without a path it fills and pins at the cap, since nothing spends it.
+
 **Stem**:
 One of the several audio files a chart may ship instead of a single mix (e.g.
 `drums`, `guitar`, `song`). The Preview decodes and mixes all of a chart's

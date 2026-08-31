@@ -3,6 +3,8 @@
 
 #include "app/preview_view.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <limits>
 #include <optional>
@@ -47,9 +49,156 @@ PreviewSpan span_from_ticks(const Song& song, int64_t start, int64_t end) {
     return s;
 }
 
+// One point where the SP meter's slope or value can change during an
+// activation: a tempo change, a meter change, a phrase collected mid-SP, or an
+// endpoint of the active window.
+struct DrainSplit {
+    int64_t tick = 0;
+    double ms = 0.0;
+    bool collection = false;  // a phrase lands here: the bank gets a bar back
+};
+
+void push_segment(SpMeterCurve& curve, double start_ms, double end_ms,
+                  double start_bars, double end_bars) {
+    if (end_ms <= start_ms) return;  // a zero-width stretch draws nothing
+    curve.segments.push_back({start_ms, end_ms, start_bars, end_bars});
+}
+
+// The SP meter over the whole chart (see SpMeterCurve). Walks time forward with
+// a bank in bars: flat outside SP, stepping up one bar at each phrase's last
+// note, and sloping down through each activation's active window.
+SpMeterCurve build_sp_meter_curve(const PreviewScene& scene, const SongTiming& timing,
+                                  int sp_cap) {
+    SpMeterCurve curve;
+    curve.cap = sp_cap < 1 ? 1 : sp_cap;
+    if (scene.sp_phrases.empty() && scene.activations.empty()) return curve;
+
+    const double cap = static_cast<double>(curve.cap);
+    // A phrase is banked on its last note. Every phrase is assumed hit: the
+    // path itself is only scored under that same full-combo premise.
+    const std::vector<PreviewSpan>& phrases = scene.sp_phrases;
+    size_t next_phrase = 0;
+    double bank = 0.0;
+    double cursor_ms = 0.0;
+
+    // Flat run up to `until_ms`, stepping the bank at every phrase that lands
+    // strictly before it.
+    auto run_flat_to = [&](double until_ms) {
+        while (next_phrase < phrases.size() && phrases[next_phrase].end_ms < until_ms) {
+            push_segment(curve, cursor_ms, phrases[next_phrase].end_ms, bank, bank);
+            cursor_ms = phrases[next_phrase].end_ms;
+            bank = std::min(bank + 1.0, cap);
+            ++next_phrase;
+        }
+        push_segment(curve, cursor_ms, until_ms, bank, bank);
+        if (until_ms > cursor_ms) cursor_ms = until_ms;
+    };
+
+    for (const PreviewActivation& act : scene.activations) {
+        run_flat_to(act.ms);
+
+        // Snap to what the engine recorded rather than to the phrases counted
+        // above: if a squeezed boundary phrase ever makes the two disagree, the
+        // record is the truth (see "derive display from engine truth").
+        bank = static_cast<double>(act.sp_meter);
+
+        // A stale record (no sp_meter, or no deact node) cannot say how long
+        // the SP lasted, so there is no drain to draw — the bank just goes.
+        if (act.sp_meter <= 0 || !act.has_sp_end) {
+            bank = 0.0;
+            continue;
+        }
+
+        // The phrases whose last note falls inside the window. A phrase ending
+        // on the activation note itself is already inside the engine's recorded
+        // bank (the sp_meter snap above); it is neither collected here nor
+        // banked later. Ticks compare exactly where ms would not.
+        std::vector<const PreviewSpan*> window;
+        for (size_t i = next_phrase; i < phrases.size(); ++i) {
+            if (phrases[i].end_ms >= act.sp_end_ms) break;
+            if (phrases[i].end_tick > act.tick) window.push_back(&phrases[i]);
+            ++next_phrase;  // consumed here; the flat walk must not step it again
+        }
+
+        // How many of those SP actually collects: the deact node already says.
+        // The engine anchors it 2 measures past the activation per banked bar,
+        // plus 2 more for every phrase collected mid-SP, so the surplus
+        // measures are the count. A squeezed-out phrase lies inside the window
+        // on the highway but is hit late, just after SP ends, so it buys no
+        // extension and takes no step here — it banks the moment the window
+        // closes, for the next activation.
+        const double act_measures =
+            timing.measures_at_tick_f(static_cast<double>(act.tick));
+        const double end_measures =
+            timing.measures_at_tick_f(static_cast<double>(act.sp_end_tick));
+        int64_t collected = std::llround((end_measures - act_measures) / 2.0 -
+                                         static_cast<double>(act.sp_meter));
+        collected = std::clamp<int64_t>(collected, 0,
+                                        static_cast<int64_t>(window.size()));
+
+        std::vector<DrainSplit> splits;
+        for (int64_t i = 0; i < collected; ++i)
+            splits.push_back({window[i]->end_tick, window[i]->end_ms, true});
+        for (const PreviewTempo& t : scene.tempos)
+            if (t.tick > act.tick && t.tick < act.sp_end_tick)
+                splits.push_back({t.tick, t.ms, false});
+        // Meters carry only ticks; their ms comes from the same index every
+        // other time in the scene does.
+        for (const PreviewMeter& m : scene.meters)
+            if (m.tick > act.tick && m.tick < act.sp_end_tick)
+                splits.push_back({m.tick, timing.ms_index().at(m.tick), false});
+        std::stable_sort(splits.begin(), splits.end(),
+                         [](const DrainSplit& a, const DrainSplit& b) { return a.tick < b.tick; });
+
+        // SP burns two measures per bar, so track the drain in measures and
+        // halve it only when writing a segment's endpoints.
+        double remaining = 2.0 * static_cast<double>(act.sp_meter);
+        int64_t prev_tick = act.tick;
+        double prev_ms = act.ms;
+        double prev_measures = timing.measures_at_tick_f(static_cast<double>(prev_tick));
+        for (const DrainSplit& s : splits) {
+            const double measures = timing.measures_at_tick_f(static_cast<double>(s.tick));
+            const double elapsed = measures - prev_measures;
+            const double left = std::max(0.0, remaining - elapsed);
+            push_segment(curve, prev_ms, s.ms, remaining / 2.0, left / 2.0);
+            remaining = left;
+            if (s.collection) remaining = std::min(remaining + 2.0, 2.0 * cap);
+            prev_tick = s.tick;
+            prev_ms = s.ms;
+            prev_measures = measures;
+        }
+        // The deact node is engine truth: the meter is empty exactly there, so
+        // the last stretch is forced to zero and absorbs any residue left in
+        // `remaining`.
+        push_segment(curve, prev_ms, act.sp_end_ms, remaining / 2.0, 0.0);
+        // The window phrases SP did not collect are the squeezed-out ones: the
+        // player hits them just past the deact node, so they are banked as the
+        // window closes. The next segment starts at that value, which is what
+        // makes it read as a step at the boundary.
+        bank = std::min(static_cast<double>(static_cast<int64_t>(window.size()) -
+                                            collected),
+                        cap);
+        cursor_ms = std::max(cursor_ms, act.sp_end_ms);
+    }
+
+    // Phrases after the last activation still bank, and the meter holds its
+    // final value to the end of the chart.
+    while (next_phrase < phrases.size()) {
+        push_segment(curve, cursor_ms, phrases[next_phrase].end_ms, bank, bank);
+        cursor_ms = std::max(cursor_ms, phrases[next_phrase].end_ms);
+        bank = std::min(bank + 1.0, cap);
+        ++next_phrase;
+    }
+    // Always emitted, even at zero width: it is what sp_meter_bars_at reads
+    // back as the value after the curve ends.
+    const double end_ms = std::max(cursor_ms, scene.song_length_ms);
+    curve.segments.push_back({cursor_ms, end_ms, bank, bank});
+    return curve;
+}
+
 }  // namespace
 
-PreviewScene build_preview_scene(const Song& song, const Path* path) {
+PreviewScene build_preview_scene(const Song& song, const Path* path, int sp_cap) {
     PreviewScene scene;
     if (song.is_empty()) return scene;
 
@@ -110,6 +259,17 @@ PreviewScene build_preview_scene(const Song& song, const Path* path) {
         t.bpm = kv.second;
         scene.tempos.push_back(t);
     }
+    {
+        const MeasureIndex& mi = timing.measure_index();
+        for (int i = 0; i < mi.count(); ++i) {
+            if (mi.tpm_at(i) <= 0) continue;
+            scene.meters.push_back({mi.keys_at(i), mi.tpm_at(i), mi.starts_at(i)});
+        }
+    }
+    // A section marker can sit past the last note, where the ms index does not
+    // reach; the timing's own timecode extrapolates instead.
+    for (const SongSection& s : song.practice_sections)
+        scene.sections.push_back({s.tick, song.timecode(s.tick).ms(), s.name});
 
     // Overlay: the path's activations, ms resolved against the song's timing.
     if (path != nullptr) {
@@ -162,7 +322,26 @@ PreviewScene build_preview_scene(const Song& song, const Path* path) {
             prev_tick = a.tick;
         }
     }
+
+    // The SP meter, built last: it reads the phrases, activations, tempos and
+    // meters gathered above.
+    scene.sp_meter = build_sp_meter_curve(scene, timing, sp_cap);
     return scene;
+}
+
+double sp_meter_bars_at(const SpMeterCurve& curve, double ms) {
+    if (curve.segments.empty()) return 0.0;
+    if (ms < curve.segments.front().start_ms) return 0.0;
+    if (ms >= curve.segments.back().end_ms) return curve.segments.back().end_bars;
+    // The last segment that has started: on a boundary two segments share, that
+    // is the later one, which is what makes a step read as a step.
+    auto it = std::upper_bound(curve.segments.begin(), curve.segments.end(), ms,
+                               [](double v, const SpMeterSegment& s) { return v < s.start_ms; });
+    const SpMeterSegment& s = *(it - 1);
+    const double span = s.end_ms - s.start_ms;
+    if (span <= 0.0) return s.end_bars;
+    const double t = (ms - s.start_ms) / span;
+    return s.start_bars + (s.end_bars - s.start_bars) * t;
 }
 
 std::vector<PreviewBeat> build_beat_events(const SongTiming& timing, int64_t last_tick) {

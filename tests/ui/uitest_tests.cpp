@@ -277,7 +277,10 @@ void test_preview_path_overlay(ImGuiTestContext* ctx) {
     IM_CHECK(wait_until(ctx, [&] { return h.app->preview && h.app->preview->active(); }, 10));
     IM_CHECK(wait_until(ctx, [&] { return !h.app->preview->loading(); }, 120));
     IM_CHECK_STR_EQ(h.app->preview->error().c_str(), "");
-    IM_CHECK_STR_EQ(h.app->preview->overlay_path_key().c_str(), first_key.c_str());
+    // The overlay key carries the SP cap after the path's own key, so match the
+    // prefix and then compare whole keys against this first one.
+    const std::string first_overlay = h.app->preview->overlay_path_key();
+    IM_CHECK_EQ(first_overlay.rfind(first_key, 0), (size_t)0);
 
     // Park the playhead mid-song: a reload would rewind it to zero.
     IM_CHECK(h.app->preview->length_ms() > 0.0);
@@ -294,7 +297,8 @@ void test_preview_path_overlay(ImGuiTestContext* ctx) {
     ctx->Yield(2);
     IM_CHECK(!h.app->preview->loading());  // swapped in place, not reloaded
     IM_CHECK_FLOAT_NEAR_EQ(h.app->preview->position_ms(), held, 1.0);
-    IM_CHECK_STR_EQ(h.app->preview->overlay_path_key().c_str(), other_key.c_str());
+    IM_CHECK_EQ(h.app->preview->overlay_path_key().rfind(other_key, 0), (size_t)0);
+    IM_CHECK(h.app->preview->overlay_path_key() != first_overlay);
 
     // The same chart still previews the first path when it is selected again.
     ctx->ItemClick("##DetailsTabs/Paths");
@@ -303,7 +307,7 @@ void test_preview_path_overlay(ImGuiTestContext* ctx) {
     ctx->ItemClick("##DetailsTabs/Preview");
     ctx->Yield(2);
     IM_CHECK(!h.app->preview->loading());
-    IM_CHECK_STR_EQ(h.app->preview->overlay_path_key().c_str(), first_key.c_str());
+    IM_CHECK_STR_EQ(h.app->preview->overlay_path_key().c_str(), first_overlay.c_str());
 }
 
 // Click-and-hold on the time bar while playing. Onyx pauses playback for the

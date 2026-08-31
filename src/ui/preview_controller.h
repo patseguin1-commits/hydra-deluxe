@@ -50,24 +50,32 @@ public:
     // (Re)start the preview for `entry`. Called every frame the Preview tab is
     // shown. `path` (may be null) supplies the path overlay; it is copied, so
     // the caller's Path need not outlive the call. Already open for the same
-    // chart and the same path: a no-op. Same chart, different path: the overlay
-    // is swapped in place off the retained song — no re-parse, no audio
-    // re-decode, playback position untouched.
+    // chart and the same path and SP cap: a no-op. Same chart, different path
+    // or a changed `sp_cap`: the overlay is swapped in place off the retained
+    // song — no re-parse, no audio re-decode, playback position untouched.
     void open(const store::ChartLibraryEntry& entry, bool pro, bool bass2x,
-              Difficulty difficulty, const Path* path);
+              Difficulty difficulty, const Path* path, int sp_cap);
     // Stop audio, drop the scene/transport, and join the load thread. Keeps the
     // renderer for reuse. Safe to call when nothing is open.
     void close();
 
     bool active() const { return active_; }
     const std::string& open_key() const { return open_key_; }
-    // Which path the drawn overlay was built from (app::path_overlay_key);
-    // empty when there is no overlay or nothing has loaded yet.
+    // The drawn overlay's identity: the path it was built from
+    // (app::path_overlay_key) plus the SP cap its meter was scaled to, in the
+    // one string open() compares. Empty until something has loaded. Treat the
+    // exact spelling as opaque — compare two of these, don't parse one.
     const std::string& overlay_path_key() const { return scene_path_key_; }
 
     // Advance the async load; once finished, build the transport + audio device.
     // Call once per frame while the Preview tab is shown.
     void poll();
+
+    // Bars of SP banked at the transport's current time, and the meter's
+    // ceiling — what the panel's gauge draws.
+    double sp_meter_bars() const;
+    int sp_meter_cap() const;
+    bool sp_meter_has_curve() const;
 
     bool loading() const { return job_ != nullptr; }
     // Only meaningful while loading(); the load's current step and stem count.
@@ -126,15 +134,18 @@ private:
     hydra::app::PreviewScene scene_;
     bool scene_dirty_ = true;  // scene_ changed since the renderer last saw it
     bool pro_ = true;          // the pro-drums view setting the chart was opened with
+    int sp_cap_ = kCloneHeroSpCap;  // the SP meter's ceiling the scene was built with
 
     // The path overlay, kept swappable without touching the audio: the parsed
     // song the load produced, the overlay the panel last asked for, and the one
-    // scene_ was actually built with. The two keys differ only while a load is
-    // in flight and the Paths tab changed the selection under it; poll()
-    // closes the gap.
+    // scene_ was actually built with. Each key is the path's overlay key plus
+    // the SP cap (see overlay_key() in the .cpp), so a cap change rebuilds the
+    // scene the same way a path change does. The two keys differ only while a
+    // load is in flight and the Paths tab (or the cap) changed the selection
+    // under it; poll() closes the gap.
     std::optional<Song> song_;
     std::optional<Path> path_;
-    std::string path_key_;        // key of path_
+    std::string path_key_;        // key of path_ + sp_cap_
     std::string job_path_key_;    // key the in-flight job was started with
     std::string scene_path_key_;  // key scene_'s overlay was built from
 

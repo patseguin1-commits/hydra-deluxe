@@ -105,6 +105,46 @@ struct PreviewTempo {
     double bpm = 0.0;
 };
 
+// A practice section, for the time box's section readout.
+struct PreviewSection {
+    int64_t tick = 0;
+    double ms = 0.0;
+    std::string name;
+};
+
+// One meter section: where it begins, its ticks per measure, and the barline
+// its bars count from — the beat grid's own rules, flattened for the parts of
+// the Preview that draw or drain by measures.
+struct PreviewMeter {
+    int64_t tick = 0;
+    int64_t tpm = 0;
+    int64_t first_bar = 0;
+};
+
+// One straight stretch of the Star Power meter: the banked bars run linearly
+// in ms from start_bars at start_ms to end_bars at end_ms.
+//
+// SP drains at one bar per two measures — linear in MEASURES, not in ms. Inside
+// a single tempo section crossed with a single meter section, measures are
+// linear in ms, so cutting the curve at every tempo change, meter change,
+// phrase collection, activation and deact node makes it exactly piecewise
+// linear in ms. Nothing here is an approximation.
+struct SpMeterSegment {
+    double start_ms = 0.0;
+    double end_ms = 0.0;
+    double start_bars = 0.0;
+    double end_bars = 0.0;
+};
+
+// The meter over the whole chart: contiguous segments in time order, each
+// one's end_ms the next one's start_ms. The meter's jumps — a phrase
+// collecting, an activation spending the bank — are discontinuities BETWEEN
+// two adjacent segments, not slopes inside one.
+struct SpMeterCurve {
+    std::vector<SpMeterSegment> segments;
+    int cap = 4;  // the ceiling in bars: 4 in Clone Hero
+};
+
 // The whole chart as the Preview draws it. Notes are in tick order. Spans are
 // in start order and do not overlap within their own list.
 struct PreviewScene {
@@ -115,6 +155,16 @@ struct PreviewScene {
     std::vector<PreviewActivation> activations;  // overlay: the path's activations
     std::vector<PreviewBeat> beats;    // bar/beat/half-beat lines, tick order
     std::vector<PreviewTempo> tempos;  // tempo changes, tick order
+    std::vector<PreviewSection> sections;  // practice sections, tick order
+    std::vector<PreviewMeter> meters;      // meter sections, tick order
+    // Banked SP over time, for the meter gauge. Empty when the chart has
+    // neither SP phrases nor activations. Without a path there is nothing to
+    // drain it, so it fills and then pins at the cap — deliberate: that is the
+    // chart's own truth, and an unanalyzed chart has no activations to spend
+    // the bank on. Phrases collected mid-SP are counted from the deact node
+    // rather than from where they sit on the highway, so a squeezed-out phrase
+    // steps the gauge the moment SP ends, not during the drain.
+    SpMeterCurve sp_meter;
     int64_t tick_resolution = 0;       // ticks per quarter note
     double song_length_ms = 0.0;  // last note onset; the scrubber's right edge
     bool has_notes = false;
@@ -136,6 +186,12 @@ struct PreviewTimeBox {
 
 PreviewTimeBox build_time_box(const PreviewScene& scene, double now_ms);
 
+// Bars banked at `ms`: 0 before the curve begins, its final value after the
+// curve ends, and interpolated inside a segment. On a boundary shared by two
+// segments the LATER one wins — that is how a collection step or an
+// activation's snap reads as an instant jump rather than a ramp.
+double sp_meter_bars_at(const SpMeterCurve& curve, double ms);
+
 // Build the scene from a parsed song. `path` may be null (the chart is not
 // analyzed yet): then `activations` is empty, every candidate fill reads
 // Offered, and everything else is present, so the Preview works for any
@@ -143,7 +199,12 @@ PreviewTimeBox build_time_box(const PreviewScene& scene, double now_ms);
 // timecode) become the overlay, their ms resolved against the song's own
 // timing so they line up with the notes exactly, and each candidate fill is
 // classified Hidden / Offered / Taken from the activations' skip counts.
-PreviewScene build_preview_scene(const Song& song, const Path* path);
+//
+// `sp_cap` is the SP meter's ceiling in bars — the viewed record's own sp_cap,
+// which is 4 for any normal Clone Hero run and differs only on a what-if
+// record analyzed at another cap. It scales the meter curve and nothing else;
+// no note, span or fill in the scene depends on it.
+PreviewScene build_preview_scene(const Song& song, const Path* path, int sp_cap = 4);
 
 // Identity of the path an overlay was built from. Path has no operator==, so
 // callers that must notice a changed selection compare these keys instead. A

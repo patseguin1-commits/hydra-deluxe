@@ -11,12 +11,13 @@
 namespace hydra::ui {
 
 PreviewLoadJob::PreviewLoadJob(store::ChartLibraryEntry entry, bool pro, bool bass2x,
-                               Difficulty difficulty, std::optional<Path> path)
+                               Difficulty difficulty, std::optional<Path> path, int sp_cap)
     : entry_(std::move(entry)),
       pro_(pro),
       bass2x_(bass2x),
       difficulty_(difficulty),
-      path_(std::move(path)) {}
+      path_(std::move(path)),
+      sp_cap_(sp_cap) {}
 
 void PreviewLoadJob::start() { spawn([this] { run(); }); }
 
@@ -44,7 +45,7 @@ void PreviewLoadJob::run() {
             });
         step_.store(Step::Building);
         const Path* path = path_ ? &*path_ : nullptr;
-        app::PreviewScene scene = app::build_preview_scene(source.song, path);
+        app::PreviewScene scene = app::build_preview_scene(source.song, path, sp_cap_);
         result_ = Result{std::move(scene), std::move(mixed), std::move(source.song)};
         return true;
     });

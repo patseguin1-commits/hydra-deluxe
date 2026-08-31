@@ -576,8 +576,13 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
     // Open (or keep open) for the current selection; a no-op once running for
     // this chart. This is where the async decode starts.
     pc->set_volume(app.settings.preview_volume);  // before the audio exists too
+    // The meter's ceiling is the cap the viewed record was analyzed at; a
+    // chart with no record yet previews at the Clone Hero cap.
+    const int sp_cap = app.viewed.status == store::RecordStatus::Ready
+                           ? app.viewed.record->sp_cap.value_or(kCloneHeroSpCap)
+                           : kCloneHeroSpCap;
     pc->open(*app.selected, app.settings.view_prodrums, app.settings.effective_bass2x(),
-             app.settings.difficulty(), selected_path);
+             app.settings.difficulty(), selected_path, sp_cap);
     pc->poll();
 
     if (pc->has_error()) {
@@ -669,6 +674,43 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
         for (int i = 0; i < 3; ++i)
             dl->AddText(font, size, ImVec2(origin.x + margin, origin.y + margin + line_h * i),
                         IM_COL32(255, 255, 255, 255), lines[i]);
+
+        // The Star Power meter: a gauge down the image's right edge, filling
+        // bottom-up as phrases are collected and draining while SP is active.
+        // Hydra's own overlay, like the time box above -- not part of the Onyx
+        // render. The value is the view-model's curve read at the playhead, so
+        // it is anchored to the same engine truth the path overlay is.
+        if (pc->sp_meter_has_curve()) {
+            ImVec2 img_max = ImGui::GetItemRectMax();
+            const float bar_w = px(14.0f);
+            const float inset = px(10.0f);
+            const float v_margin = px(10.0f);
+            ImVec2 gauge_min(img_max.x - inset - bar_w, origin.y + v_margin);
+            ImVec2 gauge_max(img_max.x - inset, img_max.y - v_margin);
+            if (gauge_max.y > gauge_min.y) {
+                dl->AddRectFilled(gauge_min, gauge_max, IM_COL32(0, 0, 0, 128), px(4.0f));
+
+                const int cap = std::max(1, pc->sp_meter_cap());
+                float fill = static_cast<float>(pc->sp_meter_bars()) / static_cast<float>(cap);
+                fill = fill < 0.0f ? 0.0f : (fill > 1.0f ? 1.0f : fill);
+
+                const float fill_pad = px(2.0f);
+                ImVec2 in_min(gauge_min.x + fill_pad, gauge_min.y + fill_pad);
+                ImVec2 in_max(gauge_max.x - fill_pad, gauge_max.y - fill_pad);
+                const float in_h = in_max.y - in_min.y;
+                if (in_h > 0.0f && fill > 0.0f)
+                    dl->AddRectFilled(ImVec2(in_min.x, in_max.y - in_h * fill), in_max,
+                                      IM_COL32(255, 204, 51, 230));  // Star Power gold
+                // One line per whole-bar boundary, over the fill, so a glance
+                // reads how many bars are banked and not just how full it is.
+                for (int b = 1; b < cap; ++b) {
+                    const float y = in_max.y - in_h * (static_cast<float>(b) /
+                                                       static_cast<float>(cap));
+                    dl->AddLine(ImVec2(in_min.x, y), ImVec2(in_max.x, y),
+                                IM_COL32(0, 0, 0, 160), px(1.0f));
+                }
+            }
+        }
     }
 }
 

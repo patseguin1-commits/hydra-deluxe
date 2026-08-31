@@ -53,6 +53,21 @@ std::vector<std::string> split_char(const std::string& s, char c) {
     return out;
 }
 
+// The name inside a practice-section marker body, which both formats spell one
+// of two ways: "section Verse 2B" (Clone Hero) or "prc_verse_2b" (Rock Band).
+// Nothing else is a section.
+bool section_name_of(const std::string& body, std::string* name) {
+    if (body.rfind("section ", 0) == 0) {
+        *name = body.substr(8);
+        return true;
+    }
+    if (body.rfind("prc_", 0) == 0) {
+        *name = body.substr(4);
+        return true;
+    }
+    return false;
+}
+
 bool try_parse_int(const std::string& s, int64_t& out) {
     if (s.empty()) return false;
     try {
@@ -552,6 +567,22 @@ Song MidiParser::parse(const MidiFile& mid, bool pro, bool bass2x,
         break;
     }
 
+    // Pass 3: practice sections, which live on their own track as bracketed
+    // text metas.
+    for (const MidiTrack& track : mid.tracks) {
+        if (track.name != "EVENTS") continue;
+        elapsed = 0;
+        for (const Message& msg : track.messages) {
+            elapsed += msg.time;
+            if (msg.str_attr != Message::StrAttr::Text) continue;
+            const std::string& s = msg.str;
+            if (s.size() < 2 || s.front() != '[' || s.back() != ']') continue;
+            std::string name;
+            if (section_name_of(s.substr(1, s.size() - 2), &name))
+                song.practice_sections.push_back({elapsed, name});
+        }
+    }
+
     song.check_activations();
     return song;
 }
@@ -577,6 +608,10 @@ struct ChartDataEntry {
     bool solo_end = false;
     bool discoflip_enable = false;
     bool discoflip_disable = false;
+
+    // A generic text event's payload: the value with its leading "E" and any
+    // surrounding quotes taken off. Only the [Events] walk reads it.
+    std::optional<std::string> event_text;
 
     std::optional<int> notevalue;
     std::optional<int64_t> notelength;
@@ -629,7 +664,12 @@ ChartDataEntry::ChartDataEntry(const std::string& keystr_in,
     } else if (t0 == "E" && t.size() == 2 && full_match(t[1], re_disco_on())) {
         discoflip_enable = true;
     } else if (t0 == "E") {
-        // Generic text event: no gameplay effect.
+        // Generic text event: no gameplay effect, but [Events] carries the
+        // practice-section markers here.
+        std::string rest = strip(valuestr.substr(1));
+        if (rest.size() >= 2 && rest.front() == '"' && rest.back() == '"')
+            rest = rest.substr(1, rest.size() - 2);
+        event_text = rest;
     } else if (t0 == "N" && t.size() == 3) {
         notevalue = std::stoi(t[1]);
         notelength = std::stoll(t[2]);
@@ -929,6 +969,26 @@ Song ChartParser::parse(const std::vector<uint8_t>& data, bool pro,
         const ChartSection& ed = ed_it->second;
         for (int64_t tk : ed.tick_order)
             push_timestamp(tk, ed.tick_data.at(tk));
+    }
+
+    // Practice sections. tick_order follows the file, which is not required to
+    // be sorted, so sort once at the end.
+    auto ev_it = sections_.find("Events");
+    if (ev_it != sections_.end()) {
+        const ChartSection& ev = ev_it->second;
+        for (int64_t tk : ev.tick_order) {
+            for (const ChartDataEntry& e : ev.tick_data.at(tk)) {
+                if (!e.event_text.has_value()) continue;
+                std::string name;
+                if (section_name_of(*e.event_text, &name))
+                    song.practice_sections.push_back({tk, name});
+            }
+        }
+        std::stable_sort(song.practice_sections.begin(),
+                         song.practice_sections.end(),
+                         [](const SongSection& a, const SongSection& b) {
+                             return a.tick < b.tick;
+                         });
     }
 
     song.check_activations();

@@ -13,6 +13,17 @@
 
 namespace hydra::ui {
 
+namespace {
+
+// The overlay's identity: the path it was built from plus the SP cap the
+// meter was scaled to. A cap change must rebuild the scene just like a
+// path change, so both live in the one key the three key_ members compare.
+std::string overlay_key(const Path* path, int sp_cap) {
+    return hydra::app::path_overlay_key(path) + "|cap" + std::to_string(sp_cap);
+}
+
+}  // namespace
+
 PreviewController::PreviewController(ID3D11Device* device, ID3D11DeviceContext* context)
     : device_(device), context_(context) {}
 
@@ -20,17 +31,18 @@ PreviewController::~PreviewController() { close(); }
 
 void PreviewController::open(const store::ChartLibraryEntry& entry, bool pro,
                              bool bass2x, Difficulty difficulty,
-                             const Path* path) {
+                             const Path* path, int sp_cap) {
     if (active_ && open_key_ == entry.md5) {
-        std::string key = hydra::app::path_overlay_key(path);
+        std::string key = overlay_key(path, sp_cap);
         if (key == path_key_) return;  // same chart, same overlay: nothing to do
         path_ = path ? std::optional<Path>(*path) : std::nullopt;
+        sp_cap_ = sp_cap;
         path_key_ = std::move(key);
         // Mid-load the job is building its own scene; poll() reconciles. Once
         // the song is here the overlay is rebuilt on the spot, which leaves the
         // audio and the playhead alone.
         if (!job_ && song_ && !song_->is_empty()) {
-            scene_ = hydra::app::build_preview_scene(*song_, path);
+            scene_ = hydra::app::build_preview_scene(*song_, path, sp_cap_);
             scene_path_key_ = path_key_;
             scene_dirty_ = true;
         }
@@ -42,11 +54,12 @@ void PreviewController::open(const store::ChartLibraryEntry& entry, bool pro,
     active_ = true;
     error_.clear();
     pro_ = pro;
+    sp_cap_ = sp_cap;
 
     path_ = path ? std::optional<Path>(*path) : std::nullopt;
-    path_key_ = hydra::app::path_overlay_key(path);
+    path_key_ = overlay_key(path, sp_cap_);
     job_path_key_ = path_key_;
-    job_ = std::make_unique<PreviewLoadJob>(entry, pro, bass2x, difficulty, path_);
+    job_ = std::make_unique<PreviewLoadJob>(entry, pro, bass2x, difficulty, path_, sp_cap_);
     job_->start();
 }
 
@@ -65,6 +78,7 @@ void PreviewController::close() {
     scene_dirty_ = true;  // the renderer (if kept) must drop the old chart
     song_.reset();
     path_.reset();
+    sp_cap_ = kCloneHeroSpCap;
     path_key_.clear();
     job_path_key_.clear();
     scene_path_key_.clear();
@@ -112,7 +126,7 @@ void PreviewController::poll() {
     // The Paths tab can change the selection while the load runs, and the job
     // built its scene from the path it was started with.
     if (ok && scene_path_key_ != path_key_) {
-        scene_ = hydra::app::build_preview_scene(*song_, path_ ? &*path_ : nullptr);
+        scene_ = hydra::app::build_preview_scene(*song_, path_ ? &*path_ : nullptr, sp_cap_);
         scene_path_key_ = path_key_;
         scene_dirty_ = true;
     }
@@ -196,6 +210,16 @@ void PreviewController::set_volume(int percent) {
 
 hydra::app::PreviewTimeBox PreviewController::time_box() const {
     return hydra::app::build_time_box(scene_, transport_.now_ms());
+}
+
+double PreviewController::sp_meter_bars() const {
+    return hydra::app::sp_meter_bars_at(scene_.sp_meter, transport_.now_ms());
+}
+
+int PreviewController::sp_meter_cap() const { return scene_.sp_meter.cap; }
+
+bool PreviewController::sp_meter_has_curve() const {
+    return !scene_.sp_meter.segments.empty();
 }
 
 }  // namespace hydra::ui

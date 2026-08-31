@@ -153,3 +153,118 @@ TEST_CASE(".mid: each difficulty reads its own pitch base") {
     // cannot all coincide.)
     CHECK(differed > 0);
 }
+
+TEST_CASE(".chart: [Events] section markers become practice sections") {
+    const std::string text =
+        "[Song]\n"
+        "{\n"
+        "  Resolution = 192\n"
+        "}\n"
+        "[SyncTrack]\n"
+        "{\n"
+        "  0 = TS 4\n"
+        "  0 = B 120000\n"
+        "}\n"
+        "[Events]\n"
+        "{\n"
+        "  1536 = E \"prc_chorus_1a\"\n"
+        "  0 = E \"section Intro\"\n"
+        "  768 = E \"section Verse 1\"\n"
+        "  1920 = E \"lighting (blackout)\"\n"
+        "}\n"
+        "[ExpertDrums]\n"
+        "{\n"
+        "  0 = N 0 0\n"
+        "  192 = N 1 0\n"
+        "}\n";
+    const std::vector<uint8_t> data(text.begin(), text.end());
+    Song song = load_songbytes_chart(data, true, true);
+
+    // Both spellings are read, non-section text events are not, and the file's
+    // own order does not have to be sorted.
+    REQUIRE(song.practice_sections.size() == 3);
+    CHECK(song.practice_sections[0].tick == 0);
+    CHECK(song.practice_sections[0].name == "Intro");
+    CHECK(song.practice_sections[1].tick == 768);
+    CHECK(song.practice_sections[1].name == "Verse 1");
+    CHECK(song.practice_sections[2].tick == 1536);
+    CHECK(song.practice_sections[2].name == "chorus_1a");
+
+    // A chart with no [Events] section has no sections and still parses.
+    Song plain = load_songbytes_chart(multidiff::chart_bytes(), true, true);
+    CHECK(plain.practice_sections.empty());
+}
+
+namespace {
+
+void put_varlen(std::vector<uint8_t>& out, uint32_t v) {
+    uint8_t stack[5];
+    int n = 0;
+    do {
+        stack[n++] = static_cast<uint8_t>(v & 0x7F);
+        v >>= 7;
+    } while (v != 0);
+    while (n > 0) {
+        --n;
+        out.push_back(static_cast<uint8_t>(stack[n] | (n > 0 ? 0x80 : 0x00)));
+    }
+}
+
+void put_meta(std::vector<uint8_t>& out, uint32_t delta, uint8_t type,
+              const std::string& payload) {
+    put_varlen(out, delta);
+    out.push_back(0xFF);
+    out.push_back(type);
+    put_varlen(out, static_cast<uint32_t>(payload.size()));
+    out.insert(out.end(), payload.begin(), payload.end());
+}
+
+void put_bytes(std::vector<uint8_t>& out, std::initializer_list<int> bytes) {
+    for (int b : bytes) out.push_back(static_cast<uint8_t>(b));
+}
+
+void put_track(std::vector<uint8_t>& file, const std::vector<uint8_t>& events) {
+    const char* tag = "MTrk";
+    file.insert(file.end(), tag, tag + 4);
+    uint32_t len = static_cast<uint32_t>(events.size());
+    for (int shift = 24; shift >= 0; shift -= 8)
+        file.push_back(static_cast<uint8_t>((len >> shift) & 0xFF));
+    file.insert(file.end(), events.begin(), events.end());
+}
+
+}  // namespace
+
+TEST_CASE(".mid: EVENTS text metas become practice sections") {
+    std::vector<uint8_t> tempo_track;
+    put_meta(tempo_track, 0, 0x03, "tempo");
+    put_varlen(tempo_track, 0);  // set_tempo 500000 us/qn = 120 BPM
+    put_bytes(tempo_track, {0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20});
+    put_meta(tempo_track, 0, 0x2F, "");
+
+    std::vector<uint8_t> events_track;
+    put_meta(events_track, 0, 0x03, "EVENTS");
+    put_meta(events_track, 0, 0x01, "[section Intro]");
+    put_meta(events_track, 384, 0x01, "[prc_verse_1]");
+    put_meta(events_track, 384, 0x01, "[crowd_realtime]");
+    put_meta(events_track, 0, 0x2F, "");
+
+    std::vector<uint8_t> drums_track;
+    put_meta(drums_track, 0, 0x03, "PART DRUMS");
+    put_bytes(drums_track, {0x00, 0x90, 0x60, 0x64});  // note_on 96, Expert kick
+    put_bytes(drums_track, {0x00, 0x80, 0x60, 0x00});
+    put_meta(drums_track, 0, 0x2F, "");
+
+    std::vector<uint8_t> file;
+    put_bytes(file, {'M', 'T', 'h', 'd', 0, 0, 0, 6, 0, 1, 0, 3, 0, 192});
+    put_track(file, tempo_track);
+    put_track(file, events_track);
+    put_track(file, drums_track);
+
+    Song song = load_songbytes_mid(file, true, true);
+    REQUIRE(song.sequence.size() == 1);
+    REQUIRE(song.practice_sections.size() == 2);
+    CHECK(song.practice_sections[0].tick == 0);
+    CHECK(song.practice_sections[0].name == "Intro");
+    CHECK(song.practice_sections[1].tick == 384);
+    CHECK(song.practice_sections[1].name == "verse_1");
+}

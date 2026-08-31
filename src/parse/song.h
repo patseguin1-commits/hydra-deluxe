@@ -49,6 +49,13 @@ struct SongTimestamp {
     bool has_activation() const { return activation_length.has_value(); }
 };
 
+// A practice section ("Verse 2B", "Chorus 1"), from the chart's own section
+// markers. Display only: nothing in the search or the stored record reads these.
+struct SongSection {
+    int64_t tick = 0;
+    std::string name;
+};
+
 // A parsed chart: the timestamp sequence plus the tempo/meter maps it was built
 // from. Timing is snapshotted once the maps are complete (build_timing), which
 // mirrors Python building timecodes only after the whole tempo track is read.
@@ -67,6 +74,10 @@ public:
 
     std::vector<SongTimestamp> sequence;
     std::vector<std::string> features;
+
+    // Practice sections in tick order. A section marker can sit past the last
+    // note, so these ticks are not bounded by the sequence.
+    std::vector<SongSection> practice_sections;
 
     // Snapshot the timing indexes from the current maps. Called once the tempo
     // track has been fully mapped and before any timecode is made.

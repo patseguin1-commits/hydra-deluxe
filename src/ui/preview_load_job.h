@@ -27,7 +27,7 @@ namespace hydra::ui {
 class PreviewLoadJob : public ResultJobBase {
 public:
     PreviewLoadJob(store::ChartLibraryEntry entry, bool pro, bool bass2x,
-                   Difficulty difficulty, std::optional<Path> path);
+                   Difficulty difficulty, std::optional<Path> path, int sp_cap);
     ~PreviewLoadJob() { shutdown(); }
 
     void start();
@@ -67,6 +67,7 @@ private:
     bool bass2x_;
     Difficulty difficulty_;
     std::optional<Path> path_;
+    int sp_cap_;  // the record's SP cap, used only to scale the preview's SP meter
     std::optional<Result> result_;
 
     // Written by the worker, read by the render thread; each field is its own
