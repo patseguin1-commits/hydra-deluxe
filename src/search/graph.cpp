@@ -82,6 +82,7 @@ ScoreGraph::ScoreGraph(const Song& song, std::optional<int> sp_meter_cap,
     sp_start_ = sp_track_head_;
     proto_base_edge_ = new_edge();
     proto_sp_edge_ = new_edge();
+    sp_phrase_count_ = song.sp_phrase_count();
 
     build();
 }
@@ -128,8 +129,6 @@ void ScoreGraph::build() {
         store_new_backend(timestamp, sg.sp, sg.sp - sg.sqout_reduction);
 
         if (timestamp.flag_sp) {
-            sp_phrase_count_ += 1;
-
             // Deacts within the squeeze window keep a non-extended copy (SqOut).
             std::vector<Timecode> sqout_deacts;
             for (const auto& kv : pending_deacts_)

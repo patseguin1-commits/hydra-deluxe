@@ -9,11 +9,11 @@
 #include <windows.h>
 #include <winhttp.h>
 
-#include <cctype>
 #include <stdexcept>
 
 #include "json.hpp"
 
+#include "core/strutil.h"  // lower_hex
 #include "core/version.h"
 #include "core/winstr.h"
 
@@ -127,11 +127,6 @@ std::optional<int> joptint(const json& j, const char* key) {
     auto it = j.find(key);
     if (it == j.end() || it->is_null() || !it->is_number()) return std::nullopt;
     return it->get<int>();
-}
-
-std::string lower_hex(std::string s) {
-    for (char& c : s) c = (char)std::tolower((unsigned char)c);
-    return s;
 }
 
 std::string join_charters(const json& entry) {

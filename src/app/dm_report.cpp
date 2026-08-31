@@ -1,11 +1,11 @@
 #include "app/dm_report.h"
 
-#include <cctype>
 #include <cstdio>
 #include <unordered_map>
 
 #include "app/html_page.h"
 #include "app/report.h"  // report::plain — strips Clone Hero <color> markup
+#include "core/strutil.h"  // lower_hex
 
 namespace hydra::app::dm_report {
 
@@ -228,11 +228,6 @@ const std::string& page_template() {
     return page;
 }
 
-
-std::string lower_hex(std::string s) {
-    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return s;
-}
 
 }  // namespace
 

@@ -19,15 +19,6 @@ const int kSpCapLadder[] = {16, 32, 64, 128, 256, 512};
 // the time budget, mirroring hyutil._CapBudgetExceeded / _deadline_callback.
 struct CapBudgetExceeded {};
 
-// How many SP phrases the chart offers. No run can bank more bars than this, so
-// it's the natural clamp on how tall a graph is worth building.
-int count_sp_phrases(const Song& song) {
-    int n = 0;
-    for (const SongTimestamp& ts : song.sequence)
-        if (ts.flag_sp) ++n;
-    return n;
-}
-
 HydraRecord read(const ScoreGraph& graph, DepthMode depth_mode, int depth_value,
                  std::optional<double> ms_filter,
                  const std::function<void(float)>& on_progress) {
@@ -151,7 +142,7 @@ HydraRecord analyze_auto_cap(const Song& song, DepthMode depth_mode, int depth_v
                              bool want_allzero = false,
                              const std::function<void(float)>& on_progress = {},
                              std::optional<double> time_budget_s = std::nullopt) {
-    int sp_phrases = count_sp_phrases(song);
+    int sp_phrases = song.sp_phrase_count();
     const int ladder_n = static_cast<int>(std::size(kSpCapLadder));
 
     std::optional<HydraRecord> record;
@@ -257,7 +248,7 @@ HydraRecord analyze_chart(const Song& song, const SearchSettings& settings,
     // fixed cap is the user's explicit choice, so Auto's time budget doesn't
     // apply to it.
     if (sp_cap.has_value()) {
-        int build_cap = std::min(*sp_cap, std::max(count_sp_phrases(song), 1));
+        int build_cap = std::min(*sp_cap, std::max(song.sp_phrase_count(), 1));
         return analyze_at_cap(song, *sp_cap, depth_mode, depth_value, ms_filter,
                               build_cap, settings.legacy_fill_deadline,
                               /*want_allzero=*/true, on_progress);

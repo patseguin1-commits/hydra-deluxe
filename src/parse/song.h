@@ -90,6 +90,11 @@ public:
 
     bool is_empty() const { return sequence.empty(); }
 
+    // How many SP phrases the chart offers. No run can bank more bars than
+    // this, so it's the natural clamp on how tall a search graph is worth
+    // building.
+    int sp_phrase_count() const;
+
     // If the chart has no drum fills, synthesize them like Clone Hero would.
     void check_activations();
 

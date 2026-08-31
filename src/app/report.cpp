@@ -378,9 +378,11 @@ std::vector<ReportRow> collect_rows(store::RecordStore& store, int64_t max_paths
             row.tier = label;
             row.tok = token;
             for (const Activation& a : path->all_activations())
-                if (a.e_offset.has_value() && a.skips.has_value() && a.is_E0() &&
-                    (!row.efill || -*a.e_offset > *row.efill))
-                    row.efill = -*a.e_offset + 0.0;
+                if (a.e_offset.has_value() && a.skips.has_value()) {
+                    std::optional<double> ediff = a.e_difficulty();
+                    if (ediff.has_value() && (!row.efill || *ediff > *row.efill))
+                        row.efill = *ediff;
+                }
             row.mult = py_round3(*s.avgmult);
             row.sqin = *s.sqin_count;
             row.sqout = *s.sqout_count;

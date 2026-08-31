@@ -147,6 +147,15 @@ const char* difficulty_name(Difficulty difficulty) {
     }
 }
 
+// ---- Song::sp_phrase_count ----------------------------------------------
+
+int Song::sp_phrase_count() const {
+    int n = 0;
+    for (const SongTimestamp& ts : sequence)
+        if (ts.flag_sp) ++n;
+    return n;
+}
+
 // ---- Song::check_activations -------------------------------------------
 
 void Song::check_activations() {

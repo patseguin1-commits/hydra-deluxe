@@ -171,6 +171,8 @@ private:
     ScoreGraphNode* base_track_head_ = nullptr;
     ScoreGraphNode* sp_track_head_ = nullptr;
     int combo_ = 0;
+    // The Song's sp_phrase_count(), kept here for max_sp_bars() -- not tallied
+    // by this graph itself.
     int sp_phrase_count_ = 0;
     std::unordered_map<int64_t, Timecode> pending_deacts_;  // ticks -> Timecode
     std::vector<Timecode> deact_heap_;                      // min-heap on ticks
