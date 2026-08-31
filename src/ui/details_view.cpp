@@ -651,27 +651,33 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
                      ImVec2(static_cast<float>(w), static_cast<float>(h)));
 
         // The time box, drawn over the image the way Onyx draws its own
-        // (top-left, monospace, on a translucent dark panel): time,
-        // measure:beat, BPM.
+        // (top-left, monospace, on a translucent dark panel): time / length,
+        // [measure:beat:tick] for both, BPM, and the practice section. The
+        // section line is absent on charts that have no sections.
         hydra::app::PreviewTimeBox box = pc->time_box();
-        const char* lines[3] = {box.timestamp.c_str(), box.measure_beat.c_str(),
-                                box.bpm.c_str()};
+        const char* lines[4];
+        int line_count = 0;
+        lines[line_count++] = box.timestamp.c_str();
+        lines[line_count++] = box.measure_beat.c_str();
+        lines[line_count++] = box.bpm.c_str();
+        if (!box.section.empty()) lines[line_count++] = box.section.c_str();
         ImFont* font = g_mono_font ? g_mono_font : ImGui::GetFont();
         const float size = px(15.0f);
         const float margin = px(10.0f);
         const float pad = px(8.0f);
         ImVec2 origin = ImGui::GetItemRectMin();
         float text_w = 0.0f;
-        for (const char* s : lines)
-            text_w = std::max(text_w, font->CalcTextSizeA(size, FLT_MAX, 0.0f, s).x);
+        for (int i = 0; i < line_count; ++i)
+            text_w = std::max(text_w,
+                              font->CalcTextSizeA(size, FLT_MAX, 0.0f, lines[i]).x);
         const float line_h = size * 1.25f;
         ImDrawList* dl = ImGui::GetWindowDrawList();
         ImVec2 box_min(origin.x, origin.y);
         ImVec2 box_max(origin.x + margin + text_w + pad * 2.0f,
-                       origin.y + margin + line_h * 3.0f + pad);
+                       origin.y + margin + line_h * static_cast<float>(line_count) + pad);
         dl->AddRectFilled(box_min, box_max, IM_COL32(0, 0, 0, 128), px(6.0f),
                           ImDrawFlags_RoundCornersBottomRight);
-        for (int i = 0; i < 3; ++i)
+        for (int i = 0; i < line_count; ++i)
             dl->AddText(font, size, ImVec2(origin.x + margin, origin.y + margin + line_h * i),
                         IM_COL32(255, 255, 255, 255), lines[i]);
 

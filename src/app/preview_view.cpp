@@ -245,6 +245,7 @@ PreviewScene build_preview_scene(const Song& song, const Path* path, int sp_cap)
     // The beat grid runs two measures past the last note so lines keep
     // scrolling through the look-ahead after the chart ends.
     const SongTiming& timing = song.timing();
+    scene.timing = timing;  // the time box names ticks with the engine's math
     scene.tick_resolution = timing.tick_resolution();
     if (scene.has_notes) {
         int64_t last_tick = scene.notes.back().tick;
@@ -380,46 +381,75 @@ std::vector<PreviewBeat> build_beat_events(const SongTiming& timing, int64_t las
     return out;
 }
 
-PreviewTimeBox build_time_box(const PreviewScene& scene, double now_ms) {
-    PreviewTimeBox box;
-    char buf[64];
+namespace {
 
-    double secs = now_ms < 0.0 ? 0.0 : now_ms / 1000.0;
+std::string clock_str(double ms) {
+    double secs = ms / 1000.0;
     int minutes = static_cast<int>(secs / 60.0);
     double rem = secs - minutes * 60.0;
-    std::snprintf(buf, sizeof buf, "%d:%04.1f", minutes, rem);
-    box.timestamp = buf;
+    char buf[48];
+    std::snprintf(buf, sizeof buf, "%d:%06.3f", minutes, rem);
+    return buf;
+}
 
-    // Count bars and the beats since the last bar up to now.
-    int measure = 0, beat = 0;
-    for (const PreviewBeat& b : scene.beats) {
-        if (b.ms > now_ms) break;
-        if (b.kind == PreviewBeatKind::Bar) {
-            ++measure;
-            beat = 1;
-        } else if (b.kind == PreviewBeatKind::Beat) {
-            ++beat;
-        }
-    }
-    if (measure == 0) {
-        measure = 1;
-        beat = 1;
-    }
-    std::snprintf(buf, sizeof buf, "%d:%d", measure, beat);
-    box.measure_beat = buf;
+// The tick at `ms`, from the song's own ms index. The last tempo section's
+// slope holds forever after it, so this keeps counting past the end of the
+// chart. Rounded to the nearest tick and never negative.
+int64_t tick_at(const SongTiming& timing, double ms) {
+    const int64_t tick = std::llround(timing.ms_index().tick_at_ms(ms));
+    return tick < 0 ? 0 : tick;
+}
+
+// Moonscraper's "[measure:beat:tick]". Timecode counts measures and beats from
+// zero; the box shows both 1-based, with the tick still counted from the beat
+// line, so the caller adds the two offsets.
+std::string bracket_str(int64_t measure, int64_t beat, int64_t tick_in_beat) {
+    char buf[64];
+    std::snprintf(buf, sizeof buf, "[%lld:%lld:%03lld]",
+                  static_cast<long long>(measure),
+                  static_cast<long long>(beat),
+                  static_cast<long long>(tick_in_beat));
+    return buf;
+}
+
+}  // namespace
+
+PreviewTimeBox build_time_box(const PreviewScene& scene, double now_ms,
+                              double length_ms) {
+    PreviewTimeBox box;
+
+    const double len = length_ms < 0.0 ? 0.0 : length_ms;
+    const double now = now_ms < 0.0 ? 0.0 : (now_ms > len ? len : now_ms);
+
+    box.timestamp = clock_str(now) + " / " + clock_str(len);
+
+    // A default-built scene carries no song and so no timing: it reads as tick
+    // 0 at measure 1, beat 1, exactly as it always has.
+    const int64_t now_tick = scene.timing ? tick_at(*scene.timing, now) : 0;
+    const int64_t end_tick = scene.timing ? tick_at(*scene.timing, len) : 0;
+    auto mbt_str = [&scene](int64_t tick) {
+        if (!scene.timing) return bracket_str(1, 1, 0);
+        const Timecode tc = scene.timing->timecode(tick);
+        const int64_t* mbt = tc.measure_beats_ticks();
+        return bracket_str(mbt[0] + 1, mbt[1] + 1, mbt[2]);
+    };
+    box.measure_beat = mbt_str(now_tick) + " / " + mbt_str(end_tick);
 
     // The tempo in force: the last change at or before now (the opening tempo
     // before any change).
     double bpm = scene.tempos.empty() ? 0.0 : scene.tempos.front().bpm;
     for (const PreviewTempo& t : scene.tempos) {
-        if (t.ms > now_ms) break;
+        if (t.ms > now) break;
         bpm = t.bpm;
     }
-    std::snprintf(buf, sizeof buf, "%.2f", bpm);
-    std::string s = buf;
-    while (!s.empty() && s.back() == '0') s.pop_back();
-    if (!s.empty() && s.back() == '.') s.pop_back();
-    box.bpm = s + " BPM";
+    char buf[64];
+    std::snprintf(buf, sizeof buf, "BPM: %.3f", bpm);
+    box.bpm = buf;
+
+    for (const PreviewSection& s : scene.sections) {
+        if (s.tick > now_tick) break;
+        box.section = s.name;
+    }
     return box;
 }
 

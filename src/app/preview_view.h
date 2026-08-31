@@ -18,6 +18,7 @@
 #define HYDRA_APP_PREVIEW_VIEW_H
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -165,6 +166,11 @@ struct PreviewScene {
     // rather than from where they sit on the highway, so a squeezed-out phrase
     // steps the gauge the moment SP ends, not during the drain.
     SpMeterCurve sp_meter;
+    // The song's own timing. The time box asks it for ms->tick and for
+    // measure:beat:tick rather than re-deriving either from the flattened
+    // tempo/meter lists above. Empty only on a default-built PreviewScene (no
+    // song to read); build_preview_scene always fills it.
+    std::optional<SongTiming> timing;
     int64_t tick_resolution = 0;       // ticks per quarter note
     double song_length_ms = 0.0;  // last note onset; the scrubber's right edge
     bool has_notes = false;
@@ -176,15 +182,20 @@ struct PreviewScene {
 // [0, last_tick]. ms from the timing's own ms index.
 std::vector<PreviewBeat> build_beat_events(const SongTiming& timing, int64_t last_tick);
 
-// The three lines of the Preview's time box at `now_ms`: "m:ss.t", the
-// 1-based "measure:beat" from the beat grid, and the BPM in force.
+// The Preview's time box at `now_ms`, in Moonscraper's layout: the playhead
+// time and the song length as "m:ss.mmm / m:ss.mmm", the same two points as
+// 1-based "[measure:beat:tick]", the BPM in force, and the practice section in
+// force. `section` is empty when the chart has none at or before the playhead;
+// the box is three lines tall then.
 struct PreviewTimeBox {
     std::string timestamp;
     std::string measure_beat;
     std::string bpm;
+    std::string section;
 };
 
-PreviewTimeBox build_time_box(const PreviewScene& scene, double now_ms);
+PreviewTimeBox build_time_box(const PreviewScene& scene, double now_ms,
+                              double length_ms);
 
 // Bars banked at `ms`: 0 before the curve begins, its final value after the
 // curve ends, and interpolated inside a segment. On a boundary shared by two

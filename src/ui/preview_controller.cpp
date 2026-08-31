@@ -209,7 +209,8 @@ void PreviewController::set_volume(int percent) {
 }
 
 hydra::app::PreviewTimeBox PreviewController::time_box() const {
-    return hydra::app::build_time_box(scene_, transport_.now_ms());
+    return hydra::app::build_time_box(scene_, transport_.now_ms(),
+                                      transport_.length_ms());
 }
 
 double PreviewController::sp_meter_bars() const {

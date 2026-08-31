@@ -327,17 +327,99 @@ TEST_CASE("build_preview_scene fills beats, tempos and resolution") {
     CHECK(scene.beats.back().tick == 4320);
 }
 
-TEST_CASE("build_time_box: timestamp, measure:beat, BPM") {
+TEST_CASE("build_time_box: timestamp, measure:beat:tick, BPM") {
     Song song = make_hand_song();
     PreviewScene scene = build_preview_scene(song, nullptr);
-    PreviewTimeBox box = build_time_box(scene, 1300.0);
-    CHECK(box.timestamp == "0:01.3");
-    CHECK(box.measure_beat == "1:3");  // 1300 ms = tick 1248: bar 1, third beat
-    CHECK(box.bpm == "120 BPM");
 
-    PreviewTimeBox later = build_time_box(scene, 62000.0 + 2000.0);
-    CHECK(later.timestamp == "1:04.0");
-    CHECK(build_time_box(scene, 0.0).measure_beat == "1:1");
+    // 1300 ms is tick 1248: bar 1, third beat, 288 ticks into it. 5000 ms is
+    // tick 4800: the third bar's third beat, exactly on the line.
+    PreviewTimeBox box = build_time_box(scene, 1300.0, 5000.0);
+    CHECK(box.timestamp == "0:01.300 / 0:05.000");
+    CHECK(box.measure_beat == "[1:3:288] / [3:3:000]");
+    CHECK(box.bpm == "BPM: 120.000");
+    CHECK(box.section.empty());
+
+    CHECK(build_time_box(scene, 0.0, 5000.0).measure_beat == "[1:1:000] / [3:3:000]");
+
+    PreviewTimeBox later = build_time_box(scene, 64000.0, 64000.0);
+    CHECK(later.timestamp == "1:04.000 / 1:04.000");
+
+    // The playhead is clamped to the length.
+    CHECK(build_time_box(scene, 9999.0, 5000.0).timestamp == "0:05.000 / 0:05.000");
+}
+
+TEST_CASE("build_time_box: the end bracket runs past the last beat line") {
+    Song song = make_hand_song();
+    PreviewScene scene = build_preview_scene(song, nullptr);
+    // The beat grid stops at tick 4320, but the last tempo and meter hold
+    // forever: 30 s is tick 28800, which is bar 16 on the nose.
+    REQUIRE(scene.beats.back().tick == 4320);
+    PreviewTimeBox box = build_time_box(scene, 30000.0, 30000.0);
+    CHECK(box.measure_beat == "[16:1:000] / [16:1:000]");
+    CHECK(box.timestamp == "0:30.000 / 0:30.000");
+}
+
+TEST_CASE("build_time_box: the practice section in force") {
+    Song song = make_hand_song();
+    song.practice_sections.push_back({480, "Verse 1"});
+    song.practice_sections.push_back({2400, "Chorus"});
+    PreviewScene scene = build_preview_scene(song, nullptr);
+
+    REQUIRE(scene.sections.size() == 2);
+    CHECK(scene.sections[0].tick == 480);
+    CHECK(scene.sections[0].ms == doctest::Approx(500.0));
+    CHECK(scene.sections[0].name == "Verse 1");
+    // Past the last note (tick 720), where the ms index has no entry.
+    CHECK(scene.sections[1].ms == doctest::Approx(2500.0));
+
+    const double len = 10000.0;
+    CHECK(build_time_box(scene, 0.0, len).section.empty());
+    CHECK(build_time_box(scene, 400.0, len).section.empty());
+    CHECK(build_time_box(scene, 500.0, len).section == "Verse 1");
+    CHECK(build_time_box(scene, 2000.0, len).section == "Verse 1");
+    CHECK(build_time_box(scene, 2500.0, len).section == "Chorus");
+    CHECK(build_time_box(scene, 9000.0, len).section == "Chorus");
+}
+
+TEST_CASE("build_time_box: a mid-measure meter change follows the engine") {
+    // 4/4 from tick 0, 3/4 from tick 2880 — beat 3 of the second bar, not a
+    // barline. A section's bars count from the last barline at or before its
+    // first tick (tick 1920 here), so the bar lines run 0, 1920, 3360, 4800 and
+    // the second bar is cut short. The box must name ticks the way the engine
+    // does rather than by a count of its own.
+    Song song(480);
+    song.bpm_changes[0] = 120.0;
+    song.tpm_changes[2880] = 1440;
+    song.build_timing();
+    {
+        Chord c;
+        c.add_note(NoteColor::Red);
+        SongTimestamp ts;
+        ts.timecode = song.timecode(3600);
+        ts.chord = std::move(c);
+        song.sequence.push_back(std::move(ts));
+    }
+    PreviewScene scene = build_preview_scene(song, nullptr);
+
+    // 120 BPM at 480 ticks/quarter: tick 3600 is 3750 ms, past the change.
+    const Timecode tc = song.timing().timecode(3600);
+    const int64_t* mbt = tc.measure_beats_ticks();
+    CHECK(mbt[0] + 1 == 3);  // the engine's measure, 1-based for display
+    CHECK(mbt[1] + 1 == 1);
+    CHECK(mbt[2] == 240);
+
+    PreviewTimeBox box = build_time_box(scene, 3750.0, 3750.0);
+    CHECK(box.measure_beat == "[3:1:240] / [3:1:240]");
+
+    // ...and that measure is the one the drawn bar lines put tick 3600 in: the
+    // third line is at 3360 and the fourth at 4800.
+    std::vector<int64_t> bars;
+    for (const PreviewBeat& b : scene.beats)
+        if (b.kind == PreviewBeatKind::Bar) bars.push_back(b.tick);
+    REQUIRE(bars.size() >= 4);
+    CHECK(bars[1] == 1920);
+    CHECK(bars[2] == 3360);
+    CHECK(bars[3] == 4800);
 }
 
 TEST_CASE("build_preview_scene: no path means no overlay") {
