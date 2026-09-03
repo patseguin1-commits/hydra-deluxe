@@ -33,3 +33,6 @@ dist/
 
 # generated path reports dropped at the repo root
 /hydra_paths.html
+
+# second build tree used when Hydra.exe is running and build-cpp cannot relink
+build-rel/
