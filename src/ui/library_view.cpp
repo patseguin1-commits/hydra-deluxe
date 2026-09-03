@@ -533,9 +533,11 @@ void render_batch_modal(AppState& app) {
         if (app.report_job && !app.report_job->finished()) {
             ImGui::TextDisabled("Building path report...");
         } else if (app.report_job && !app.report_job->ok()) {
+            app.report_outcome_shown = true;
             ImGui::TextColored(kWarningColor, "Path report failed: %s",
                                app.report_job->error().c_str());
         } else if (app.report_job) {
+            app.report_outcome_shown = true;
             if (ImGui::Button("Open path report")) app::open_report_in_browser();
             ImGui::SameLine();
             if (ImGui::Checkbox("Open automatically", &app.settings.auto_open_report))
@@ -700,8 +702,16 @@ void render_main_window(AppState& app) {
 
     // A finished report job has nothing left to show once the batch modal is
     // gone (its status lines live there); reclaim the thread.
-    if (!app.batch_job && app.report_job && app.report_job->finished())
+    if (!app.batch_job && app.report_job && app.report_job->finished()) {
+        // You clicked Continue while the report was still building, so the
+        // modal never showed how it ended. Say so here instead. A cancelled
+        // job says nothing -- you asked for it to stop.
+        if (!app.report_outcome_shown && !app.report_job->is_cancelled()) {
+            if (app.report_job->ok()) app.set_status("Path report ready.");
+            else app.set_status("Path report failed: " + app.report_job->error());
+        }
         app.report_job.reset();
+    }
 
     // A cancelled single-chart analysis has nothing to report; reap it here
     // so it doesn't linger after the details modal closed mid-run.
@@ -743,8 +753,15 @@ void render_main_window(AppState& app) {
     render_search_box(app);
 
     // A way back into the last batch's HTML report (it used to exist only as
-    // an unrequested browser launch right after a batch).
-    if (app::report_file_exists()) {
+    // an unrequested browser launch right after a batch). While a report job
+    // is still building, this slot shows a greyed "Building path report..."
+    // button instead, so the window says the report isn't ready yet.
+    if (app.report_job && !app.report_job->finished()) {
+        ImGui::SameLine();
+        begin_disabled_button(true);
+        ImGui::Button("Building path report...");
+        end_disabled_button(true);
+    } else if (app::report_file_exists()) {
         ImGui::SameLine();
         if (ImGui::Button("Open path report") && !app::open_report_in_browser())
             app.set_status("The path report could not be opened.");

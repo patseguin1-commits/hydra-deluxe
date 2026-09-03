@@ -39,8 +39,12 @@ bool open_in_browser(const std::wstring& path);
 bool open_report_in_browser();
 bool open_dm_report_in_browser();
 
-// Writes a built page to disk, truncating whatever was there. Throws
-// std::runtime_error("cannot write <path>") when the file won't open.
+// Writes a built page to disk. The page is written to a "<path>.tmp" sibling
+// first and then renamed over the target, so a reader who opens the report
+// mid-write never sees a half-written page — the previous page stays
+// readable right up until the new one is complete. Throws
+// std::runtime_error("cannot write <path>") when the file won't open or the
+// swap fails.
 void write_report_file(const std::filesystem::path& outpath, const std::string& html);
 
 }  // namespace hydra::app

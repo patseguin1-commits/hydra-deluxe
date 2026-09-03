@@ -72,7 +72,7 @@ Lines print as they run; a failing line prints `!! failed at line N`.
 - `###` labels are addressed by the part after `###`: DM picker rows are `**/###<discord id>`.
 - Library rows: `**/<title>`; escape `/` and `#` in the title with a backslash.
 
-Label cheat-sheet (main window `Hydra`): `Manage folders... (N)`, `Scan charts` / `Refresh scan`, `Analyze library` / `Analyze search (N)`, `redo existing`, `Compare dmleaderboards user...`, `Pro Drums`, `2x Bass`, `##search`, `##pageleft`, `##pageright`.
+Label cheat-sheet (main window `Hydra`): `Manage folders... (N)`, `Scan charts` / `Refresh scan`, `Analyze library` / `Analyze search (N)`, `redo existing`, `Compare dmleaderboards user...`, `Pro Drums`, `2x Bass`, `##search`, `Open path report` / `Building path report...`, `##pageleft`, `##pageright`.
 Modals: `Scanning charts` (`Continue`, `Cancel`), `Analyzing` (`Start`, `Cancel`, `Continue`, `Open path report`, `Open automatically`), `Compare dmleaderboards user` (`##dmfilter`, `Close`, `Open report again`, `Compare another`), `Song folders`.
 Song Details (`//$FOCUSED`): tabs `##DetailsTabs/Paths` and `##DetailsTabs/Preview`; `Analyze paths!`, `Copy path string`, `Play` / `Pause`, `##scrub`, `##volume`. There is no Close button — the modal closes via its title-bar X.
 

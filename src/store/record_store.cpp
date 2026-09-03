@@ -17,13 +17,42 @@ namespace {
 // drop_stale_records). Single-sourced from CMake's project version.
 constexpr const char* kHydraVersion = HYDRA_VERSION;
 
-// RAII wrapper so every query site finalizes even on an early throw.
+// RAII wrapper so every query site finalizes even on an early throw. Movable
+// but not copyable: a copy would finalize the same handle twice. Moving lets a
+// statement be parked in a std::optional and destroyed on purpose later --
+// for_each_blob does that, so its two per-row statements live across the whole
+// walk instead of being compiled again for every row.
 struct Stmt {
     sqlite3_stmt* p = nullptr;
+    Stmt() = default;
+    Stmt(Stmt&& other) noexcept : p(other.p) { other.p = nullptr; }
+    Stmt& operator=(Stmt&& other) noexcept {
+        if (this != &other) {
+            if (p) sqlite3_finalize(p);
+            p = other.p;
+            other.p = nullptr;
+        }
+        return *this;
+    }
+    Stmt(const Stmt&) = delete;
+    Stmt& operator=(const Stmt&) = delete;
     ~Stmt() {
         if (p) sqlite3_finalize(p);
     }
     operator sqlite3_stmt*() const { return p; }
+};
+
+// Clears a reused statement's cursor so it can be bound and stepped again.
+// Bindings survive a reset and are overwritten by the next bind, so
+// sqlite3_clear_bindings is not needed. Every reuse site calls this before its
+// caller drops the store lock: a half-stepped statement holds a read cursor
+// open on the table, and the locking rule is that no sqlite state outlives the
+// locked block.
+struct ResetOnExit {
+    sqlite3_stmt* s;
+    ~ResetOnExit() {
+        if (s) sqlite3_reset(s);
+    }
 };
 
 Stmt prepare(sqlite3* db, const char* sql) {
@@ -646,17 +675,52 @@ void RecordStore::migrate_records_to_results() {
     }
 }
 
+// The SQL for the two per-row reads a walk repeats. Named here so
+// for_each_blob can compile each of them once and reuse it, and the one-off
+// callers still get the same text.
+constexpr const char* kLoadNodesSql =
+    "SELECT p.phash, p.payload FROM path_refs pr JOIN paths p"
+    "  ON p.hyhash = pr.hyhash AND p.chartmode = pr.chartmode AND p.phash = pr.phash"
+    " WHERE pr.result_id = ?";
+constexpr const char* kReloadRowSql =
+    "SELECT hyhash, chartmode, hyversion, sp_cap, structure"
+    " FROM results WHERE result_id = ?";
+
+std::unordered_map<std::string, std::vector<uint8_t>> RecordStore::load_nodes(
+    sqlite3_stmt* stmt, int64_t result_id) {
+    // `stmt` is kLoadNodesSql, compiled by the caller. Reset before returning,
+    // so the caller may drop the lock the moment this comes back.
+    ResetOnExit reset{stmt};
+    std::unordered_map<std::string, std::vector<uint8_t>> nodes;
+    sqlite3_bind_int64(stmt, 1, result_id);
+    while (sqlite3_step(stmt) == SQLITE_ROW)
+        nodes.emplace(column_text(stmt, 0), column_blob(stmt, 1));
+    return nodes;
+}
+
 std::unordered_map<std::string, std::vector<uint8_t>> RecordStore::load_nodes(
     int64_t result_id) {
-    std::unordered_map<std::string, std::vector<uint8_t>> nodes;
-    Stmt s = prepare(db_,
-        "SELECT p.phash, p.payload FROM path_refs pr JOIN paths p"
-        "  ON p.hyhash = pr.hyhash AND p.chartmode = pr.chartmode AND p.phash = pr.phash"
-        " WHERE pr.result_id = ?");
-    sqlite3_bind_int64(s, 1, result_id);
-    while (sqlite3_step(s) == SQLITE_ROW)
-        nodes.emplace(column_text(s, 0), column_blob(s, 1));
-    return nodes;
+    Stmt s = prepare(db_, kLoadNodesSql);
+    return load_nodes(s, result_id);
+}
+
+bool RecordStore::reload_row(sqlite3_stmt* stmt, const BlobRow& meta, int64_t result_id,
+                             std::vector<uint8_t>& structure) {
+    // `stmt` is kReloadRowSql, compiled once by for_each_blob. Every path out
+    // of here resets it first, including the skip paths below, so nothing is
+    // left mid-step when the caller unlocks.
+    ResetOnExit reset{stmt};
+    sqlite3_bind_int64(stmt, 1, result_id);
+    if (sqlite3_step(stmt) != SQLITE_ROW) return false;  // deleted since the walk listed it
+    // Every identity column, not just "a row is here". result_id is a plain
+    // INTEGER PRIMARY KEY, so sqlite hands the same id out again after a
+    // delete and a replacement row can occupy it.
+    if (column_text(stmt, 0) != meta.hyhash) return false;
+    if (column_text(stmt, 1) != meta.chartmode) return false;
+    if (column_text(stmt, 2) != meta.hyversion) return false;
+    if (sqlite3_column_int(stmt, 3) != meta.sp_cap) return false;
+    structure = column_blob(stmt, 4);
+    return true;
 }
 
 int RecordStore::import_legacy_uncapped(const std::string& uncapped_db_path) {
@@ -1064,21 +1128,38 @@ bool RecordStore::has_record(const RecordKey& key) {
 
 void RecordStore::for_each_blob(
     const std::optional<std::string>& chartmode, const CapQuery& cap, const Lens& lens,
-    const std::function<void(const BlobRow&, const HydraRecord*)>& fn) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
-
-    // Read every row up front (like reindex) so fn never runs under an open
-    // sqlite cursor — it may call back into this store.
+    const std::function<void(const BlobRow&, const HydraRecord*)>& fn,
+    const std::atomic<bool>* cancel) {
+    // Two passes, and the lock is short in both. The first lists which rows to
+    // visit, and their blobs, under one lock. The second takes the lock once
+    // per row, just long enough to read that row's nodes -- and to re-read the
+    // row itself, but only when something wrote in between -- then decodes and
+    // calls fn with nothing held. A walk of the whole library used to hold the
+    // lock end to end, so a click on the UI thread waited for the whole report.
+    //
+    // The two per-row reads share one statement each, compiled before the loop
+    // and reset before every unlock, instead of being compiled per row --
+    // 37,000 compilations on an 18.5k-record library, which cost more than the
+    // shorter lock saved.
     struct Row {
         BlobRow meta;
         int64_t result_id = 0;
         std::vector<uint8_t> structure;
     };
     std::vector<Row> rows;
+    // How many rows this connection had written when the listing below ran.
+    // Phase 2 compares against it to decide whether the listing is still exact
+    // -- see the comment at the per-row read.
+    int64_t snapshot_changes = 0;
     {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        // The whole structure blob, not just its head. It is small in total
+        // (a few megabytes across a big library) and reading it here means the
+        // common walk -- nothing writing -- never re-reads a row.
         std::string sql =
             "SELECT s.hyhash, s.ref_name, s.ref_artist, s.ref_charter, "
-            "r.chartmode, r.hyversion, r.sp_cap, r.result_id, r.structure, r.ms_enabled "
+            "r.chartmode, r.hyversion, r.sp_cap, r.result_id, r.structure, "
+            "r.ms_enabled "
             "FROM results r JOIN songmeta s ON s.hyhash = r.hyhash WHERE 1=1";
         if (chartmode) sql += " AND r.chartmode = ?";
         append_candidate_filter(sql, "r.", cap);
@@ -1129,17 +1210,83 @@ void RecordStore::for_each_blob(
         for (const auto& kv : winner) keep[kv.second] = true;
         for (size_t i = 0; i < candidates.size(); ++i)
             if (keep[i]) rows.push_back(std::move(candidates[i]));
+
+        // Read under the same lock as the listing, so it names exactly the
+        // database state the rows above came from.
+        snapshot_changes = sqlite3_total_changes64(db_);
     }
 
-    for (const Row& row : rows) {
+    // Both statements are sqlite objects, so they are compiled, used, reset and
+    // destroyed with the lock held. The guard is what makes the destroy happen
+    // on every way out of this function -- the cancel return below, and a throw
+    // out of rebuild_record or fn -- since a Stmt destroyed on a plain unwind
+    // would finalize with no lock held.
+    std::optional<Stmt> reload_stmt;
+    std::optional<Stmt> nodes_stmt;
+    struct StmtGuard {
+        std::recursive_mutex& mutex;
+        std::optional<Stmt>& reload_stmt;
+        std::optional<Stmt>& nodes_stmt;
+        ~StmtGuard() {
+            std::lock_guard<std::recursive_mutex> lock(mutex);
+            reload_stmt.reset();  // optional::reset -- destroys, so finalizes
+            nodes_stmt.reset();
+        }
+    } stmt_guard{mutex_, reload_stmt, nodes_stmt};
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        reload_stmt = prepare(db_, kReloadRowSql);
+        nodes_stmt = prepare(db_, kLoadNodesSql);
+    }
+
+    for (Row& row : rows) {
+        // Between records, with nothing held: the caller (app shutdown) gets
+        // its thread back within one record instead of one library.
+        if (cancel && cancel->load()) return;
+
         if (row.meta.status != RecordStatus::Ready) {
-            fn(row.meta, nullptr);
+            fn(row.meta, nullptr);  // no lock: a stale row has nothing to read
             continue;
         }
-        const std::unordered_map<std::string, std::vector<uint8_t>> nodes =
-            load_nodes(row.result_id);
+
+        std::vector<uint8_t> structure;
+        std::unordered_map<std::string, std::vector<uint8_t>> nodes;
+        {
+            std::lock_guard<std::recursive_mutex> lock(mutex_);
+            // Has anything been written on this connection since the listing?
+            // sqlite3_total_changes64 counts rows this connection changed with
+            // INSERT, UPDATE or DELETE, ever, and only goes up. (An INSERT OR
+            // IGNORE that ignores counts nothing, which is exactly right here:
+            // nothing changed, so the snapshot is still good.)
+            //
+            // When the count has not moved, no row can have been rewritten, so
+            // the blob listed in phase 1 is still this row's blob and we use it
+            // as is. That is the whole point of the check: re-reading every row
+            // costs about 40% of the walk on a big library, and it only ever
+            // matters when a write landed mid-walk -- which the common case (a
+            // report right after a batch, nothing else writing) never does.
+            //
+            // Otherwise a write did land, so fall back to re-reading the row:
+            // reload_row returns false when the row is gone or a different
+            // record now sits on its id, and that chart is left out of this
+            // walk rather than decoded against paths that are not its own. The
+            // next walk picks it up.
+            //
+            // Either way the blob and the nodes it names come from inside one
+            // lock, so a write between them can never pair one row's shape with
+            // another's paths. Both calls reset their statement before they
+            // return, so this block leaves no cursor open -- the skip path
+            // included.
+            if (sqlite3_total_changes64(db_) == snapshot_changes) {
+                structure = std::move(row.structure);  // rows is not walked again
+            } else if (!reload_row(*reload_stmt, row.meta, row.result_id, structure)) {
+                continue;
+            }
+            nodes = load_nodes(*nodes_stmt, row.result_id);
+        }
+
         HydraRecord record = rebuild_record(
-            row.structure, [&nodes](const std::string& hash) -> const std::vector<uint8_t>* {
+            structure, [&nodes](const std::string& hash) -> const std::vector<uint8_t>* {
                 auto it = nodes.find(hash);
                 return it == nodes.end() ? nullptr : &it->second;
             });

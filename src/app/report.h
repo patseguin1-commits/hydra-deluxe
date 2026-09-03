@@ -5,6 +5,7 @@
 #ifndef HYDRA_APP_REPORT_H
 #define HYDRA_APP_REPORT_H
 
+#include <atomic>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -56,9 +57,13 @@ std::pair<std::string, std::string> tier_for(const std::optional<double>& ms,
 // Reads every stored record at the wanted cap and lens (skipping ones the
 // store calls stale) and produces up to max_paths rows per chart, best score
 // first. hit_window_ms feeds the tier labels only.
+// `cancel`, when given, stops the walk between records and leaves the rows
+// collected so far; the caller is expected to throw the half-built result
+// away.
 std::vector<ReportRow> collect_rows(store::RecordStore& store, int64_t max_paths,
                                     const store::CapQuery& cap, const store::Lens& lens,
-                                    double hit_window_ms = kDefaultHitWindowMs);
+                                    double hit_window_ms = kDefaultHitWindowMs,
+                                    const std::atomic<bool>* cancel = nullptr);
 
 // The self-contained page: the PAGE template with subtitle/footer escaped in
 // and a JSON payload {hit_window, tiers, rows} embedded, so the page's tier
@@ -80,6 +85,10 @@ struct ReportOptions {
     store::Lens lens;
     int hit_window_ms = static_cast<int>(kDefaultHitWindowMs);
     std::string db_path;  // names the footer's source database
+    // Set this and the walk stops between records and generate_report hands
+    // back an empty result -- no rows, no html. Closing the app while a report
+    // builds goes through here; the CLI never sets it.
+    const std::atomic<bool>* cancel = nullptr;
 };
 
 struct GeneratedReport {

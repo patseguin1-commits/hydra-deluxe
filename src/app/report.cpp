@@ -339,7 +339,8 @@ std::pair<std::string, std::string> tier_for(const std::optional<double>& ms,
 
 std::vector<ReportRow> collect_rows(store::RecordStore& store, int64_t max_paths,
                                     const store::CapQuery& cap, const store::Lens& lens,
-                                    double hit_window_ms) {
+                                    double hit_window_ms,
+                                    const std::atomic<bool>* cancel) {
     std::vector<ReportRow> rows;
 
     store.for_each_blob(std::nullopt, cap, lens,
@@ -389,7 +390,7 @@ std::vector<ReportRow> collect_rows(store::RecordStore& store, int64_t max_paths
             row.notes = *s.notecount;
             rows.push_back(std::move(row));
         }
-    });
+    }, cancel);
     return rows;
 }
 
@@ -463,7 +464,11 @@ GeneratedReport generate_report(store::RecordStore& store,
 
     const double w = static_cast<double>(options.hit_window_ms);
     std::vector<ReportRow> rows =
-        collect_rows(store, options.max_paths, options.cap, options.lens, w);
+        collect_rows(store, options.max_paths, options.cap, options.lens, w, options.cancel);
+    // Cancelled part-way through: whatever the walk collected is a partial
+    // library, so nothing is built from it. An empty result says "no report",
+    // and the caller that set the flag already knows why.
+    if (options.cancel && options.cancel->load()) return GeneratedReport{};
     out.rows = static_cast<int64_t>(rows.size());
     if (rows.empty()) return out;
 

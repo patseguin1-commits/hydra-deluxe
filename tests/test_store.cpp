@@ -11,11 +11,14 @@
 
 #include <sqlite3.h>
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <stdexcept>
 #include <optional>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -789,6 +792,124 @@ TEST_CASE("a row in an older path format is Stale even when this build stamped i
     CHECK(purge.counts().second == 1);
     purge.add_record(RecordKey{"purge", "mode", CapQuery::at(16)}, at_cap(16));
     CHECK(purge.counts().second == 1);
+}
+
+TEST_CASE("for_each_blob does not hold the store lock across its callback") {
+    // The walk used to keep the store's lock from its first row to its last,
+    // so anything else that touched the store -- a click on the UI thread --
+    // waited for the whole report. The lock now covers the sqlite calls only.
+    RecordStore store(":memory:");
+    store.add_song("h", "Song", "Artist", "Charter", fixture().song);
+    store.add_record(RecordKey{"h", "mode", CapQuery::at(4)}, at_cap(4));
+
+    std::atomic<bool> in_callback{false};
+    std::atomic<bool> probe_done{false};
+    // Started before the walk on purpose. On the old code the probe blocks on
+    // the lock until the walk has finished, so this test fails on the flag
+    // rather than hanging forever.
+    std::thread probe([&] {
+        while (!in_callback.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        store.counts();
+        probe_done.store(true);
+    });
+
+    int seen = 0;
+    bool probe_arrived_during_callback = false;
+    store.for_each_blob(std::nullopt, CapQuery::at(4), Lens{},
+                        [&](const RecordStore::BlobRow&, const HydraRecord*) {
+                            ++seen;
+                            in_callback.store(true);
+                            const auto deadline = std::chrono::steady_clock::now() +
+                                                  std::chrono::seconds(2);
+                            while (!probe_done.load() &&
+                                   std::chrono::steady_clock::now() < deadline)
+                                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                            probe_arrived_during_callback = probe_done.load();
+                        });
+    probe.join();
+
+    // doctest's assertions are not thread-safe, so every check lands here on
+    // the main thread once the probe is joined.
+    CHECK(seen == 1);
+    CHECK(probe_arrived_during_callback);
+}
+
+TEST_CASE("a write during for_each_blob skips the row it replaced") {
+    // Re-analyzing a chart deletes its result row and inserts a new one. The
+    // walk listed the old row, so when it reaches it the row is gone: that
+    // chart is left out of this one walk rather than decoded against paths
+    // that are no longer its own. The next walk picks it up.
+    //
+    // Three records and not two, on purpose. sqlite hands a deleted id
+    // straight back when it was the highest in the table, so with only "a"
+    // and "b" the rewritten row lands on the same id, still passes the
+    // identity check, and is simply read fresh -- which is right, but it
+    // isn't the case this test is about.
+    RecordStore store(":memory:");
+    for (const char* h : {"a", "b", "c"})
+        store.add_song(h, "Song", "Artist", "Charter", fixture().song);
+    store.add_record(RecordKey{"a", "mode", CapQuery::at(4)}, at_cap(4));
+    store.add_record(RecordKey{"b", "mode", CapQuery::at(4)}, at_cap(4));
+    store.add_record(RecordKey{"c", "mode", CapQuery::at(4)}, at_cap(4));
+
+    std::vector<std::string> yielded;
+    CHECK_NOTHROW(store.for_each_blob(
+        std::nullopt, CapQuery::at(4), Lens{},
+        [&](const RecordStore::BlobRow& meta, const HydraRecord*) {
+            yielded.push_back(meta.hyhash);
+            if (meta.hyhash == "a")
+                store.add_record(RecordKey{"b", "mode", CapQuery::at(4)}, at_cap(4));
+        }));
+    CHECK(yielded == std::vector<std::string>{"a", "c"});
+
+    int second = 0;
+    store.for_each_blob(std::nullopt, CapQuery::at(4), Lens{},
+                        [&](const RecordStore::BlobRow&, const HydraRecord*) { ++second; });
+    CHECK(second == 3);
+}
+
+TEST_CASE("a rewritten row that lands on its own id is read fresh, not mixed up") {
+    // The other half of the same write: sqlite reuses the id when the deleted
+    // row was the highest one, so the walk finds a row where it expected one.
+    // The identity columns still match, and the blob and the nodes it names
+    // are read together under one lock, so what comes back is the new row --
+    // never one chart's shape paired with another chart's paths.
+    RecordStore store(":memory:");
+    store.add_song("a", "Song A", "Artist", "Charter", fixture().song);
+    store.add_song("b", "Song B", "Artist", "Charter", fixture().song);
+    store.add_record(RecordKey{"a", "mode", CapQuery::at(4)}, at_cap(4));
+    store.add_record(RecordKey{"b", "mode", CapQuery::at(4)}, at_cap(4));
+
+    std::vector<std::string> yielded;
+    int decoded = 0;
+    CHECK_NOTHROW(store.for_each_blob(
+        std::nullopt, CapQuery::at(4), Lens{},
+        [&](const RecordStore::BlobRow& meta, const HydraRecord* record) {
+            yielded.push_back(meta.hyhash);
+            if (record) ++decoded;
+            if (meta.hyhash == "a")
+                store.add_record(RecordKey{"b", "mode", CapQuery::at(4)}, at_cap(4));
+        }));
+    CHECK(yielded == std::vector<std::string>{"a", "b"});
+    CHECK(decoded == 2);
+}
+
+TEST_CASE("for_each_blob stops between rows when its cancel flag is set") {
+    RecordStore store(":memory:");
+    store.add_song("a", "Song A", "Artist", "Charter", fixture().song);
+    store.add_song("b", "Song B", "Artist", "Charter", fixture().song);
+    store.add_record(RecordKey{"a", "mode", CapQuery::at(4)}, at_cap(4));
+    store.add_record(RecordKey{"b", "mode", CapQuery::at(4)}, at_cap(4));
+
+    std::atomic<bool> cancel{false};
+    int seen = 0;
+    store.for_each_blob(std::nullopt, CapQuery::at(4), Lens{},
+                        [&](const RecordStore::BlobRow&, const HydraRecord*) {
+                            ++seen;
+                            cancel.store(true);
+                        },
+                        &cancel);
+    CHECK(seen == 1);
 }
 
 TEST_CASE("the listing and a lookup agree on which row is a chart's answer") {

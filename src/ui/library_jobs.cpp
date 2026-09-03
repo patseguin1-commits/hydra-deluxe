@@ -224,8 +224,16 @@ void ReportJob::run() {
         options.lens = lens_;
         options.hit_window_ms = hit_window_ms_;
         options.db_path = app::db_path();
+        // Closing Hydra sets this. Without it the window waits for the whole
+        // library to be read before it can shut down.
+        options.cancel = &cancel_;
         app::report::GeneratedReport report =
             app::report::generate_report(store_, options);
+        // Checked before the "no records" throw and before any file is
+        // written: a cancelled run has no rows because it stopped, not
+        // because the store is empty, and it must leave the last report on
+        // disk alone.
+        if (is_cancelled()) return false;
         if (report.rows == 0) throw std::runtime_error("no records stored yet");
 
         std::filesystem::path outpath = app::report_html_path();

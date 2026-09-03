@@ -26,6 +26,7 @@
 #ifndef HYDRA_STORE_RECORD_STORE_H
 #define HYDRA_STORE_RECORD_STORE_H
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -41,6 +42,7 @@
 #include "store/path_codec.h"
 
 struct sqlite3;
+struct sqlite3_stmt;
 
 namespace hydra::store {
 
@@ -300,10 +302,21 @@ public:
     // meta.status is Ready, so a stale row's blob is never decoded. Mirrors
     // hystore.iter_blobs: timecodes are NOT restored (the report only needs
     // pathstrings and summaries, which never read them).
+    //
+    // The lock is taken and released once per record, never held across fn --
+    // this walk reads the whole library, and anything else touching the store
+    // (the UI thread) must not wait on it. A record that was rewritten after
+    // the walk listed it is left out of this walk rather than decoded against
+    // the new row's nodes; the next walk picks it up.
+    //
+    // `cancel`, when given, is read between records with no lock held: set it
+    // and the walk stops there. Nothing else is signalled -- the caller knows
+    // it asked to stop.
     void for_each_blob(
         const std::optional<std::string>& chartmode, const CapQuery& cap,
         const Lens& lens,
-        const std::function<void(const BlobRow&, const HydraRecord*)>& fn);
+        const std::function<void(const BlobRow&, const HydraRecord*)>& fn,
+        const std::atomic<bool>* cancel = nullptr);
 
     // One-time import of the pre-1.6 Uncapped edition's separate library.
     // Copies that file's current-version records (and their songs) into this
@@ -369,6 +382,14 @@ public:
 
 private:
     sqlite3* db_ = nullptr;
+    // The rule: this lock covers sqlite calls and nothing else -- decoding a
+    // blob and calling a caller's callback happen outside it. A prepared
+    // statement is compiled, stepped, reset and finalized with the lock held,
+    // because all four are sqlite calls. A statement's handle may outlive the
+    // locked block only if it is reset first, so no cursor is open while
+    // unlocked, and only if something guarantees the finalize happens under the
+    // lock later; for_each_blob is the one place that does this, reusing two
+    // statements across the walk instead of recompiling them per row.
     std::recursive_mutex mutex_;
 
     void exec(const char* sql);
@@ -379,8 +400,30 @@ private:
     void create_result_tables();
     void migrate_records_to_results();
     // Every path node one result references, keyed by hash — what
-    // path_codec::rebuild_record's lookup closure reads.
+    // path_codec::rebuild_record's lookup closure reads. The `stmt` overload
+    // reads through a statement its caller compiled: for_each_blob prepares one
+    // per walk and reuses it for every row rather than compiling one each time.
+    // It resets that statement before returning, so the caller can drop the
+    // lock the moment it comes back. The plain overload compiles and finalizes
+    // its own statement, for callers that read one result.
+    std::unordered_map<std::string, std::vector<uint8_t>> load_nodes(sqlite3_stmt* stmt,
+                                                                    int64_t result_id);
     std::unordered_map<std::string, std::vector<uint8_t>> load_nodes(int64_t result_id);
+    // Re-reads one result row for_each_blob listed earlier, under the lock the
+    // caller holds, through a statement the caller compiled once for the whole
+    // walk. Only runs when something was written on this connection after the
+    // walk listed its rows -- with no write, the listing's own blob is still
+    // this row's blob and re-reading it would only cost time. Resets that
+    // statement on every path out, including the two skip paths, so nothing is
+    // left mid-step when the caller unlocks. Fills
+    // `structure` and returns true when the row at `result_id` is still the
+    // record `meta` describes. Returns false when the row is gone, or when its
+    // identity (chart, mode, version, cap) differs -- result ids are reused
+    // after a delete, so a row rewritten since the walk started can land on the
+    // same id, and decoding it as the old record would attach one chart's paths
+    // to another chart's name.
+    bool reload_row(sqlite3_stmt* stmt, const BlobRow& meta, int64_t result_id,
+                    std::vector<uint8_t>& structure);
     std::optional<std::string> meta_get(const std::string& key);
     void meta_set(const std::string& key, const std::string& value);
 };

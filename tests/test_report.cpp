@@ -4,12 +4,23 @@
 
 #include "doctest.h"
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+#include <atomic>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
 #include "app/analysis.h"
 #include "app/report.h"
+#include "app/report_files.h"
 #include "core/squeeze_rating.h"
+#include "core/winstr.h"
 #include "corpus_util.h"
 #include "store/record_store.h"
 
@@ -216,4 +227,44 @@ TEST_CASE("generate_report: one seam frames the page for every entry point") {
     report::GeneratedReport none = report::generate_report(empty, options);
     CHECK(none.rows == 0);
     CHECK(none.html.empty());
+}
+
+TEST_CASE("generate_report hands back nothing when its cancel flag is set") {
+    // Closing Hydra while the report builds. The walk stops between records,
+    // and no page is framed from the part of the library it managed to read.
+    store::RecordStore store(":memory:");
+    REQUIRE(fill_store(store, 4, 2) > 0);
+
+    std::atomic<bool> cancel{true};
+    report::ReportOptions options;
+    options.max_paths = 5;
+    options.db_path = "C:/somewhere/hydra.db";
+    options.cancel = &cancel;
+
+    report::GeneratedReport result = report::generate_report(store, options);
+    CHECK(result.rows == 0);
+    CHECK(result.html.empty());
+}
+
+TEST_CASE("write_report_file swaps the page in and leaves no .tmp behind") {
+    // Same temp-path recipe as tests/test_store.cpp's temp_db: the Windows
+    // temp directory, tagged and pid-suffixed so parallel test runs don't
+    // collide.
+    wchar_t tmp_dir[MAX_PATH];
+    GetTempPathW(MAX_PATH, tmp_dir);
+    const std::string path = hydra::wide_to_utf8(tmp_dir) + "hydra_test_report_file_" +
+                              std::to_string(GetCurrentProcessId()) + ".html";
+
+    hydra::app::write_report_file(path, "<html>old</html>");
+    hydra::app::write_report_file(path, "<html>new</html>");
+
+    std::ifstream in(path, std::ios::binary);
+    std::ostringstream contents;
+    contents << in.rdbuf();
+    CHECK(contents.str() == "<html>new</html>");
+
+    CHECK_FALSE(std::filesystem::exists(path + ".tmp"));
+
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
 }

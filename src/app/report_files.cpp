@@ -7,6 +7,7 @@
 
 #include <fstream>
 #include <stdexcept>
+#include <system_error>
 #include <utility>
 
 #include "app/config.h"
@@ -47,10 +48,30 @@ bool report_file_exists() {
 }
 
 void write_report_file(const std::filesystem::path& outpath, const std::string& html) {
-    std::ofstream f(outpath, std::ios::binary | std::ios::trunc);
+    // A reader can click "Open path report" at any moment, including while
+    // we're mid-write. To make sure they never see a half-written page, we
+    // finish writing under a temp name first and only swap it into place
+    // with one rename once it's complete.
+    std::filesystem::path tmp = outpath;
+    tmp += ".tmp";
+
+    std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
     if (!f) throw std::runtime_error("cannot write " + outpath.u8string());
     f << html;
     f.close();
+    if (!f) {
+        std::error_code ec;
+        std::filesystem::remove(tmp, ec);
+        throw std::runtime_error("cannot write " + outpath.u8string());
+    }
+
+    try {
+        std::filesystem::rename(tmp, outpath);
+    } catch (const std::filesystem::filesystem_error&) {
+        std::error_code ec;
+        std::filesystem::remove(tmp, ec);
+        throw std::runtime_error("cannot write " + outpath.u8string());
+    }
 }
 
 }  // namespace hydra::app

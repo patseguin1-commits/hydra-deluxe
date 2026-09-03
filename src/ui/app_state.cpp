@@ -105,6 +105,7 @@ void AppState::start_batch(bool redo) {
     batch_job = std::make_unique<BatchJob>(search_opt, settings.chartmode_key(),
                                            settings.to_analysis_settings(), *store, redo);
     report_started = false;
+    report_outcome_shown = false;
     batch_job->start();
 }
 

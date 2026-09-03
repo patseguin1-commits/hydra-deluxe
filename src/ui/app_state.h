@@ -147,6 +147,11 @@ public:
     // report per run, however long the finished modal stays open.
     bool report_started = false;
 
+    // Whether the batch modal already showed this report job's outcome. When
+    // it didn't (you clicked Continue while the report was still building),
+    // the main window posts a status line when the job lands instead.
+    bool report_outcome_shown = false;
+
     // "Compare dmleaderboards user" picker + its two network jobs. The fetch
     // job loads the ladder into dm_users; the report job builds the HTML.
     bool dm_picker_open = false;
