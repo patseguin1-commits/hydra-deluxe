@@ -129,6 +129,7 @@ add_library(hydra_core STATIC
     src/core/model.cpp
     src/core/scoring.cpp
     src/core/squeeze_rating.cpp
+    src/core/replay.cpp
     src/core/strutil.cpp
     src/core/winstr.cpp
     src/parse/midi.cpp
@@ -319,6 +320,7 @@ add_executable(hydra_tests
     tests/test_song.cpp
     tests/test_srb.cpp
     tests/test_search.cpp
+    tests/test_replay.cpp
     tests/test_store.cpp
     tests/test_path_codec.cpp
     tests/test_analysis.cpp
@@ -393,5 +395,16 @@ add_executable(hydra_bench EXCLUDE_FROM_ALL tools/bench.cpp)
 target_link_libraries(hydra_bench PRIVATE hydra_core hydra_warnings)
 target_include_directories(hydra_bench PRIVATE tests third_party/json)
 target_compile_definitions(hydra_bench PRIVATE
+    HYDRA_INPUT_DIR="${CMAKE_SOURCE_DIR}/testdata/input"
+)
+
+# ---- hydra_replay: arbitrary-path scorer (not a test; built on demand) ----
+# Prices a hand-written Star Power path chord by chord, dumps a record's
+# stored paths, and self-checks the replay against the engine over the
+# corpus (hence the same corpus_util.h wiring hydra_bench uses).
+add_executable(hydra_replay EXCLUDE_FROM_ALL tools/replay.cpp)
+target_link_libraries(hydra_replay PRIVATE hydra_core hydra_warnings)
+target_include_directories(hydra_replay PRIVATE tests third_party/json)
+target_compile_definitions(hydra_replay PRIVATE
     HYDRA_INPUT_DIR="${CMAKE_SOURCE_DIR}/testdata/input"
 )

@@ -350,6 +350,19 @@ std::string sig_of(const DirEntry& notes, const DirEntry* ini) {
 
 }  // namespace
 
+// Hashes the whole chart file with MD5, the same way the library scan does.
+// So the result here always matches the hyhash already stored in the
+// songmeta/charts rows for that chart.
+std::string hash_chart_file(const std::string& path) {
+    try {
+        Md5Provider md5;
+        HashedFile hf = stream_md5(md5.handle(), path, 0);
+        return hf.md5;
+    } catch (const std::exception&) {
+        return {};
+    }
+}
+
 std::pair<std::vector<ScanItem>, std::vector<std::string>> discover_charts(
     const std::vector<std::string>& rootfolders, const ScanCallbacks& callbacks,
     const store::ChartLibraryCache* cache) {

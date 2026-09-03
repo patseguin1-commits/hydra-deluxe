@@ -78,6 +78,11 @@ std::pair<std::vector<ScanItem>, std::vector<std::string>> discover_charts(
 // (.mid/.chart/.sng/.srb).
 std::map<std::string, int> count_chart_chords(const std::string& filepath);
 
+// The chart file's hyhash: the same MD5 the library scan writes to the
+// songmeta/charts rows, so a tool can look a chart up in the record store
+// by path alone. Returns an empty string if the file cannot be read.
+std::string hash_chart_file(const std::string& path);
+
 // The settings a batch run applies uniformly, mirroring the `settings` tuple
 // hybatch.analyze_for_store's job carries. Everything the search itself reads
 // lives on the SearchSettings base; the two flags here are parse-time only.

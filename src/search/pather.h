@@ -44,6 +44,19 @@ struct SearchSettings {
 std::vector<Path> search_allzero(const ScoreGraph& graph,
                                  const std::function<void(float)>& on_progress = {});
 
+// The engine's own pricing of one specific path: activate at exactly
+// `act_ticks` (node ticks of the activation fills, ascending) and at no other
+// fill. Every squeeze variant of that path comes back, best score first, with
+// deact_tick / sp_meter / skips / sqinouts stamped by the engine exactly as a
+// normal search would stamp them. Empty when the engine cannot realize the
+// set (an activation with under 2 bars, a fill it cannot spawn in time, a tick
+// that is not a fill node). settings.sp_cap must be a fixed cap (Auto is
+// rejected with std::invalid_argument). settings.depth_* and ms_filter are
+// ignored: the search keeps everything and applies no timing filter, because
+// the caller asked for this path, not the best one.
+std::vector<Path> search_target(const Song& song, const SearchSettings& settings,
+                                const std::vector<int64_t>& act_ticks);
+
 // Full analysis for one chart. settings.sp_cap is the SP meter ceiling in
 // bars: 4 is Clone Hero's rule and runs exactly the classic single pass; any
 // other number runs a single pass at that ceiling; nullopt is Auto, the

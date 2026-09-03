@@ -6,7 +6,8 @@
 
 namespace hydra {
 
-CategoryScores category_scores(const Chord& chord, int combo) {
+CategoryScores category_scores(const Chord& chord, int combo,
+                                std::vector<CategoryScores>* per_note) {
     // Every possible cross-multiplication of the score multipliers, named as
     // in the original.
     int base_note = 0, base_cymbal = 0;
@@ -22,6 +23,10 @@ CategoryScores category_scores(const Chord& chord, int combo) {
     int sqout_reduction = 0;
 
     const std::vector<ChordNote> ordering = chord.notes(true);
+    if (per_note) {
+        per_note->clear();
+        per_note->reserve(ordering.size());
+    }
     for (size_t i = 0; i < ordering.size(); ++i) {
         const ChordNote& note = ordering[i];
         const bool is_cymbal = note.is_cymbal();
@@ -62,6 +67,25 @@ CategoryScores category_scores(const Chord& chord, int combo) {
         if (i == 0) {
             sqout_reduction =
                 (basevalue + cymb) * combo_multiplier * (is_dynamic ? 2 : 1);
+        }
+
+        if (per_note) {
+            CategoryScores note_scores;
+            note_scores.base = basevalue + cymb + dyn_cymb;
+            note_scores.combo = basevalue * extra + cymb * extra +
+                                 (is_dynamic ? basevalue * extra : 0) +
+                                 dyn_cymb * extra;
+            note_scores.sp = basevalue + cymb + basevalue * extra +
+                              cymb * extra + (is_dynamic ? basevalue : 0) +
+                              dyn_cymb + (is_dynamic ? basevalue * extra : 0) +
+                              dyn_cymb * extra;
+            note_scores.accent = is_accent ? basevalue : 0;
+            note_scores.ghost = is_ghost ? basevalue : 0;
+            note_scores.sqout_reduction =
+                (i == 0) ? (basevalue + cymb) * combo_multiplier *
+                               (is_dynamic ? 2 : 1)
+                         : 0;
+            per_note->push_back(note_scores);
         }
     }
 

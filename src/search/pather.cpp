@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <stdexcept>
 
 #include "search/engine.h"
 #include "search/graph.h"
@@ -95,6 +96,52 @@ std::vector<Path> search_allzero(const ScoreGraph& graph,
     // fill can never be summoned in time). The search then returns a single
     // path with no activations, whose pathstring is empty.
     if (paths.size() == 1 && !paths[0].has_activations()) paths.clear();
+    return paths;
+}
+
+std::vector<Path> search_target(const Song& song, const SearchSettings& settings,
+                                const std::vector<int64_t>& act_ticks) {
+    if (!settings.sp_cap)
+        throw std::invalid_argument(
+            "search_target needs a fixed SP cap; Auto has no single graph to "
+            "price the path against");
+
+    std::vector<int64_t> ticks = act_ticks;
+    std::sort(ticks.begin(), ticks.end());
+    ticks.erase(std::unique(ticks.begin(), ticks.end()), ticks.end());
+
+    ScoreGraph graph(song, std::optional<int>(*settings.sp_cap),
+                     settings.legacy_fill_deadline ? FillDeadlineRule::Ch10
+                                                   : FillDeadlineRule::Ch11);
+
+    // The caller named the path, so nothing may prune it: the widest possible
+    // points band keeps every survivor, and no timing filter is applied. The
+    // band is compared as `score + depth_value < best` in int64 arithmetic, so
+    // a billion cannot overflow.
+    std::vector<Path> paths;
+    try {
+        paths = run_search(graph, DepthMode::Points, /*depth_value=*/1'000'000'000,
+                           /*ms_filter=*/std::nullopt, /*no_skips=*/false,
+                           /*hard_ms_filter=*/false, {}, &ticks);
+    } catch (const std::runtime_error&) {
+        // The frontier emptied: this activation set is not realizable on this
+        // chart. That is the normal failure for a targeted search, not a bug.
+        return {};
+    }
+
+    // A tick the search never met as an activation opportunity -- not a fill
+    // node at all, or one the path was already under Star Power for -- does not
+    // empty the frontier: the path just quietly comes back with fewer
+    // activations than asked for. That is still an unrealizable set, so it
+    // reports as one.
+    for (const Path& p : paths) {
+        const std::vector<Activation> acts = p.all_activations();
+        if (acts.size() != ticks.size()) return {};
+        for (size_t i = 0; i < acts.size(); ++i) {
+            if (!acts[i].timecode || acts[i].timecode->ticks() != ticks[i])
+                return {};
+        }
+    }
     return paths;
 }
 

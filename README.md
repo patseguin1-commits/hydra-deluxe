@@ -87,6 +87,30 @@ The tests run against the checked-in chart corpus under `testdata/input/`;
 nothing else is needed. `hydra_tests` asserts structural invariants and
 lossless round-trips over that corpus.
 
+### Developer tools
+
+Two more console programs live in `tools/` and are built on demand
+(`.\build_cpp.ps1 -Target hydra_bench`), not shipped. `hydra_bench` times the
+analysis path — parse, search and database write, separately, per chart — so a
+change to the engine can be measured instead of guessed at.
+
+`hydra_replay` answers "what is *my* path worth?". Give it a chart and a list
+of activation windows in ticks. It walks the chart chord by chord. For each
+chord it prints the chord's own score, the running totals, and whether the
+chord fell under Star Power — all as JSON, so it can be diffed or graphed.
+`hydra_replay dump` reads the windows straight out of a stored record, so you
+can start from a path Hydra already found and change one activation.
+`hydra_replay target` prices a path the search never kept. Give it the
+activation ticks and the engine is made to activate at exactly those fills and
+nowhere else; back come that path's squeeze variants with their windows, meter
+and skips stamped the engine's way. The search folds equal-scoring paths into
+one another, so a real player's path is often not in any record no matter how
+deep the search; this is how you get its number anyway.
+`hydra_replay selfcheck` is what keeps the numbers honest: it re-analyzes
+every corpus chart, replays every path the engine found, and fails if the
+replay's six score categories disagree with the engine's own by a single
+point.
+
 ## The SP cap
 
 Every path Hydra finds rests on one rule taken from Clone Hero: the Star Power

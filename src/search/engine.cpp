@@ -242,7 +242,8 @@ class Engine {
 public:
     Engine(const Enum& en, bool has_sp_cap, int32_t sp_cap, DepthMode depth_mode,
            int32_t depth_value, bool has_ms_filter, double ms_filter,
-           bool no_skips, bool hard_ms_filter)
+           bool no_skips, bool hard_ms_filter,
+           const std::vector<int64_t>* target_act_ticks = nullptr)
         : en_(en),
           has_sp_cap_(has_sp_cap),
           sp_cap_(sp_cap),
@@ -251,7 +252,8 @@ public:
           has_ms_filter_(has_ms_filter),
           ms_filter_(ms_filter),
           no_skips_(no_skips),
-          hard_ms_filter_(hard_ms_filter) {}
+          hard_ms_filter_(hard_ms_filter),
+          target_act_ticks_(target_act_ticks) {}
 
     bool run();
 
@@ -360,6 +362,9 @@ private:
     // the limit is dropped outright instead of surviving while nothing
     // outscores it. BFS only. See reduce_iteration_paths for why this is exact.
     bool hard_ms_filter_;
+    // When set, the exact node ticks the search must activate at, ascending.
+    // Every other fill is declined. Owned by the caller for the run's duration.
+    const std::vector<int64_t>* target_act_ticks_ = nullptr;
 
     std::vector<Act> acts_;
     std::vector<SqNode> sqs_;
@@ -1026,17 +1031,38 @@ bool Engine::run() {
                 const bool can_extend = branch_deactivate(p, &child, &has_child);
                 if (can_extend) next_.push_back(p);
             } else {
+                // Read the fill's tick before branching: a refused activation
+                // can leave p.node as NODE_BROKEN.
+                const int64_t fill_tick = node(p.node).tick;
                 has_child = branch_activate(p, &child);
                 if (p.node == NODE_BROKEN) return false;
-                // The parent is the path that declined this opportunity, and
-                // branch_activate has just charged it a skip. Under no_skips_
-                // that parent can no longer reach an all-0 path, so drop it and
-                // keep only the activating child. branch_activate charges the
-                // skip solely on the branch that produced a child -- a refused
-                // opportunity (no branch edge, SP under 2 bars, blown fill
-                // deadline) leaves currentskips alone, so the surviving path is
-                // still free to activate later and still read as 0 skips.
-                if (!(no_skips_ && has_child)) next_.push_back(p);
+                if (target_act_ticks_) {
+                    // A targeted search follows the caller's activation set and
+                    // nothing else. On a listed fill only the activating child
+                    // survives; if the engine refused that activation there is
+                    // no child and this path simply dies. On any other fill only
+                    // the declining parent survives -- branch_activate has
+                    // already charged it the skip, which is the right
+                    // bookkeeping, since skips count fills passed while
+                    // activation was possible.
+                    const bool wanted =
+                        std::binary_search(target_act_ticks_->begin(),
+                                           target_act_ticks_->end(), fill_tick);
+                    if (!wanted) {
+                        next_.push_back(p);
+                        has_child = false;
+                    }
+                } else if (!(no_skips_ && has_child)) {
+                    // The parent is the path that declined this opportunity, and
+                    // branch_activate has just charged it a skip. Under no_skips_
+                    // that parent can no longer reach an all-0 path, so drop it and
+                    // keep only the activating child. branch_activate charges the
+                    // skip solely on the branch that produced a child -- a refused
+                    // opportunity (no branch edge, SP under 2 bars, blown fill
+                    // deadline) leaves currentskips alone, so the surviving path is
+                    // still free to activate later and still read as 0 skips.
+                    next_.push_back(p);
+                }
             }
             if (has_child) next_.push_back(child);
         }
@@ -1233,7 +1259,8 @@ std::vector<MPath> rebuild(const Enum& en, const std::vector<OutPath>& out_paths
 std::vector<MPath> run_search(const ScoreGraph& graph, DepthMode depth_mode,
                               int depth_value, std::optional<double> ms_filter,
                               bool no_skips, bool hard_ms_filter,
-                              const std::function<void(float)>& on_progress) {
+                              const std::function<void(float)>& on_progress,
+                              const std::vector<int64_t>* target_act_ticks) {
     Enum en = enumerate(graph);
 
     const bool has_cap = graph.sp_meter_cap().has_value();
@@ -1241,7 +1268,7 @@ std::vector<MPath> run_search(const ScoreGraph& graph, DepthMode depth_mode,
 
     Engine engine(en, has_cap, cap, depth_mode, depth_value,
                   ms_filter.has_value(), ms_filter.value_or(0.0),
-                  no_skips, hard_ms_filter);
+                  no_skips, hard_ms_filter, target_act_ticks);
     if (on_progress) engine.set_progress_cb(on_progress);
 
     if (!engine.run())

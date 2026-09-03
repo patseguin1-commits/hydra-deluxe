@@ -32,11 +32,20 @@ enum class DepthMode { Scores, Points };
 // default an over-limit path still survives while nothing outscores it, so the
 // best path a search reports can need more timing than the limit allows; with
 // this set, an over-limit path is dropped outright.
+// target_act_ticks, when non-null, pins the activation set: a sorted list of
+// node ticks where the search MUST activate, and nowhere else. Every other
+// activation opportunity is declined. It replaces no_skips's rule for the same
+// branch point, so the search returns exactly one path -- the caller's -- with
+// all its squeeze variants, priced the engine's own way. An unrealizable set
+// (an activation with SP under 2 bars, a fill the engine cannot spawn in time,
+// a tick that is not a fill node) empties the frontier, which surfaces as the
+// usual std::runtime_error.
 std::vector<Path> run_search(const ScoreGraph& graph, DepthMode depth_mode,
                              int depth_value, std::optional<double> ms_filter,
                              bool no_skips = false,
                              bool hard_ms_filter = false,
-                             const std::function<void(float)>& on_progress = {});
+                             const std::function<void(float)>& on_progress = {},
+                             const std::vector<int64_t>* target_act_ticks = nullptr);
 
 }  // namespace hydra
 
