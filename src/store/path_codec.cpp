@@ -149,8 +149,8 @@ Path read_tree_entry(BinaryReader& r, const PathNodeLookup& lookup) {
 std::vector<uint8_t> encode_path_node(const Path& path) {
     BinaryWriter w;
     w.u32(kPathNodeFormatVersion);
-    // The activation layout is the record blob's newest one; a node payload
-    // never carries an older spelling, so the version passed is fixed.
+    // A newly written node payload always carries the record blob's newest
+    // activation layout, so the version passed is fixed.
     detail::write_path_node(w, path, kBlobFormatVersion);
     return std::move(w.bytes);
 }
@@ -158,6 +158,9 @@ std::vector<uint8_t> encode_path_node(const Path& path) {
 Path decode_path_node(const std::vector<uint8_t>& payload) {
     BinaryReader r(payload);
     uint32_t version = r.u32();
+    // Only the current node version is readable. Version 1 held activations
+    // in the blob v3 layout; it is reachable only through a version-1
+    // structure, which the store no longer decodes at all.
     if (version != kPathNodeFormatVersion)
         throw SerializeError("unsupported path node format version");
 

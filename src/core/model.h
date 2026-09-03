@@ -256,6 +256,12 @@ struct Activation {
     std::vector<SPSqueeze> sqinouts;
     std::optional<double> e_offset;
 
+    // The deactivation node D: the chart tick where this activation's Star
+    // Power ends, extensions from phrases collected mid-SP included. Stamped
+    // by the search at copy-out (blob v4). Unset only on a record written
+    // before v4; nothing in the codebase re-derives it.
+    std::optional<int64_t> deact_tick;
+
     // Frontend transfer scales, computed by the search and stored with the
     // record (blob v3; older blobs default to 1.0 = the flat-tempo identity)
     // so the details display keeps its ratios when no SongTiming is at hand.
@@ -288,10 +294,11 @@ struct Activation {
     std::vector<BackendSqueeze> display_backends() const;
 };
 
-// The scales above are stored data only. Everything that derives or judges
-// them — transfer_scale_between, activation_deact_tick,
-// frontend_transfer_scales, and the display-layer rating built on them —
-// lives in core/squeeze_rating.h.
+// deact_tick and the scales above are stored data only. Everything that
+// derives or judges them — transfer_scale_between, frontend_transfer_scales,
+// and the display-layer rating built on them — lives in
+// core/squeeze_rating.h. activation_deact_tick lives there too, but it
+// derives nothing: it just hands back the stored deact_tick.
 
 // ---- Path ---------------------------------------------------------------
 

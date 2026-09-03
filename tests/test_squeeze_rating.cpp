@@ -27,6 +27,10 @@ TEST_CASE("frontend_transfer_scales: measure-rate ratio, both directions") {
     Activation act;
     act.timecode = st.timecode(0);
     act.sp_meter = 8;  // 16 measures: 10 of 7/8 + 6 of 7/16 -> tick 21840
+    // The node the search would have stamped: no SqIn yet, so the plain
+    // act + 2*B measures (this is what the old activation_deact_tick fallback
+    // computed for a no-backend-rows, no-SqIn activation).
+    act.deact_tick = st.plusmeasure(*act.timecode, 16).ticks();
 
     // End reconstruction matches plusmeasure.
     CHECK(st.plusmeasure(*act.timecode, 16).ticks() == 21840);
@@ -45,6 +49,10 @@ TEST_CASE("frontend_transfer_scales: measure-rate ratio, both directions") {
     // both ratios are unchanged. The pre end never moves.
     act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, 5.0});
     act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, 6.0});
+    // With a SqIn present, the old fallback's node was act + 2*B + 2 measures;
+    // re-stamp deact_tick to match (frontend_transfer_scales now reads it
+    // straight off the record and steps `pre` back down itself).
+    act.deact_tick = st.plusmeasure(*act.timecode, 18).ticks();
     auto sqin_scales = frontend_transfer_scales(act, st);
     REQUIRE(sqin_scales.has_value());
     CHECK(sqin_scales->pre.late == doctest::Approx(scales->pre.late));
@@ -53,6 +61,8 @@ TEST_CASE("frontend_transfer_scales: measure-rate ratio, both directions") {
     // A SqOut does not move either end.
     act.sqinouts.clear();
     act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -5.0});
+    // No SqIn any more (a SqOut doesn't count): back to act + 2*B measures.
+    act.deact_tick = st.plusmeasure(*act.timecode, 16).ticks();
     auto sqout_scales = frontend_transfer_scales(act, st);
     REQUIRE(sqout_scales.has_value());
     CHECK(sqout_scales->pre.late == doctest::Approx(scales->pre.late));
@@ -65,6 +75,13 @@ TEST_CASE("frontend_transfer_scales: measure-rate ratio, both directions") {
     bare.timecode = st.timecode(0);
     bare.sp_meter.reset();
     CHECK(!frontend_transfer_scales(bare, st).has_value());
+
+    // Has both timecode and sp_meter, but no deact_tick: a pre-v4 record
+    // cannot say where SP ended, and nothing guesses any more.
+    Activation partial;
+    partial.timecode = st.timecode(0);
+    partial.sp_meter = 2;
+    CHECK(!frontend_transfer_scales(partial, st).has_value());
 }
 
 TEST_CASE("frontend_transfer_scales: a SqIn splits the two ends") {
@@ -79,6 +96,11 @@ TEST_CASE("frontend_transfer_scales: a SqIn splits the two ends") {
     act.timecode = st.timecode(0);
     act.sp_meter = 2;
     act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, 5.0});
+    // The node the old fallback derived (act + 2*B + 2 measures, the SqIn
+    // present): 6 measures -> tick 11520. A 0-offset backend row placed at
+    // the same tick below recovers the identical node, so this one value
+    // covers both calls in this test.
+    act.deact_tick = st.plusmeasure(*act.timecode, 6).ticks();
 
     auto scales = frontend_transfer_scales(act, st);
     REQUIRE(scales.has_value());
@@ -115,6 +137,8 @@ TEST_CASE("frontend_transfer_scales: direction-dependent at boundaries") {
     Activation act;
     act.timecode = st.timecode(2880);
     act.sp_meter = 3;  // 6 measures of 7/8 -> end tick 12960
+    // No SqIn, no backend rows: the old fallback's node, act + 2*B measures.
+    act.deact_tick = st.plusmeasure(*act.timecode, 6).ticks();
 
     CHECK(st.plusmeasure(*act.timecode, 6).ticks() == 12960);
 
@@ -138,6 +162,8 @@ TEST_CASE("frontend_transfer_scales: direction-dependent at boundaries") {
     Activation act2;
     act2.timecode = st2.timecode(1920);
     act2.sp_meter = 2;  // 4 measures -> end tick 9600
+    // No SqIn, no backend rows: the old fallback's node, act + 2*B measures.
+    act2.deact_tick = st2.plusmeasure(*act2.timecode, 4).ticks();
 
     auto scale2 = frontend_transfer_scales(act2, st2);
     REQUIRE(scale2.has_value());
@@ -150,6 +176,8 @@ TEST_CASE("frontend_transfer_scales: direction-dependent at boundaries") {
     Activation act3;
     act3.timecode = flat.timecode(0);
     act3.sp_meter = 2;
+    // No SqIn, no backend rows: the old fallback's node, act + 2*B measures.
+    act3.deact_tick = flat.plusmeasure(*act3.timecode, 4).ticks();
     auto flat_scale = frontend_transfer_scales(act3, flat);
     REQUIRE(flat_scale.has_value());
     CHECK(flat_scale->pre.early == doctest::Approx(1.0).epsilon(1e-12));
@@ -173,6 +201,10 @@ TEST_CASE("field fixture: What's My Age Again? (Sync Chart) SqOut") {
     Activation act;
     act.timecode = st.timecode(57600);
     act.sp_meter = 3;  // 6 measures -> tick 69120
+    // No SqIn, no backend rows yet: the old fallback's node, act + 2*B
+    // measures -- this activation collects no phrase mid-SP, so it is also
+    // exactly the node a 0.0-offset backend row would name (see below).
+    act.deact_tick = st.plusmeasure(*act.timecode, 6).ticks();
     CHECK(st.plusmeasure(*act.timecode, 6).ticks() == 69120);
 
     auto scales = frontend_transfer_scales(act, st);
@@ -230,44 +262,25 @@ TEST_CASE("field fixture: What's My Age Again? (Sync Chart) SqOut") {
     CHECK(stamped.is_difficult());
 }
 
-TEST_CASE("activation_deact_tick: the 0-offset row wins, else the measure fallback") {
-    std::map<int64_t, int64_t> tpm{{0, 1920}};
-    std::map<int64_t, double> bpm{{0, 120.0}};
-    SongTiming st(480, tpm, bpm);
+TEST_CASE("activation_deact_tick: the stored node, read back") {
+    // activation_deact_tick derives nothing any more: it just hands back
+    // act.deact_tick. No SongTiming is needed to test that.
 
+    // Set: returns exactly what was stored.
     Activation act;
-    act.timecode = st.timecode(3840);
-    act.sp_meter = 2;
+    act.deact_tick = 46080;
+    CHECK(activation_deact_tick(act) == 46080);
 
-    // No backend rows: act + 4 measures.
-    CHECK(activation_deact_tick(act, st) == st.plusmeasure(*act.timecode, 4).ticks());
+    // A timecode and sp_meter at hand but no deact_tick: nullopt. This is the
+    // point of the change -- there is no measure-count fallback any more.
+    Activation stale;
+    stale.timecode = Timecode::raw(3840);
+    stale.sp_meter = 2;
+    CHECK(!activation_deact_tick(stale).has_value());
 
-    // A SqIn extends the fallback by one +2-measure step.
-    Activation with_sqin = act;
-    with_sqin.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, 12.0});
-    CHECK(activation_deact_tick(with_sqin, st) ==
-          st.plusmeasure(*act.timecode, 6).ticks());
-
-    // A 0.0-offset backend row names the deact node directly, mid-SP
-    // collections and all.
-    BackendSqueeze d0;
-    d0.timecode = st.timecode(3840 + 6 * 1920);
-    d0.offset_ms = 0.0;
-    act.backends.push_back(d0);
-    CHECK(activation_deact_tick(act, st) == 3840 + 6 * 1920);
-
-    // A non-zero offset row recovers D from row.ms - offset.
-    Activation off = act;
-    off.backends.clear();
-    BackendSqueeze late;
-    late.timecode = st.timecode(3840 + 6 * 1920 + 120);  // 125 ms after D
-    late.offset_ms = 125.0;
-    off.backends.push_back(late);
-    CHECK(activation_deact_tick(off, st) == 3840 + 6 * 1920);
-
-    // No timecode or sp_meter: nothing to derive.
+    // A bare, default-constructed activation: nullopt.
     Activation bare;
-    CHECK(!activation_deact_tick(bare, st).has_value());
+    CHECK(!activation_deact_tick(bare).has_value());
 }
 
 TEST_CASE("field fixture: Dumpweed SqOut end anchored on the deact node") {
@@ -296,6 +309,11 @@ TEST_CASE("field fixture: Dumpweed SqOut end anchored on the deact node") {
     d0.timecode = st.timecode(46080);
     d0.offset_ms = 0.0;
     act.backends.push_back(d0);
+    // The node the search actually stamped: the mid-SP collection pushes it
+    // to act + 6 measures (tick 46080), matching the 0.0-offset row above --
+    // this is the whole point of the fixture (act + 2*B alone would be
+    // 42240).
+    act.deact_tick = 46080;
 
     auto scales = frontend_transfer_scales(act, st);
     REQUIRE(scales.has_value());
@@ -546,6 +564,10 @@ TEST_CASE("rate_activation: a live timing overrides the stored scales") {
     act.sp_meter = 2;
     act.transfer_pre = TransferScale{0.5, 0.5};
     act.transfer_post = TransferScale{0.5, 0.5};
+    // No SqIn, no offset-bearing row yet at this point: the old fallback's
+    // node, act + 2*B measures (tick 7680) -- the row below sits 50 ms past
+    // it, recovering the same node the other way.
+    act.deact_tick = st.plusmeasure(*act.timecode, 4).ticks();
 
     BackendSqueeze row;
     row.timecode = st.timecode(7728);  // 50 ms past the 4-measure SP end
@@ -581,6 +603,12 @@ TEST_CASE("exact solver prices displacements across a tempo boundary") {
     Activation act;
     act.timecode = st.timecode(1920);
     act.sp_meter = 2;
+    // No SqIn, no backend rows: the old fallback's node, act + 2*B measures
+    // (tick 9600, matching the "ending at tick 9600" comment above). None of
+    // the exact-solver functions below actually read this field (they price
+    // the plain 2*B-measure end directly off timecode/sp_meter), but it is
+    // set for consistency with the rest of this activation's shape.
+    act.deact_tick = st.plusmeasure(*act.timecode, 4).ticks();
 
     // Inside the section: exact == linear.
     CHECK(sp_end_shift_ms(500.0, SqueezeKind::SqOut, act, st) ==

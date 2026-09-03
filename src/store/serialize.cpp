@@ -27,6 +27,10 @@ void BinaryWriter::opt_i32(const std::optional<int>& v) {
     boolean(v.has_value());
     if (v) i32(*v);
 }
+void BinaryWriter::opt_i64(const std::optional<int64_t>& v) {
+    boolean(v.has_value());
+    if (v) i64(*v);
+}
 void BinaryWriter::opt_f64(const std::optional<double>& v) {
     boolean(v.has_value());
     if (v) f64(*v);
@@ -71,6 +75,10 @@ std::string BinaryReader::str() {
 std::optional<int> BinaryReader::opt_i32() {
     if (!boolean()) return std::nullopt;
     return i32();
+}
+std::optional<int64_t> BinaryReader::opt_i64() {
+    if (!boolean()) return std::nullopt;
+    return i64();
 }
 std::optional<double> BinaryReader::opt_f64() {
     if (!boolean()) return std::nullopt;

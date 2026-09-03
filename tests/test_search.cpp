@@ -177,6 +177,33 @@ TEST_CASE("stored transfer scales match the display-layer recomputation") {
                     d = "non-positive transfer scale";
                     break;
                 }
+
+                // Copy-out stamps deact_tick on every activation it produces
+                // (blob v4), so a record fresh off the engine should never be
+                // missing it.
+                if (!act.deact_tick.has_value()) {
+                    d = "activation missing deact_tick";
+                    break;
+                }
+
+                // A backend row's offset_ms is the gap from the deactivation
+                // node to that row, in ms. Walking a row's offset back to a
+                // tick has to land on the same node copy-out stamped -- if it
+                // didn't, the backend rows and deact_tick would be describing
+                // two different SP ends.
+                for (const BackendSqueeze& b : act.backends) {
+                    if (!b.offset_ms.has_value()) continue;
+                    const int64_t implied =
+                        *b.offset_ms == 0.0
+                            ? b.timecode.ticks()
+                            : std::llround(song.timing().ms_index().tick_at_ms(
+                                  b.timecode.ms() - *b.offset_ms));
+                    if (implied != *act.deact_tick) {
+                        d = "backend-implied deact tick disagrees with the stored one";
+                        break;
+                    }
+                }
+                if (!d.empty()) break;
             }
             if (!d.empty()) break;
         }
@@ -390,7 +417,7 @@ TEST_CASE("SP past the last note: backends measured from the tracked SP end") {
           doctest::Approx(tick_ms(song, 5280) - end_ms).epsilon(1e-9));
 
     // And the rows put the SP end back exactly where the engine had it.
-    auto deact = activation_deact_tick(act, song.timing());
+    auto deact = activation_deact_tick(act);
     REQUIRE(deact.has_value());
     CHECK(*deact == end_tick);
 }
@@ -429,7 +456,7 @@ TEST_CASE("SP past the last note: a mid-activation phrase extends the end") {
         CHECK(*b.offset_ms < 0.0);
     }
 
-    auto deact = activation_deact_tick(act, song.timing());
+    auto deact = activation_deact_tick(act);
     REQUIRE(deact.has_value());
     CHECK(*deact == extended_tick);
     CHECK(*deact != plain_tick);
@@ -474,6 +501,11 @@ TEST_CASE("SP past the last note: synthesized rows survive a store round-trip") 
     REQUIRE(ract.backends.size() == want.size());
     for (size_t i = 0; i < want.size(); ++i) CHECK(ract.backends[i] == want[i]);
 
-    CHECK(activation_deact_tick(ract, song.timing()) ==
-          activation_deact_tick(act, song.timing()));
+    CHECK(activation_deact_tick(ract) == activation_deact_tick(act));
+
+    // deact_tick itself is stored data (blob v4), not something the reader
+    // rederives -- so the round trip has to hand back the exact tick the
+    // engine stamped, not just an equivalent one.
+    REQUIRE(act.deact_tick.has_value());
+    CHECK(ract.deact_tick == act.deact_tick);
 }

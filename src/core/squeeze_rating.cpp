@@ -18,53 +18,13 @@ std::optional<TransferScale> transfer_scale_between(int64_t act_tick,
     return scale;
 }
 
-namespace {
-
-// The true SP end is the deactivation node D, which sits one +2-measure
-// step past the plain 2*B-measure end for every SP phrase collected
-// during the activation. Ordinary mid-SP collections leave no trace on
-// the Activation itself, but every backend row encodes D exactly: its
-// offset_ms was measured against D (graph.cpp add_deact_edge), so
-// D = row.ms - offset. Prefer the smallest-|offset| row; the frequent
-// 0.0-offset row is the deact node itself. An activation that never
-// deactivates (its SP outlasts the chart) carries rows too -- the engine's
-// rebuild step synthesizes them against the SP end it tracked. So nullopt
-// now only means an old record stored before that, or a trimmed one.
-std::optional<int64_t> deact_tick_from_rows(const Activation& act,
-                                            const SongTiming& timing) {
-    const BackendSqueeze* d_row = nullptr;
-    for (const BackendSqueeze& bsq : act.backends) {
-        if (!bsq.offset_ms) continue;
-        if (!d_row || std::abs(*bsq.offset_ms) < std::abs(*d_row->offset_ms))
-            d_row = &bsq;
-    }
-    if (!d_row) return std::nullopt;
-    if (*d_row->offset_ms == 0.0) return d_row->timecode.ticks();
-    // tick_at_ms is display-layer math (never in the scoring path); its fp
-    // error is far below half a tick, so llround recovers the deact node's
-    // integer tick exactly.
-    return static_cast<int64_t>(std::llround(
-        timing.ms_index().tick_at_ms(d_row->timecode.ms() - *d_row->offset_ms)));
-}
-
-}  // namespace
-
-std::optional<int64_t> activation_deact_tick(const Activation& act,
-                                             const SongTiming& timing) {
-    if (!act.timecode || !act.sp_meter) return std::nullopt;
-    if (std::optional<int64_t> d = deact_tick_from_rows(act, timing)) return d;
-    // Fallback: the plain reconstruction, 2 measures per SP bar, plus the one
-    // +2-measure extension a SqIn records (same rule as frontend_transfer_scales).
-    bool has_sqin = false;
-    for (const SPSqueeze& sq : act.sqinouts)
-        if (sq.kind == SqueezeKind::SqIn) has_sqin = true;
-    int64_t end_measures = 2 * static_cast<int64_t>(*act.sp_meter) + (has_sqin ? 2 : 0);
-    return timing.plusmeasure(*act.timecode, end_measures).ticks();
+std::optional<int64_t> activation_deact_tick(const Activation& act) {
+    return act.deact_tick;
 }
 
 std::optional<ActTransferScales> frontend_transfer_scales(const Activation& act,
                                                           const SongTiming& timing) {
-    if (!act.timecode || !act.sp_meter) return std::nullopt;
+    if (!act.timecode || !act.sp_meter || !act.deact_tick) return std::nullopt;
 
     int64_t act_tick = act.timecode->ticks();
     bool has_sqin = false;
@@ -75,30 +35,16 @@ std::optional<ActTransferScales> frontend_transfer_scales(const Activation& act,
         }
     }
 
-    std::optional<int64_t> d_tick = deact_tick_from_rows(act, timing);
-
-    int64_t pre_tick, post_tick;
-    if (d_tick) {
-        post_tick = *d_tick;
-        // The SqIn phrase is judged against the end as it stood before that
-        // phrase extended SP: one 2-measure step down from D. With several
-        // SqIns, or a plain collection after the last one, this is exact only
-        // for the last extension -- one `pre` per activation is all the data
-        // model (and blob v3) carries.
-        pre_tick = has_sqin
-                       ? timing.plusmeasure(timing.timecode(post_tick), -2).ticks()
-                       : post_tick;
-    } else {
-        // No backend row carries an offset (an old record stored before the
-        // never-deactivating case got synthesized rows, or a trimmed one):
-        // fall back to the plain reconstruction, which cannot see mid-SP
-        // collections. 2 measures per SP bar.
-        int64_t end_measures = 2 * static_cast<int64_t>(*act.sp_meter);
-        pre_tick = timing.plusmeasure(*act.timecode, end_measures).ticks();
-        post_tick = has_sqin
-                        ? timing.plusmeasure(*act.timecode, end_measures + 2).ticks()
-                        : pre_tick;
-    }
+    // The SP end the search recorded, straight off the record.
+    int64_t post_tick = *act.deact_tick;
+    // The SqIn phrase is judged against the end as it stood before that
+    // phrase extended SP: one 2-measure step down from D. With several
+    // SqIns, or a plain collection after the last one, this is exact only
+    // for the last extension -- one `pre` per activation is all the data
+    // model (and the blob) carries.
+    int64_t pre_tick =
+        has_sqin ? timing.plusmeasure(timing.timecode(post_tick), -2).ticks()
+                 : post_tick;
 
     std::optional<TransferScale> post =
         transfer_scale_between(act_tick, post_tick, timing);

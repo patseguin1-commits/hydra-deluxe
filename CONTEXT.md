@@ -27,9 +27,11 @@ settings the analysis ran with. Its key is the chart, the chart mode, the SP
 cap, and the analysis settings (the ms limit and the score range). A chart
 keeps one record per settings combination; records share their stored paths,
 so a path found under several combinations is stored once. A record is stale
-when an older Hydra version produced it. A lookup reports it as one of three
-statuses: not analyzed, stale, or ready. A listing returns only ready records,
-so a stale record reads the same as no record at all.
+unless all three hold: this build's version stamped it, it records which
+settings it ran under, and its stored paths are in this build's
+path-structure format. A lookup reports it as one of three statuses: not
+analyzed, stale, or ready. A listing returns only ready records, so a stale
+record reads the same as no record at all.
 
 **SP cap**:
 The Star Power meter ceiling an analysis runs under, in bars. 4 is Clone
@@ -108,7 +110,8 @@ can scale differently on a signature or tempo change.
 
 **Deact node**:
 The exact chart position where an activation's Star Power ends; backend
-squeeze timings are measured against it.
+squeeze timings are measured against it. The search stamps it onto the
+record as it runs, and nothing downstream re-derives it.
 _Avoid_: SP end tick (when the anchored search position is meant)
 
 **Squeeze rating**:

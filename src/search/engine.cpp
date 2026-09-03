@@ -1162,14 +1162,28 @@ std::vector<MPath> rebuild(const Enum& en, const std::vector<OutPath>& out_paths
                 }
             }
 
+            // Stamp the deactivation node D: the tick where this
+            // activation's Star Power actually ends, phrases collected
+            // mid-SP included. The search knows it exactly, so it is written
+            // down here and no display layer ever reconstructs it. It is
+            // also the node every backend row's offset was measured against
+            // (graph.cpp add_deact_edge: offset_ms = ts.ms - dest.ms).
+            if (oa.deact_edge >= 0) {
+                act.deact_tick =
+                    en.edges[(size_t)oa.deact_edge]->dest->timecode.ticks();
+            } else if (oa.final_sp_end != NO_TIME) {
+                // SP outlasted the chart: the end the search tracked, which
+                // is already a tick.
+                act.deact_tick = oa.final_sp_end;
+            }
+            // Otherwise it stays unset. Nothing here invents a value.
+
             // Stamp the frontend transfer scales through the same function
             // the details display uses to recompute them, on the same inputs
-            // (timecode, sp_meter, backends, sqinouts), so the stored ratios
-            // can't drift from a live recomputation. The backend rows carry
-            // the search's actual deact end; an activation that never
-            // deactivated carries rows synthesized just above, measured
-            // against the SP end the engine tracked, so it lands on the same
-            // footing. A nullopt keeps the 1.0 defaults.
+            // (timecode, sp_meter, sqinouts and the deact_tick just stamped),
+            // so the stored ratios can't drift from a live recomputation.
+            // Both scales anchor on that stored D. A nullopt keeps the 1.0
+            // defaults.
             if (auto scales = frontend_transfer_scales(act, timing)) {
                 act.transfer_pre = scales->pre;
                 act.transfer_post = scales->post;

@@ -281,7 +281,7 @@ PreviewScene build_preview_scene(const Song& song, const Path* path, int sp_cap)
             pa.ms = song.timecode(pa.tick).ms();
             pa.sp_meter = a.sp_meter.value_or(0);
             pa.skips = a.skips.value_or(0);
-            if (std::optional<int64_t> d = activation_deact_tick(a, timing)) {
+            if (std::optional<int64_t> d = activation_deact_tick(a)) {
                 pa.has_sp_end = true;
                 pa.sp_end_tick = *d;
                 pa.sp_end_ms = timing.ms_index().at(*d);

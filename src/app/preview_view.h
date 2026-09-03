@@ -76,9 +76,10 @@ struct PreviewActivation {
     double ms = 0.0;
     int sp_meter = 0;  // bars of SP spent, 0 when the record did not record it
     int skips = 0;     // fills passed over before this activation, 0 if unknown
-    // The deact node: where this activation's SP runs out. The active SP
-    // window the highway tints runs from `ms` to `sp_end_ms`. has_sp_end is
-    // false when the record cannot say (no timecode/sp_meter).
+    // The deact node: where this activation's SP runs out, read off the
+    // record (the search stamps it). The active SP window the highway tints
+    // runs from `ms` to `sp_end_ms`. has_sp_end is false only for a record
+    // written before blob v4, which does not carry the node.
     bool has_sp_end = false;
     int64_t sp_end_tick = 0;
     double sp_end_ms = 0.0;

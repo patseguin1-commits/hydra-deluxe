@@ -24,7 +24,8 @@
 namespace hydra::store::detail {
 
 // One activation. `version` is the record blob format version: 3 and later
-// append the four frontend transfer scales (see kBlobFormatVersion).
+// append the four frontend transfer scales, 4 and later the deact_tick (see
+// kBlobFormatVersion).
 void write_activation(BinaryWriter& w, const Activation& act, uint32_t version);
 Activation read_activation(BinaryReader& r, uint32_t version);
 

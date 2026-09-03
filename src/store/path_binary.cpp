@@ -42,6 +42,11 @@ void write_activation(BinaryWriter& w, const Activation& act, uint32_t version) 
         w.f64(act.transfer_post.early);
         w.f64(act.transfer_post.late);
     }
+
+    // Format version 4 and later: the deactivation node the search stamped
+    // on this activation. Nothing recomputes it, so an older blob reads back
+    // unset and its consumers say so rather than guessing.
+    if (version >= 4) w.opt_i64(act.deact_tick);
 }
 
 Activation read_activation(BinaryReader& r, uint32_t version) {
@@ -84,6 +89,9 @@ Activation read_activation(BinaryReader& r, uint32_t version) {
         act.transfer_post.early = r.f64();
         act.transfer_post.late = r.f64();
     }
+
+    // Pre-v4 blobs leave deact_tick unset. Nothing fills it in.
+    if (version >= 4) act.deact_tick = r.opt_i64();
     return act;
 }
 

@@ -180,9 +180,10 @@ TEST_CASE("records round-trip through RecordStore across the corpus and config m
     MESSAGE("checked " << checks << " round trips");
 }
 
-// The blob grew allzero_paths in format version 2 and per-activation transfer
-// scales in version 3. Older blobs must still read (scales default to 1.0),
-// or bumping the format would silently strand every stored record.
+// The blob grew allzero_paths in format version 2, per-activation transfer
+// scales in version 3, and each activation's deact_tick in version 4. Older
+// blobs must still read (scales default to 1.0, deact_tick to unset), or
+// bumping the format would silently strand every stored record.
 TEST_CASE("record blob: v3 carries transfer scales, v1/v2 still read") {
     std::optional<HydraRecord> record;
     for (const std::string& path : corpus::chart_paths()) {
@@ -222,6 +223,11 @@ TEST_CASE("record blob: v3 carries transfer scales, v1/v2 still read") {
     CHECK(again_act.transfer_pre.late == orig_act.transfer_pre.late);
     CHECK(again_act.transfer_post.early == orig_act.transfer_post.early);
     CHECK(again_act.transfer_post.late == orig_act.transfer_post.late);
+
+    // Version 4 activations also carry the deactivation node D bit-exactly --
+    // the search stamped it on this record, so a round trip must not drop it.
+    REQUIRE(orig_act.deact_tick.has_value());
+    CHECK(again_act.deact_tick == orig_act.deact_tick);
 
     // Pre-v3 blobs have no per-activation transfer scales. This synthetic old
     // blob is hand-rolled with the primitives on purpose — an independent
@@ -271,6 +277,10 @@ TEST_CASE("record blob: v3 carries transfer scales, v1/v2 still read") {
     CHECK(a2.transfer_post.late == 1.0);
     // ...and difficulty stays the raw 12 ms gap (scales are display-only).
     CHECK(*old2.best_path().difficulty() == doctest::Approx(12.0));
+    // This hand-rolled blob stamps version 2, well under the version-4 gate,
+    // so it carries no deact_tick bytes at all -- reading it back must leave
+    // the field unset rather than inventing a value.
+    CHECK_FALSE(a2.deact_tick.has_value());
 
     // A version 1 blob is the same layout without the trailing all-0 list.
     std::vector<uint8_t> v1(w.bytes.begin(), w.bytes.end() - 4);
@@ -298,6 +308,34 @@ TEST_CASE("record blob: v3 carries transfer scales, v1/v2 still read") {
     std::vector<uint8_t> future = write_record(*record);
     future[0] = kBlobFormatVersion + 1;
     CHECK_THROWS_AS(read_record(future), SerializeError);
+}
+
+// The version gate for deact_tick specifically: a v3 write has nowhere to put
+// the field, so it must come back unset, not guessed at from an older blob. A
+// small hand-built record is enough to prove this -- it doesn't need a real
+// search, just one activation with a timecode and a deact_tick set.
+TEST_CASE("record blob: a v3 write drops deact_tick, a v4 write keeps it") {
+    Activation act;
+    act.timecode = Timecode::raw(960);
+    act.deact_tick = 4800;
+
+    Path path;
+    path.activations.push_back(act);
+
+    HydraRecord record;
+    record.sp_cap = 4;
+    record.paths.push_back(path);
+
+    // write_record's version argument defaults to kBlobFormatVersion; pass 3
+    // explicitly to get the old layout.
+    HydraRecord as_v3 = read_record(write_record(record, 3));
+    REQUIRE(as_v3.paths.size() == 1);
+    CHECK_FALSE(as_v3.best_path().all_activations().front().deact_tick.has_value());
+
+    // The default (current) version carries it through.
+    HydraRecord as_current = read_record(write_record(record));
+    REQUIRE(as_current.paths.size() == 1);
+    CHECK(as_current.best_path().all_activations().front().deact_tick == 4800);
 }
 
 TEST_CASE("RecordStore maintenance: has_record, list_records, reindex, drop_stale_records") {
@@ -686,6 +724,71 @@ TEST_CASE("a legacy-imported sentinel row is left out of the listing") {
     store.add_record(RecordKey{"h", "mode", CapQuery::at(8)}, at_cap(8));
     CHECK(store.list_records(std::nullopt, CapQuery::at(8), Lens{}, SortColumn::Score, true)
               .size() == 1);
+}
+
+TEST_CASE("a row in an older path format is Stale even when this build stamped it") {
+    // The hyversion stamp alone cannot catch this. A released build writes
+    // its own current hyversion no matter what structure format it emits, so
+    // a row can carry today's version and still hold a tree this build no
+    // longer knows how to decode. Only the structure format number inside
+    // the blob can tell the two apart, so that is what has to gate Ready.
+    RecordStore store(":memory:");
+    store.add_song("old", "Song", "Artist", "Charter", fixture().song);
+    PreparedRow old_format = prepare_row(RecordKey{"old", "mode", CapQuery::at(8)}, at_cap(8));
+    REQUIRE(old_format.structure.size() >= 4);
+    old_format.structure[0] = 1;
+    old_format.structure[1] = 0;
+    old_format.structure[2] = 0;
+    old_format.structure[3] = 0;
+    store.add_row(old_format);
+    CHECK(store.counts().second == 1);
+
+    // Stale everywhere a lookup can ask.
+    CHECK_FALSE(store.has_record(RecordKey{"old", "mode", CapQuery::at(8)}));
+    RecordLookup lookup = store.get_record(RecordKey{"old", "mode", CapQuery::at(8)});
+    CHECK(lookup.status == RecordStatus::Stale);
+    CHECK_FALSE(lookup.record.has_value());
+    CHECK(store.get_summary(RecordKey{"old", "mode", CapQuery::at(8)}).status ==
+          RecordStatus::Stale);
+    CHECK(store.list_records(std::nullopt, CapQuery::at(8), Lens{}, SortColumn::Score, true)
+              .empty());
+    int seen = 0;
+    store.for_each_blob(std::nullopt, CapQuery::at(8), Lens{},
+                        [&](const RecordStore::BlobRow& meta, const HydraRecord* rec) {
+                            CHECK(meta.status == RecordStatus::Stale);
+                            CHECK(rec == nullptr);
+                            ++seen;
+                        });
+    CHECK(seen == 1);
+
+    // drop_stale_records treats it the same as any other unreadable row.
+    CHECK(store.drop_stale_records() == 1);
+    CHECK(store.counts().second == 0);
+
+    // A normal row, same store, still reads Ready -- this isn't blanket
+    // breakage, just this one row's format.
+    store.add_song("new", "Song", "Artist", "Charter", fixture().song);
+    store.add_record(RecordKey{"new", "mode", CapQuery::at(8)}, at_cap(8));
+    CHECK(store.get_record(RecordKey{"new", "mode", CapQuery::at(8)}).status ==
+          RecordStatus::Ready);
+    CHECK(store.has_record(RecordKey{"new", "mode", CapQuery::at(8)}));
+    CHECK(store.list_records(std::nullopt, CapQuery::at(8), Lens{}, SortColumn::Score, true)
+              .size() == 1);
+
+    // And a current write purges an old-format row for the same chart, the
+    // same way it purges an other-version one.
+    RecordStore purge(":memory:");
+    purge.add_song("purge", "Song", "Artist", "Charter", fixture().song);
+    PreparedRow old_format2 =
+        prepare_row(RecordKey{"purge", "mode", CapQuery::at(8)}, at_cap(8));
+    old_format2.structure[0] = 1;
+    old_format2.structure[1] = 0;
+    old_format2.structure[2] = 0;
+    old_format2.structure[3] = 0;
+    purge.add_row(old_format2);
+    CHECK(purge.counts().second == 1);
+    purge.add_record(RecordKey{"purge", "mode", CapQuery::at(16)}, at_cap(16));
+    CHECK(purge.counts().second == 1);
 }
 
 TEST_CASE("the listing and a lookup agree on which row is a chart's answer") {

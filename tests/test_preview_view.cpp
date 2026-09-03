@@ -100,18 +100,21 @@ Activation act_at(const Song& song, int64_t tick, int skips) {
 
 // ---- SP meter fixtures --------------------------------------------------
 //
-// Same 4/4, 120 BPM grid as make_hand_song: a note every 480 ticks out to
+// Same 4/4, 120 BPM grid as make_hand_song: a note every `step` ticks out to
 // `last_tick`, with an SP phrase ending on each tick in `phrase_ends`. One
 // measure is 1920 ticks = 2000 ms, so one SP bar (two measures) burns 4000 ms
 // at this tempo. `extra_bpm` adds tempo changes before the timing is built.
+// A phrase can only end on a note, so `step` is there for a fixture that needs
+// a phrase off the quarter-note grid.
 Song make_sp_song(const std::vector<int64_t>& phrase_ends, int64_t last_tick,
-                  const std::map<int64_t, double>& extra_bpm = {}) {
+                  const std::map<int64_t, double>& extra_bpm = {},
+                  int64_t step = 480) {
     Song song(480);
     song.bpm_changes[0] = 120.0;
     for (const auto& kv : extra_bpm) song.bpm_changes[kv.first] = kv.second;
     song.build_timing();
 
-    for (int64_t t = 0; t <= last_tick; t += 480) {
+    for (int64_t t = 0; t <= last_tick; t += step) {
         Chord c;
         c.add_note(NoteColor::Red);
         SongTimestamp ts;
@@ -119,21 +122,25 @@ Song make_sp_song(const std::vector<int64_t>& phrase_ends, int64_t last_tick,
         ts.chord = std::move(c);
         if (std::find(phrase_ends.begin(), phrase_ends.end(), t) != phrase_ends.end()) {
             ts.flag_sp = true;
-            ts.sp_phrase_start = t >= 480 ? t - 480 : 0;
+            ts.sp_phrase_start = t >= step ? t - step : 0;
         }
         song.sequence.push_back(std::move(ts));
     }
     return song;
 }
 
-// An activation the engine could have recorded: a timecode and the bars it
-// spends. With no backend rows, activation_deact_tick falls back to the plain
-// act + 2*sp_meter measures, which is what these fixtures count on.
+// An activation the engine could have recorded: a timecode, the bars it
+// spends, and the deactivation node the search stamped on it. Nothing derives
+// that node any more, so the fixture has to state it. The default is the plain
+// act + 2*sp_meter measures — an activation that collects no phrase mid-SP.
+// A fixture that collects one overwrites `deact_tick` itself.
 Activation sp_act_at(const Song& song, int64_t tick, int sp_meter) {
     Activation a;
     a.timecode = song.timecode(tick);
     a.sp_meter = sp_meter;
     a.skips = 0;
+    a.deact_tick =
+        song.timing().plusmeasure(*a.timecode, 2 * static_cast<int64_t>(sp_meter)).ticks();
     return a;
 }
 
@@ -478,9 +485,11 @@ TEST_CASE("build_preview_scene: an analyzed chart's overlay matches its path") {
         CHECK(pa.tick >= 0);
         CHECK(pa.ms >= 0.0);
         CHECK(pa.ms <= scene.song_length_ms + 1.0);
-        // The active SP window ends exactly where the squeeze display says
-        // the deact node is, in the song's own ms.
-        std::optional<int64_t> d = activation_deact_tick(a, r.song.timing());
+        // The active SP window ends exactly at the deact node the record
+        // carries, in the song's own ms. The engine stamps that node on every
+        // activation it produces, so it is always there on a fresh record.
+        std::optional<int64_t> d = activation_deact_tick(a);
+        CHECK(d.has_value());
         CHECK(pa.has_sp_end == d.has_value());
         if (d) {
             CHECK(pa.sp_end_tick == *d);
@@ -549,13 +558,14 @@ TEST_CASE("sp meter curve: an activation snaps to the recorded bars, then drains
 
 TEST_CASE("sp meter curve: a phrase collected mid-activation jumps the meter a bar") {
     // Phrases at 1000 ms and 6000 ms; the second lands inside the activation's
-    // window. The record's SqIn is what says it was collected during SP: the
-    // deact node moves out by two measures, so the window runs six measures
+    // window. The record's deact node is what says it was collected during SP:
+    // it sits two measures past the plain end, so the window runs six measures
     // instead of four and the meter steps up a bar at the phrase.
     Song song = make_sp_song({960, 5760}, /*last_tick=*/17280);
     Path path;
     Activation act = sp_act_at(song, 3840, /*sp_meter=*/2);
     act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, 0.0});
+    act.deact_tick = 3840 + 6 * 1920;  // 4 measures banked, 2 for the collection
     path.activations = {act};
 
     PreviewScene scene = build_preview_scene(song, &path);
@@ -563,8 +573,7 @@ TEST_CASE("sp meter curve: a phrase collected mid-activation jumps the meter a b
     check_curve_well_formed(c);
 
     REQUIRE(scene.activations.size() == 1);
-    std::optional<int64_t> deact =
-        activation_deact_tick(path.activations[0], song.timing());
+    std::optional<int64_t> deact = activation_deact_tick(path.activations[0]);
     REQUIRE(deact.has_value());
     CHECK(*deact == 15360);  // 3840 + 6 measures
     CHECK(scene.activations[0].sp_end_ms == doctest::Approx(16000.0));
@@ -610,6 +619,58 @@ TEST_CASE("sp meter curve: a squeezed-out phrase does not bank mid-drain") {
     CHECK(sp_meter_bars_at(c, 12000.0 - 1e-6) == doctest::Approx(0.0));
     CHECK(sp_meter_bars_at(c, 12000.0) == doctest::Approx(1.0));
     CHECK(sp_meter_bars_at(c, 13000.0) == doctest::Approx(1.0));
+}
+
+TEST_CASE("sp meter curve: a full bank that collects a phrase and stores no row") {
+    // Regression, from a gameplay video the user checked against the Preview.
+    //
+    // A four-bar activation collects one SP phrase while Star Power is
+    // running, and no note lands within the engine's 500 ms squeeze window
+    // after the deactivation node. So the record stores no backend row at all,
+    // and the old code had nothing to read the node out of: it fell back to
+    // "two measures per banked bar", which cannot see the collection. The
+    // meter emptied two measures early and then showed a bar it had never
+    // banked.
+    //
+    // Now the search stamps the node and the Preview just reads it. Eight
+    // measures for the four banked bars plus two for the collection: ten.
+    //
+    // The phrase's last note sits 3 and 15/16 measures into the window, off
+    // the quarter-note grid, so the drain is caught mid-measure on both sides
+    // of the step.
+    const int64_t act_tick = 3840;                 // 4000 ms
+    const int64_t phrase_tick = act_tick + 7560;   // 11400 -> 11875 ms
+    const int64_t deact = act_tick + 10 * 1920;    // 23040 -> 24000 ms
+    Song song = make_sp_song({phrase_tick}, /*last_tick=*/28800, /*extra_bpm=*/{},
+                             /*step=*/120);
+    Path path;
+    Activation act = sp_act_at(song, act_tick, /*sp_meter=*/4);
+    act.deact_tick = deact;
+    REQUIRE(act.backends.empty());
+    path.activations = {act};
+
+    PreviewScene scene = build_preview_scene(song, &path);
+    const SpMeterCurve& c = scene.sp_meter;
+    check_curve_well_formed(c);
+    CHECK(c.cap == 4);
+
+    REQUIRE(scene.activations.size() == 1);
+    CHECK(scene.activations[0].has_sp_end);
+    CHECK(scene.activations[0].sp_end_tick == deact);
+    CHECK(scene.activations[0].sp_end_ms == doctest::Approx(24000.0));
+
+    // Four bars at the activation, then eight measures of drain to burn them.
+    CHECK(sp_meter_bars_at(c, 4000.0) == doctest::Approx(4.0));
+    // Just before the phrase's last note: 3.9375 measures gone of eight.
+    CHECK(sp_meter_bars_at(c, 11875.0 - 1e-6) == doctest::Approx(2.03125));
+    // The collection hands back a whole bar on the spot.
+    CHECK(sp_meter_bars_at(c, 11875.0) == doctest::Approx(3.03125));
+    // The remaining 6.0625 bars' worth of measures runs out exactly at D.
+    CHECK(sp_meter_bars_at(c, 24000.0 - 1e-6) == doctest::Approx(0.0));
+    CHECK(sp_meter_bars_at(c, 24000.0) == doctest::Approx(0.0));
+    // Still 0 after D. The phrase was collected during SP, not squeezed out,
+    // so there is no bar waiting at the window's close.
+    CHECK(sp_meter_bars_at(c, 26000.0) == doctest::Approx(0.0));
 }
 
 TEST_CASE("sp meter curve: a phrase ending on the activation note is not counted twice") {

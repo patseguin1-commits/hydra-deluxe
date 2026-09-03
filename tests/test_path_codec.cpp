@@ -19,6 +19,7 @@
 #include "corpus_util.h"
 #include "parse/song.h"
 #include "search/pather.h"
+#include "store/path_binary.h"
 #include "store/path_codec.h"
 #include "store/record_store.h"
 #include "store/serialize.h"
@@ -147,6 +148,17 @@ TEST_CASE("path codec: a rebuilt record is byte-identical through the record ser
         CHECK(new_loaded.paths[i].tied_pathcount() ==
               old_loaded.paths[i].tied_pathcount());
 
+    // The deactivation node the search stamps on each activation rides
+    // through flatten_record/rebuild_record like every other field. The
+    // byte-identical check above already proves it, but pin it directly too,
+    // so a codec bug that drops only this one field can't hide behind
+    // "everything else matched".
+    const auto old_acts = old_loaded.best_path().all_activations();
+    const auto new_acts = new_loaded.best_path().all_activations();
+    REQUIRE_FALSE(old_acts.empty());
+    REQUIRE(old_acts.front().deact_tick.has_value());
+    CHECK(new_acts.front().deact_tick == old_acts.front().deact_tick);
+
     // Both sides carry raw ticks until timecodes are restored; after the same
     // restore against the song's timing, the strings still agree.
     restore_timecodes(old_loaded, fixture().song.timing());
@@ -196,6 +208,13 @@ TEST_CASE("path codec: node payloads are flat and content-addressed") {
     CHECK(node.skipped_ghosts == root.skipped_ghosts);
     CHECK(node.skipped_accents == root.skipped_accents);
 
+    // deact_tick is the newest field on Activation (blob v4 / node v2); a
+    // plain encode_path_node/decode_path_node round trip must keep it, not
+    // just the fields that existed before it.
+    REQUIRE_FALSE(root.activations.empty());
+    REQUIRE(root.activations.front().deact_tick.has_value());
+    CHECK(node.activations.front().deact_tick == root.activations.front().deact_tick);
+
     // The hash is 32 lowercase hex characters, and it names the bytes: the
     // same payload always hashes the same, a different one does not.
     std::vector<uint8_t> payload = encode_path_node(root);
@@ -213,6 +232,26 @@ TEST_CASE("path codec: node payloads are flat and content-addressed") {
     CHECK_THROWS_AS(decode_path_node(bad_version), SerializeError);
     std::vector<uint8_t> truncated(payload.begin(), payload.begin() + 6);
     CHECK_THROWS_AS(decode_path_node(truncated), SerializeError);
+}
+
+// A version-1 node is the pre-deact_tick payload shape: activations in the
+// blob-v3 layout, no deact_tick bytes at all. It used to still be readable,
+// with deact_tick coming back unset. That reachability is gone now: a
+// version-1 node only ever lived inside a version-1 structure blob, and the
+// store's Ready rule reads the structure format, so a version-1 structure
+// never gets decoded any more. With no path left that can hand decode_path_node
+// a version-1 node, there is only one layout left to support, and reading
+// anything else is a bug, not a compatibility case. Built by hand with
+// write_path_node(..., 3) (the same function encode_path_node calls at the
+// current version) so this exercises the real old layout, not a copy of it.
+TEST_CASE("path codec: a version-1 node is rejected") {
+    const Path& path = fixture().record.best_path();
+
+    BinaryWriter w;
+    w.u32(1);  // node version 1: activations in the blob-v3 layout
+    detail::write_path_node(w, path, 3);
+
+    CHECK_THROWS_AS(decode_path_node(w.bytes), SerializeError);
 }
 
 TEST_CASE("path codec: flattening dedups and is stable") {
@@ -260,6 +299,21 @@ TEST_CASE("path codec: a missing node or a bad structure blob throws") {
     FlatRecord future = flat;
     future.structure[0] = static_cast<uint8_t>(kPathStructureFormatVersion + 1);
     CHECK_THROWS_AS(rebuild_record(future), SerializeError);
+
+    // Version 1 is a real old version, not just "some other number": the
+    // structure format was bumped from 1 to 2, and the old layout is refused
+    // the same as any unknown one.
+    FlatRecord past = flat;
+    past.structure[0] = 1;
+    CHECK_THROWS_AS(rebuild_record(past), SerializeError);
+
+    // The current version is 2, and the unmodified flat record -- still at
+    // that version -- round-trips through rebuild_record without throwing.
+    CHECK(kPathStructureFormatVersion == 2);
+    CHECK(flat.structure[0] == static_cast<uint8_t>(kPathStructureFormatVersion));
+    HydraRecord rebuilt = rebuild_record(flat);
+    CHECK(rebuilt.paths.size() == rec.paths.size());
+    CHECK(rebuilt.allzero_paths.size() == rec.allzero_paths.size());
 
     FlatRecord cut = flat;
     cut.structure.resize(cut.structure.size() / 2);

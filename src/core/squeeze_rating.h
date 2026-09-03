@@ -2,11 +2,14 @@
 // timing error carries to that end, and how the resulting squeezes are
 // judged for display.
 //
-// One home for all of it: the deactivation node, the transfer scales, which
-// scale directions matter, when a scale is material enough to warn about,
-// what a backend row's effective ms is on the nominal two-hit scale, and the
-// exact (non-linearized) SP-end solver. The search never reads the judgement
+// One home for all of it: the transfer scales, which scale directions
+// matter, when a scale is material enough to warn about, what a backend
+// row's effective ms is on the nominal two-hit scale, and the exact
+// (non-linearized) SP-end solver. The search never reads the judgement
 // side; difficulty and the ms filter stay raw gap ms (see core/model.h).
+//
+// The deactivation node itself is not worked out here. The search stamps it
+// onto every activation it produces, and everything below reads that field.
 //
 // Three functions are the module's entries:
 //   rate_activation()          -- the details display's only interface.
@@ -49,23 +52,19 @@ std::optional<TransferScale> transfer_scale_between(int64_t act_tick,
                                                     int64_t end_tick,
                                                     const SongTiming& timing);
 
-// The activation's deactivation node D (where its Star Power runs out), in
-// ticks: recovered from the backend rows when one carries an offset (their
-// offsets are measured against D exactly, mid-SP phrase collections
-// included), else the plain act + 2*B measures (+2 with a SqIn). The same
-// derivation frontend_transfer_scales uses, shared so the Preview's active
-// SP window and the squeeze display can't disagree. Display-only; nullopt
-// when the activation has no timecode or sp_meter.
-std::optional<int64_t> activation_deact_tick(const Activation& act,
-                                             const SongTiming& timing);
+// The activation's deactivation node D, in ticks: where its Star Power runs
+// out, phrases collected mid-SP included. This does not work anything out.
+// The search knew D and wrote it onto the record, so this hands back
+// act.deact_tick and nothing else. nullopt means the record was written
+// before blob v4 and simply does not say.
+std::optional<int64_t> activation_deact_tick(const Activation& act);
 
-// The activation's transfer scales. The SP end is recovered from the backend
-// rows (their offsets encode the deactivation node exactly), so mid-SP phrase
-// collections are priced in; an activation with no offset-bearing backend row
-// falls back to the plain act + 2*B-measure reconstruction. The engine stamps
-// the stored transfer_pre/post through this same function at copy-out, so a
-// live recompute can't drift from the record. Display-only; nullopt when the
-// activation has no timecode or sp_meter (stale record).
+// The activation's transfer scales, both anchored on the record's stored
+// deact node D. The `post` scale is measured at D itself; `pre` steps one
+// 2-measure SqIn extension down from it. The engine stamps the stored
+// transfer_pre/post through this same function at copy-out, so a live
+// recompute can't drift from the record. Display-only; nullopt when the
+// activation has no timecode, no sp_meter, or no deact_tick (stale record).
 std::optional<ActTransferScales> frontend_transfer_scales(const Activation& act,
                                                           const SongTiming& timing);
 
