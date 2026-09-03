@@ -72,6 +72,7 @@ struct Args {
     std::string difficulty = "expert";
     bool pretty = false;
     bool no_analyze = false;
+    bool legacy_fills = false;
 };
 
 bool flag_bool(const std::string& v) { return v == "1" || v == "true" || v == "yes"; }
@@ -84,10 +85,10 @@ void usage() {
         "                     [--difficulty expert|hard|medium|easy]\n"
         "  hydra_replay dump  --chart <file> --db <path> [--cap N|auto]\n"
         "                     [--ms N|off] [--depth-mode scores|points] [--depth N]\n"
-        "                     [--out <json>] [--pretty] [--no-analyze]\n"
+        "                     [--out <json>] [--pretty] [--no-analyze] [--legacy-fills]\n"
         "  hydra_replay target --chart <file> --ticks \"t1,t2,...\" [--cap N]\n"
         "                     [--out <json>] [--pretty] [--prodrums 0|1] [--bass2x 0|1]\n"
-        "                     [--difficulty expert|hard|medium|easy]\n"
+        "                     [--difficulty expert|hard|medium|easy] [--legacy-fills]\n"
         "  hydra_replay selfcheck [--chart <file>] [--verbose]\n\n"
         "Omitting --acts scores the chart with no Star Power anywhere.\n"
         "score's JSON also carries \"sections\": the chart's practice sections, "
@@ -102,6 +103,10 @@ void usage() {
         "shape plus \"realized\"; when that is false, \"failed_tick\" names the\n"
         "activation the engine could not make and \"realized_prefix\" how many of\n"
         "the leading ticks it did manage.\n"
+        "--legacy-fills prices the chart under Clone Hero 1.0's fill deadline,\n"
+        "which is what a 1.0 run was played under. Every stored row is a 1.1\n"
+        "result, so dump ignores the database and always analyzes fresh; its\n"
+        "\"source\" then reads \"analyzed-ch10\".\n"
         "JSON is printed compact by default; --pretty indents it.\n");
 }
 
@@ -392,14 +397,58 @@ std::string snapshot_db(const std::string& src) {
     return dst;
 }
 
+// dump's JSON. Written once here because the paths can come from a stored row
+// or from a fresh analysis, and both have to print the same shape.
+int emit_dump(const Args& a, const app::Settings& s, const std::string& hyhash,
+              const std::string& source, const HydraRecord& rec,
+              const SongTiming& timing) {
+    const json paths = paths_json(rec.all_paths(), timing);
+    const std::string bestpath = rec.paths.empty() ? "" : rec.best_path().pathstring();
+    const int64_t best = rec.paths.empty() ? 0 : rec.best_path().totalscore();
+
+    emit(json{{"hyhash", hyhash},
+              {"chartmode", s.chartmode_key()},
+              {"source", source},
+              {"sp_cap", rec.sp_cap ? *rec.sp_cap : -1},
+              {"result", json{{"score", best}, {"bestpath", bestpath}}},
+              {"paths", paths}},
+         a.out, a.pretty);
+    return 0;
+}
+
 int cmd_dump(const Args& a) {
-    if (a.chart.empty() || a.db.empty()) { usage(); return 2; }
+    // --legacy-fills never reads the database, so it does not need one.
+    if (a.chart.empty() || (a.db.empty() && !a.legacy_fills)) { usage(); return 2; }
     const app::Settings s = settings_from(a);
 
     const std::string hyhash = app::hash_chart_file(a.chart);
     if (hyhash.empty()) {
         std::fprintf(stderr, "cannot hash chart: %s\n", a.chart.c_str());
         return 1;
+    }
+
+    // Clone Hero 1.0 spawned fills 1.1 rejects, so a 1.0 run has to be priced
+    // under 1.0's fill deadline. Every row in the database was written under
+    // the 1.1 rule, which makes all of them the wrong answer here: the chart
+    // is always analyzed fresh, and --no-analyze has nothing to switch off.
+    // Nothing is written back — dump and target never touch a database — so
+    // ADR 0010's guard against storing results from non-default settings does
+    // not apply to either of them.
+    if (a.legacy_fills) {
+        const Song song = load_songpath(a.chart, s.view_prodrums,
+                                        s.effective_bass2x(), s.difficulty());
+        if (song.is_empty()) {
+            std::fprintf(stderr, "chart has no notes: %s\n", a.chart.c_str());
+            return 1;
+        }
+        std::fprintf(stderr,
+                     "--legacy-fills: analyzing under the Clone Hero 1.0 fill "
+                     "rule; the stored rows are 1.1 results and are ignored.\n");
+        SearchSettings cfg = s.to_analysis_settings();
+        cfg.legacy_fill_deadline = true;
+        const HydraRecord rec = analyze_chart(song, cfg);
+        const SongTiming& timing = song.timing();
+        return emit_dump(a, s, hyhash, "analyzed-ch10", rec, timing);
     }
 
     const std::string snapshot_path = snapshot_db(a.db);
@@ -467,22 +516,7 @@ int cmd_dump(const Args& a) {
         timing_ptr = &*lookup.timing;
     }
 
-    const HydraRecord& rec = *rec_ptr;
-    const SongTiming& timing = *timing_ptr;
-
-    const json paths = paths_json(rec.all_paths(), timing);
-
-    const std::string bestpath = rec.paths.empty() ? "" : rec.best_path().pathstring();
-    const int64_t best = rec.paths.empty() ? 0 : rec.best_path().totalscore();
-
-    emit(json{{"hyhash", hyhash},
-              {"chartmode", s.chartmode_key()},
-              {"source", source},
-              {"sp_cap", rec.sp_cap ? *rec.sp_cap : -1},
-              {"result", json{{"score", best}, {"bestpath", bestpath}}},
-              {"paths", paths}},
-         a.out, a.pretty);
-    return 0;
+    return emit_dump(a, s, hyhash, source, *rec_ptr, *timing_ptr);
 }
 
 // ---- target --------------------------------------------------------------
@@ -530,6 +564,10 @@ int cmd_target(const Args& a) {
     }
 
     SearchSettings cfg = s.to_analysis_settings();
+    // Price the named path under Clone Hero 1.0's fill deadline when asked.
+    // target only ever prints, so ADR 0010's don't-store-non-default-settings
+    // guard has nothing to guard against here.
+    cfg.legacy_fill_deadline = a.legacy_fills;
     HydraRecord rec;
     rec.paths = search_target(song, cfg, ticks);
 
@@ -728,6 +766,7 @@ int main(int argc, char** argv) {
             else if (k == "--difficulty") a.difficulty = next();
             else if (k == "--pretty") a.pretty = true;
             else if (k == "--no-analyze") a.no_analyze = true;
+            else if (k == "--legacy-fills") a.legacy_fills = true;
             else { std::fprintf(stderr, "unknown option %s\n", k.c_str()); usage(); return 2; }
         } catch (const std::exception& e) {
             std::fprintf(stderr, "%s\n", e.what());
