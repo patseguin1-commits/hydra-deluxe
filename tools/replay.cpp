@@ -4,9 +4,12 @@
 // other question: "what is MY path worth, and where does each point come
 // from?" It has four modes.
 //
-//   score     Walk a chart under a hand-written list of activation windows
-//             and dump every chord with its own score breakdown, its running
-//             totals, and whether it fell under Star Power.
+//   score     Walk a chart under a list of activation windows and dump every
+//             chord with its own score breakdown, its running totals, and
+//             whether it fell under Star Power. The windows come either from
+//             --acts, typed by hand, or from --path, read straight out of a
+//             file `dump` or `target` wrote so that nothing is retyped and
+//             the squeeze-out offsets survive.
 //   dump      Read the paths a record already holds out of the database, with
 //             each activation's deactivation node resolved to a tick — the
 //             input `score` wants.
@@ -66,6 +69,8 @@ struct Args {
     std::string depth_mode = "scores";
     int depth = 4;
     std::string acts;
+    std::string path;   // a dump/target JSON file to read a path out of
+    int index = 0;      // which entry of that file's "paths" array
     std::string ticks;
     bool prodrums = true;
     bool bass2x = true;
@@ -80,7 +85,8 @@ bool flag_bool(const std::string& v) { return v == "1" || v == "true" || v == "y
 void usage() {
     std::printf(
         "hydra_replay — score an arbitrary Star Power path, engine-exactly.\n\n"
-        "  hydra_replay score --chart <file> [--acts \"actTick:deactTick,...\"]\n"
+        "  hydra_replay score --chart <file> [--acts \"actTick:deactTick[:sqoutMs],...\"]\n"
+        "                     [--path <dump-or-target.json>] [--index N]\n"
         "                     [--out <json>] [--pretty] [--prodrums 0|1] [--bass2x 0|1]\n"
         "                     [--difficulty expert|hard|medium|easy]\n"
         "  hydra_replay dump  --chart <file> --db <path> [--cap N|auto]\n"
@@ -90,7 +96,16 @@ void usage() {
         "                     [--out <json>] [--pretty] [--prodrums 0|1] [--bass2x 0|1]\n"
         "                     [--difficulty expert|hard|medium|easy] [--legacy-fills]\n"
         "  hydra_replay selfcheck [--chart <file>] [--verbose]\n\n"
-        "Omitting --acts scores the chart with no Star Power anywhere.\n"
+        "Omitting both --acts and --path scores the chart with no Star Power\n"
+        "anywhere. --path reads a path straight out of a file dump or target\n"
+        "wrote, so nothing is retyped and no field is lost -- in particular the\n"
+        "squeeze-out offset, which an --acts string typed by hand usually drops\n"
+        "and which is worth real points. --index picks the entry of that file's\n"
+        "\"paths\" array (default 0). --path and --acts cannot both be given.\n"
+        "Where a window ends on a Star Power phrase note but carries no\n"
+        "squeeze-out offset, score prints a warning: the score is right if the\n"
+        "player did not squeeze that note out, and high if they did. The\n"
+        "warnings are also in the JSON, as \"warnings\".\n"
         "score's JSON also carries \"sections\": the chart's practice sections, "
         "each with tick, ms, and name.\n"
         "dump copies the database to a per-process file under %%TEMP%% before\n"
@@ -289,8 +304,62 @@ std::vector<ReplayWindow> parse_acts(const std::string& spec) {
     return out;
 }
 
+// --index, whole-string. std::atoi would turn "1x" or "one" into 0 and price
+// the first path as if that were what was asked for.
+int parse_index(const std::string& v) {
+    const std::string t = trimmed(v);
+    char* end = nullptr;
+    errno = 0;
+    const long long n = std::strtoll(t.c_str(), &end, 10);
+    if (t.empty() || end != t.c_str() + t.size() || errno == ERANGE || n < 0 ||
+        n > 1000000)
+        throw std::runtime_error("--index '" + v +
+                                 "' is not a whole path number");
+    return static_cast<int>(n);
+}
+
+// Read one path out of the JSON `dump` or `target` wrote. The conversion to
+// windows itself lives in core/replay.h so tests can pin it; this only opens
+// the file and picks the entry out of the "paths" array. Every failure names
+// the file and the index, because "score came out wrong" is much harder to
+// notice than "that file does not have a path 7".
+std::vector<ReplayWindow> windows_from_file(const std::string& file, int index) {
+    std::ifstream in(file, std::ios::binary);
+    if (!in) throw std::runtime_error("cannot read --path file: " + file);
+
+    json doc;
+    try {
+        in >> doc;
+    } catch (const std::exception& e) {
+        throw std::runtime_error("--path file " + file +
+                                 " is not valid JSON: " + e.what());
+    }
+    if (!doc.is_object() || !doc.contains("paths") || !doc["paths"].is_array())
+        throw std::runtime_error("--path file " + file +
+                                 " has no \"paths\" array; it should be the "
+                                 "JSON that dump or target writes");
+
+    const json& paths = doc["paths"];
+    if (index < 0 || static_cast<size_t>(index) >= paths.size())
+        throw std::runtime_error("--path file " + file + " holds " +
+                                 std::to_string(paths.size()) +
+                                 " path(s), so --index " +
+                                 std::to_string(index) + " is out of range");
+
+    try {
+        return windows_from_json(paths[index]);
+    } catch (const std::exception& e) {
+        throw std::runtime_error("--path file " + file + ", index " +
+                                 std::to_string(index) + ": " + e.what());
+    }
+}
+
 int cmd_score(const Args& a) {
     if (a.chart.empty()) { usage(); return 2; }
+    if (!a.path.empty() && !a.acts.empty())
+        throw std::runtime_error(
+            "--path and --acts each name a path to score; give one or the "
+            "other, not both");
     const app::Settings s = settings_from(a);
 
     Song song = load_songpath(a.chart, s.view_prodrums, s.effective_bass2x(),
@@ -300,8 +369,17 @@ int cmd_score(const Args& a) {
         return 1;
     }
 
-    std::vector<ReplayWindow> windows = parse_acts(a.acts);
+    const std::vector<ReplayWindow> windows =
+        a.path.empty() ? parse_acts(a.acts)
+                       : windows_from_file(a.path, a.index);
     const ReplayResult r = replay_path(song, windows);
+
+    // Say so when a window could be hiding a squeeze-out. The score is left
+    // exactly as it is: only the player knows whether they squeezed.
+    const std::vector<std::string> warnings =
+        ambiguous_window_warnings(song, r, windows);
+    for (const std::string& w : warnings)
+        std::fprintf(stderr, "warning: %s\n", w.c_str());
 
     json acts = json::array();
     for (const ReplayWindow& w : windows) {
@@ -350,13 +428,19 @@ int cmd_score(const Args& a) {
                                 {"ms", song.timing().timecode(sec.tick).ms()},
                                 {"name", sec.name}});
 
-    emit(json{{"chart", a.chart},
-              {"chartmode", s.chartmode_key()},
-              {"activations", acts},
-              {"chords", chords},
-              {"final", final},
-              {"sections", sections}},
-         a.out, a.pretty);
+    json out{{"chart", a.chart},
+             {"chartmode", s.chartmode_key()},
+             {"activations", acts},
+             {"chords", chords},
+             {"final", final},
+             {"sections", sections},
+             {"warnings", warnings}};
+    // Only when the path came from a file, so a caller can tell a file-read
+    // path from a hand-typed one without guessing.
+    if (!a.path.empty())
+        out["path_source"] = json{{"file", a.path}, {"index", a.index}};
+
+    emit(out, a.out, a.pretty);
     return 0;
 }
 
@@ -759,6 +843,10 @@ int main(int argc, char** argv) {
             else if (k == "--depth-mode") a.depth_mode = next();
             else if (k == "--depth") a.depth = std::atoi(next().c_str());
             else if (k == "--acts") a.acts = next();
+            else if (k == "--path") a.path = next();
+            // Parsed strictly: std::atoi turns a typo into 0, which would
+            // quietly price the wrong path instead of saying anything.
+            else if (k == "--index") a.index = parse_index(next());
             else if (k == "--ticks") a.ticks = next();
             else if (k == "--verbose") g_verbose = true;
             else if (k == "--prodrums") a.prodrums = flag_bool(next());

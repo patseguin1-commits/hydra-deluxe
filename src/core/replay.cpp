@@ -2,10 +2,16 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <stdexcept>
 
 #include "core/scoring.h"
 #include "core/squeeze_rating.h"
 #include "core/timing.h"
+// kSqueezeWindowMs: how far from the Star Power end the engine will even look
+// for a reachable squeeze. The warning below uses the engine's own horizon
+// rather than a number picked here.
+#include "search/graph.h"
 
 namespace hydra {
 
@@ -169,6 +175,102 @@ std::vector<ReplayWindow> windows_for_path(const Path& path, const Song&) {
         for (const SPSqueeze& sq : act.sqinouts)
             if (sq.kind == SqueezeKind::SqOut) w.sqout_offset_ms = sq.offset();
         out.push_back(w);
+    }
+    return out;
+}
+
+std::vector<ReplayWindow> windows_from_json(const nlohmann::json& path) {
+    if (!path.is_object() || !path.contains("activations") ||
+        !path["activations"].is_array())
+        throw std::runtime_error("this path has no \"activations\" array");
+
+    std::vector<ReplayWindow> out;
+    int index = 0;
+    for (const nlohmann::json& act : path["activations"]) {
+        const std::string where = "activation " + std::to_string(index++);
+        if (!act.is_object() || !act.contains("act_tick") ||
+            !act.contains("deact_tick") || !act["act_tick"].is_number() ||
+            !act["deact_tick"].is_number())
+            throw std::runtime_error(where +
+                                     " has no act_tick/deact_tick number");
+
+        ReplayWindow w;
+        w.act_tick = act["act_tick"].get<int64_t>();
+        w.deact_tick = act["deact_tick"].get<int64_t>();
+        // -1 is how the dump writes a missing value. A window with no
+        // deactivation node cannot be replayed, and guessing one would print a
+        // wrong score with no hint why.
+        if (w.act_tick < 0)
+            throw std::runtime_error(where + " has no activation tick");
+        if (w.deact_tick < 0)
+            throw std::runtime_error(
+                where +
+                " has no deactivation node; the record it came from predates "
+                "the field, so this path cannot be replayed");
+        if (w.deact_tick < w.act_tick)
+            throw std::runtime_error(where +
+                                     " deactivates before it activates");
+
+        if (act.contains("sqinouts") && act["sqinouts"].is_array()) {
+            for (const nlohmann::json& sq : act["sqinouts"]) {
+                if (!sq.is_object()) continue;
+                if (sq.value("kind", std::string()) != "SqOut") continue;
+                if (!sq.contains("offset_ms") || !sq["offset_ms"].is_number())
+                    throw std::runtime_error(where +
+                                             " has a SqOut with no offset_ms");
+                w.sqout_offset_ms = sq["offset_ms"].get<double>();
+            }
+        }
+        out.push_back(w);
+    }
+    return out;
+}
+
+std::vector<std::string> ambiguous_window_warnings(
+    const Song& song, const ReplayResult& result,
+    const std::vector<ReplayWindow>& windows) {
+    const SongTiming& timing = song.timing();
+    std::vector<std::string> out;
+
+    for (const ReplayWindow& w : windows) {
+        if (w.sqout_offset_ms) continue;  // the offset settles the question
+
+        // The last Star Power phrase note inside the window. That is the only
+        // note a squeeze-out can be about: the player delays it until Star
+        // Power has run out, so it is not doubled and its phrase is banked
+        // afterwards.
+        const ReplayChord* phrase_note = nullptr;
+        for (const ReplayChord& c : result.chords) {
+            if (c.tick < w.act_tick) continue;
+            if (c.tick > w.deact_tick) break;
+            if (c.is_sp_phrase_end) phrase_note = &c;
+        }
+        if (!phrase_note) continue;
+
+        // How far before the deactivation node that note sits. Beyond the
+        // engine's own squeeze horizon the phrase was collected well inside
+        // Star Power and no squeeze-out was ever reachable, so there is
+        // nothing to warn about. On Hail The Sun - Wake this separates the
+        // six real squeeze-outs (0 to 94 ms) from every other window on the
+        // path (2.2 seconds and up) with room to spare.
+        const double deact_ms = timing.timecode(w.deact_tick).ms();
+        const double gap_ms = deact_ms - phrase_note->ms;
+        if (gap_ms > kSqueezeWindowMs) continue;
+
+        std::string where = "on the Star Power phrase note at tick " +
+                            std::to_string(phrase_note->tick);
+        if (gap_ms > kSameNoteMs) {
+            char gap[32];
+            std::snprintf(gap, sizeof(gap), "%.2f", gap_ms);
+            where = "just after the Star Power phrase note at tick " +
+                    std::to_string(phrase_note->tick) + " (" + gap +
+                    " ms earlier)";
+        }
+
+        out.push_back("window " + std::to_string(w.act_tick) + ":" +
+                      std::to_string(w.deact_tick) + " ends " + where +
+                      " with no squeeze-out offset; if the player squeezed it "
+                      "out, this score is high by that note's first-hit share");
     }
     return out;
 }

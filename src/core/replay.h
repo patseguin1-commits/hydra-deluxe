@@ -29,6 +29,12 @@
 #include <string>
 #include <vector>
 
+// third_party/json is not on hydra_core's include path — only the tools and
+// the test harness list that directory. This is the one file in core that
+// reads JSON, so it reaches the header by relative path instead of the whole
+// library growing an include directory for it.
+#include "../../third_party/json/json.hpp"
+
 #include "core/model.h"
 #include "parse/song.h"
 
@@ -134,6 +140,42 @@ ReplayScore score_of(const Path& path);
 // windows than it has activations cannot be replayed faithfully; check the
 // counts before trusting the score.
 std::vector<ReplayWindow> windows_for_path(const Path& path, const Song& song);
+
+// The same windows, read out of a `dump` or `target` JSON file instead of a
+// live record. `path` is one entry of that file's top-level "paths" array;
+// each of its "activations" carries act_tick, deact_tick, and a "sqinouts"
+// list whose SqOut entry holds the squeeze-out's offset in ms.
+//
+// This exists because the only other way to hand a path to `hydra_replay
+// score` was to retype it as an "act:deact,..." string, and that string used
+// to drop the squeeze-out offset. Without the offset the squeezed phrase note
+// is doubled as if it were still inside Star Power, so the score comes out
+// high. Reading the file keeps every field.
+//
+// Throws std::runtime_error when the JSON is not that shape: no "activations"
+// array, an activation missing act_tick or deact_tick, or a deact_tick of -1,
+// which is how a dump writes "this record has no deactivation node" and means
+// the path cannot be replayed faithfully.
+std::vector<ReplayWindow> windows_from_json(const nlohmann::json& path);
+
+// The windows a hand-typed window list may have priced too high, one
+// plain-English line each.
+//
+// A squeeze-out lives on the note that ends a Star Power phrase: the player
+// delays that note until after Star Power has run out, so it is not doubled.
+// A window that ends on such a note — or a few ms after one — is therefore
+// ambiguous. The score is right if the player did not squeeze, and high by
+// that note's first-hit share if they did, and nothing in the window list
+// says which. So this reports the doubt and nothing else: it never changes a
+// score and never invents an offset.
+//
+// A window that already carries a squeeze-out offset is settled and is never
+// reported, and neither is one whose last phrase note is further back than
+// the engine's own squeeze horizon (kSqueezeWindowMs), because no squeeze-out
+// was reachable there in the first place.
+std::vector<std::string> ambiguous_window_warnings(
+    const Song& song, const ReplayResult& result,
+    const std::vector<ReplayWindow>& windows);
 
 // Not offered: a simulated SP meter and skip count. A straightforward
 // simulation (one bar per phrase completed outside Star Power, capped at 4,

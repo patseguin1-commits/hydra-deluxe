@@ -100,6 +100,13 @@ chord it prints the chord's own score, the running totals, and whether the
 chord fell under Star Power — all as JSON, so it can be diffed or graphed.
 `hydra_replay dump` reads the windows straight out of a stored record, so you
 can start from a path Hydra already found and change one activation.
+`hydra_replay score --path <file>` prices a path straight out of the JSON
+`dump` or `target` wrote, so nothing has to be retyped and nothing is lost on
+the way — in particular the squeeze-out offsets, which a hand-typed window
+list drops and which are worth real points. When a window ends on the note
+that closes a Star Power phrase and carries no squeeze-out offset, `score`
+says so instead of guessing: that score is right if the player did not squeeze
+that note out, and a little high if they did.
 `hydra_replay target` prices a path the search never kept. Give it the
 activation ticks and the engine is made to activate at exactly those fills and
 nowhere else; back come that path's squeeze variants with their windows, meter
