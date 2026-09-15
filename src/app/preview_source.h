@@ -9,11 +9,10 @@
 //     stems, ...);
 //   * a .sng container — audio lives in the same XOR-masked file table the
 //     notes come from;
-//   * a .srb container — art (image) streams follow the notes stream in the
-//     same DEFLATE chain and are skipped by magic bytes; the actual song
-//     audio lives past those in a separate, per-track-encrypted record
-//     section this module cannot read. A .srb chart therefore falls back to
-//     a loose audio file beside the chart, same as a folder chart.
+//   * a .srb container — art streams follow the notes stream in the DEFLATE
+//     chain; the song audio lives past the chain in a section encrypted with
+//     AES-128-CFB (a hardcoded key and a per-blob IV derived from the blob
+//     header). extract_srb_audio decrypts these blobs in-memory.
 //
 // The audio bytes/paths produced here are decoded and mixed by the audio engine
 // (Phase 3); this module does no decoding.
@@ -74,14 +73,9 @@ std::vector<PreviewAudioStem> find_loose_audio(const std::string& folder);
 // XOR-demasked to their original bytes. Labels are the entries' base filenames.
 std::vector<PreviewAudioStem> extract_sng_audio(const std::string& path);
 
-// Audio blobs embedded in a .srb container's DEFLATE chain, past the notes
-// stream, inflated and kept when they look like audio. In practice this chain
-// holds only art (a JPEG or two); the real song audio sits in a separate,
-// per-track-encrypted section past the chain that this function does not
-// touch, so it returns empty for every known .srb. Kept as a named piece (see
-// preview_source.h's top comment) so resolve_preview_source has something to
-// fall back from, and for whatever chart tools eventually put readable audio
-// in that chain. Labels tag the stream index.
+// Audio from a .srb container's encrypted section.  Walks past the DEFLATE
+// chain (metadata, notes, art), then parses and AES-128-CFB-decrypts the
+// audio blob chain that follows.  Each decrypted Ogg blob becomes a stem.
 std::vector<PreviewAudioStem> extract_srb_audio(const std::string& path);
 
 }  // namespace hydra::app

@@ -8,6 +8,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <bcrypt.h>
 
 #include <algorithm>
 #include <cstring>
@@ -54,6 +55,71 @@ uint64_t read_u64(const std::vector<uint8_t>& buf, size_t pos) {
     for (int i = 0; i < 8; ++i)
         v |= static_cast<uint64_t>(buf[pos + i]) << (8 * i);
     return v;
+}
+
+// AES-128-CFB decryption for SRB audio blobs.  CFB decryption is: for each
+// block, ECB-encrypt the previous ciphertext block (starting from the IV) to
+// get the keystream, then XOR.  We batch all ECB encryptions into one call so
+// the cost is a single BCrypt round-trip per blob rather than one per 16 bytes.
+bool srb_decrypt_blob(const uint8_t* enc, size_t len, const uint8_t* header16,
+                      std::vector<uint8_t>& out) {
+    if (len == 0) return true;
+
+    static const uint8_t kSrbAesKey[16] = {
+        0xbf, 0xfe, 0x5f, 0xcb, 0xf7, 0x9e, 0x74, 0x60,
+        0x57, 0xab, 0xab, 0xf6, 0xce, 0x2f, 0xac, 0x14};
+
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    if (!BCRYPT_SUCCESS(BCryptOpenAlgorithmProvider(
+            &alg, BCRYPT_AES_ALGORITHM, nullptr, 0)))
+        return false;
+
+    // Default chaining mode is CBC; we need ECB (independent blocks).
+    if (!BCRYPT_SUCCESS(BCryptSetProperty(
+            alg, BCRYPT_CHAINING_MODE,
+            (PUCHAR)BCRYPT_CHAIN_MODE_ECB,
+            static_cast<ULONG>(sizeof(BCRYPT_CHAIN_MODE_ECB)), 0))) {
+        BCryptCloseAlgorithmProvider(alg, 0);
+        return false;
+    }
+
+    BCRYPT_KEY_HANDLE key = nullptr;
+    if (!BCRYPT_SUCCESS(BCryptGenerateSymmetricKey(
+            alg, &key, nullptr, 0,
+            const_cast<PUCHAR>(kSrbAesKey), sizeof(kSrbAesKey), 0))) {
+        BCryptCloseAlgorithmProvider(alg, 0);
+        return false;
+    }
+
+    // Build the ECB input: [IV, enc[0..16], enc[16..32], ...].
+    // Block i's keystream = AES_ECB_encrypt(ecb_input block i).
+    size_t n_blocks = (len + 15) / 16;
+    size_t ecb_len = n_blocks * 16;
+    std::vector<uint8_t> ecb_buf(ecb_len);
+
+    // First block's input is the IV (header halves swapped).
+    std::memcpy(ecb_buf.data(), header16 + 8, 8);
+    std::memcpy(ecb_buf.data() + 8, header16, 8);
+    // Remaining blocks' inputs are the ciphertext shifted back by one block.
+    size_t copy_len = (n_blocks - 1) * 16;
+    if (copy_len > 0)
+        std::memcpy(ecb_buf.data() + 16, enc, copy_len);
+
+    // One ECB encrypt to produce all keystream blocks at once.
+    ULONG written = 0;
+    bool ok = BCRYPT_SUCCESS(BCryptEncrypt(
+        key, ecb_buf.data(), static_cast<ULONG>(ecb_len), nullptr,
+        nullptr, 0, ecb_buf.data(), static_cast<ULONG>(ecb_len), &written, 0));
+
+    BCryptDestroyKey(key);
+    BCryptCloseAlgorithmProvider(alg, 0);
+    if (!ok) return false;
+
+    // XOR the keystream with the ciphertext.
+    out.resize(len);
+    for (size_t i = 0; i < len; ++i)
+        out[i] = enc[i] ^ ecb_buf[i];
+    return true;
 }
 
 }  // namespace
@@ -156,23 +222,22 @@ std::vector<PreviewAudioStem> extract_srb_audio(const std::string& path) {
     std::vector<uint8_t> buf = read_file_bytes(path);
     if (buf.size() <= kSrbHeaderSize) return stems;
 
-    // Walk the DEFLATE stream chain past metadata (1) and notes (2); the rest
-    // are audio/art. A trailing stream that fails to inflate ends the walk --
-    // the chain is undocumented and the tail is the fragile part.
+    // Walk the DEFLATE stream chain past metadata (1) and notes (2).  Any
+    // trailing stream whose payload looks like audio is kept (this handles
+    // synthetic / future SRBs that embed audio in the chain itself).
+    size_t offset = 0;
     try {
-        size_t offset = 0;
         srb_inflate_stream(buf.data(), buf.size(), kSrbHeaderSize,
                            kSrbMaxMetadata, &offset);  // stream 1: metadata
-        std::vector<uint8_t> notes = srb_inflate_stream(
-            buf.data(), buf.size(), offset, size_t{1} << 30, &offset);  // stream 2
-        (void)notes;
+        srb_inflate_stream(buf.data(), buf.size(), offset,
+                           size_t{1} << 30, &offset);  // stream 2: notes
 
         int index = 3;
         while (offset < buf.size()) {
             size_t next = 0;
             std::vector<uint8_t> stream = srb_inflate_stream(
                 buf.data(), buf.size(), offset, size_t{1} << 30, &next);
-            if (next <= offset) break;  // no forward progress: stop
+            if (next <= offset) break;
             offset = next;
             if (looks_like_audio(stream)) {
                 PreviewAudioStem s;
@@ -183,9 +248,51 @@ std::vector<PreviewAudioStem> extract_srb_audio(const std::string& path) {
             ++index;
         }
     } catch (const std::exception&) {
-        // A malformed trailing stream just ends extraction; the notes and
-        // visuals are unaffected.
+        // A malformed trailing stream ends the DEFLATE walk.
     }
+
+    // If the DEFLATE chain already yielded audio we're done.
+    if (!stems.empty()) return stems;
+
+    // Real Clone Hero .srb files store audio in an AES-128-CFB-encrypted
+    // section after the DEFLATE chain.  Layout:
+    //   u64 (purpose unclear — not the blob count; skip it)
+    //   blob 0:  16-byte header + u64 size + data[size]
+    //   blob 1+: u64 type_id + 16-byte header + u64 size + data[size]
+    if (offset + 8 > buf.size()) return stems;
+    size_t cursor = offset + 8;  // skip the leading u64
+
+    // Blob 0 has no type prefix; all subsequent blobs do.
+    bool first = true;
+    int stem_index = 0;
+    while (cursor < buf.size()) {
+        if (!first) {
+            if (cursor + 8 > buf.size()) break;
+            cursor += 8;  // skip the type_id prefix
+        }
+        if (cursor + 24 > buf.size()) break;
+
+        const uint8_t* header = buf.data() + cursor;
+        uint64_t blob_size = read_u64(buf, cursor + 16);
+        cursor += 24;
+
+        if (blob_size > buf.size() - cursor) break;
+
+        std::vector<uint8_t> plain;
+        if (srb_decrypt_blob(buf.data() + cursor, static_cast<size_t>(blob_size),
+                             header, plain) &&
+            looks_like_audio(plain)) {
+            PreviewAudioStem s;
+            s.label = first ? "song" : "stem" + std::to_string(stem_index);
+            s.bytes = std::move(plain);
+            stems.push_back(std::move(s));
+        }
+
+        cursor += static_cast<size_t>(blob_size);
+        first = false;
+        ++stem_index;
+    }
+
     return stems;
 }
 
@@ -196,9 +303,8 @@ PreviewSource resolve_preview_source(const std::string& notespath, bool pro,
         src.stems = extract_sng_audio(notespath);
     else if (ends_with_ci(notespath, ".srb")) {
         src.stems = extract_srb_audio(notespath);
-        // The bundled songs' own audio is encrypted (real container, not the
-        // DEFLATE chain this walks) and unreadable; fall back to a loose copy
-        // placed next to the chart, same as a folder chart uses.
+        // If decryption fails (wrong key, corrupt file, etc.) fall back to
+        // loose audio files beside the .srb, same as a folder chart.
         if (src.stems.empty()) src.stems = find_loose_audio(dir_name(notespath));
     } else
         src.stems = find_loose_audio(dir_name(notespath));
