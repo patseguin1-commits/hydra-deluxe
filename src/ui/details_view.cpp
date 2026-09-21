@@ -296,6 +296,16 @@ void render_activations_section(const Path* path, const HydraRecord& record,
                 hint(app::kTransferScaleHint);
             }
 
+            if (!av.overfill_warning.empty()) {
+                {
+                    WarnColor warn;
+                    ImGui::PushTextWrapPos(0.0f);
+                    ImGui::TextUnformatted(av.overfill_warning.c_str());
+                    ImGui::PopTextWrapPos();
+                }
+                hint(app::kOverfillHint);
+            }
+
             for (const app::TextLine& sq : av.sqinouts) warnable_text(sq);
 
             if (av.backends.empty()) {

@@ -47,6 +47,10 @@ void write_activation(BinaryWriter& w, const Activation& act, uint32_t version) 
     // on this activation. Nothing recomputes it, so an older blob reads back
     // unset and its consumers say so rather than guessing.
     if (version >= 4) w.opt_i64(act.deact_tick);
+
+    // Format version 5 and later: the collecting note the SP cap pinned
+    // this window to. Older blobs read back unset.
+    if (version >= 5) w.opt_i64(act.clamp_tick);
 }
 
 Activation read_activation(BinaryReader& r, uint32_t version) {
@@ -92,6 +96,9 @@ Activation read_activation(BinaryReader& r, uint32_t version) {
 
     // Pre-v4 blobs leave deact_tick unset. Nothing fills it in.
     if (version >= 4) act.deact_tick = r.opt_i64();
+
+    // Pre-v5 blobs leave clamp_tick unset. Nothing fills it in.
+    if (version >= 5) act.clamp_tick = r.opt_i64();
     return act;
 }
 

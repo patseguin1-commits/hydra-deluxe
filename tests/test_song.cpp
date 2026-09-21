@@ -5,12 +5,19 @@
 
 #include "doctest.h"
 
+#include <cstdint>
 #include <string>
+#include <vector>
 
 #include "core/model.h"
 #include "corpus_util.h"
+#include "midi_util.h"
 #include "multidiff_chart.h"
 #include "parse/song.h"
+
+#ifndef HYDRA_TESTDATA_DIR
+#error "HYDRA_TESTDATA_DIR must be defined (see CMakeLists.txt)"
+#endif
 
 using namespace hydra;
 
@@ -267,4 +274,93 @@ TEST_CASE(".mid: EVENTS text metas become practice sections") {
     CHECK(song.practice_sections[0].name == "Intro");
     CHECK(song.practice_sections[1].tick == 384);
     CHECK(song.practice_sections[1].name == "verse_1");
+}
+
+TEST_CASE("mid: kick velocity is read as ghost/accent, like a pad's") {
+    // Clone Hero prices a velocity-1 kick as a ghost and a velocity-127 kick
+    // as an accent, both worth double. Hydra used to hand every kick Normal.
+    auto drums_track = [](bool dynamics) {
+        std::vector<std::vector<uint8_t>> ev;
+        ev.push_back(testmidi::track_name("PART DRUMS"));
+        ev.push_back(testmidi::set_tempo());
+        if (dynamics)
+            ev.push_back(testmidi::text_event("[ENABLE_CHART_DYNAMICS]"));
+        ev.push_back(testmidi::note_on(96, 1));     // tick 0:   kick, vel 1
+        ev.push_back({0x40, 0x90, 95, 127});        // tick 64:  2x kick, vel 127
+        ev.push_back({0x40, 0x90, 97, 1});          // tick 128: Red pad, vel 1
+        ev.push_back(testmidi::end_of_track());
+        return testmidi::smf(testmidi::concat(ev));
+    };
+
+    SUBCASE("with [ENABLE_CHART_DYNAMICS]") {
+        Song song = load_songbytes_mid(drums_track(true), true, true);
+        REQUIRE(song.sequence.size() == 3);
+
+        const auto& kick = song.sequence[0].chord.at(NoteColor::Kick);
+        REQUIRE(kick.has_value());
+        CHECK(kick->dynamictype == NoteDynamicType::Ghost);
+        CHECK(kick->is2x == false);
+        CHECK(kick->str() == "Kick (Ghost)");
+
+        const auto& kick2x = song.sequence[1].chord.at(NoteColor::Kick);
+        REQUIRE(kick2x.has_value());
+        CHECK(kick2x->dynamictype == NoteDynamicType::Accent);
+        CHECK(kick2x->is2x == true);
+        CHECK(kick2x->str() == "Kick (Accent, 2x)");
+
+        const auto& red = song.sequence[2].chord.at(NoteColor::Red);
+        REQUIRE(red.has_value());
+        CHECK(red->dynamictype == NoteDynamicType::Ghost);
+
+        check_invariants(song, "kick dynamics fixture");
+    }
+
+    SUBCASE("without the text event, every note is Normal") {
+        Song song = load_songbytes_mid(drums_track(false), true, true);
+        REQUIRE(song.sequence.size() == 3);
+        CHECK(song.sequence[0].chord.at(NoteColor::Kick)->dynamictype ==
+              NoteDynamicType::Normal);
+        CHECK(song.sequence[1].chord.at(NoteColor::Kick)->dynamictype ==
+              NoteDynamicType::Normal);
+        CHECK(song.sequence[1].chord.at(NoteColor::Kick)->is2x == true);
+        CHECK(song.sequence[2].chord.at(NoteColor::Red)->dynamictype ==
+              NoteDynamicType::Normal);
+        check_invariants(song, "kick dynamics fixture (no marker)");
+    }
+}
+
+TEST_CASE("mid: Won't Get Fooled Again (O) has 36 ghost kicks") {
+    // The chart that proved the bug: Hydra called it 1,134,335 while a real FC
+    // on Hydra's own path scored 1,142,235. 36 velocity-1 kicks, no accents.
+    const std::string path =
+        std::string(HYDRA_TESTDATA_DIR) + "/midi/wgfa_onyxite/notes.mid";
+    Song song = load_songpath(path, true, true, Difficulty::Expert);
+    REQUIRE(!song.is_empty());
+
+    int ghost = 0, accent = 0, kicks = 0;
+    for (const SongTimestamp& ts : song.sequence) {
+        const auto& kick = ts.chord.at(NoteColor::Kick);
+        if (!kick.has_value()) continue;
+        ++kicks;
+        if (kick->dynamictype == NoteDynamicType::Ghost) ++ghost;
+        if (kick->dynamictype == NoteDynamicType::Accent) ++accent;
+    }
+    CHECK(kicks > 36);
+    CHECK(ghost == 36);
+    CHECK(accent == 0);
+
+    // Every chord code still round-trips, which is what the new ghost-kick
+    // codes have to prove. (The full check_invariants sweep is not used here:
+    // this chart has a fill that starts on its own last note, so its
+    // activation length is 0 — true before this change and unrelated to it.)
+    bool codes_ok = true, ticks_ok = true;
+    int64_t prev = -1;
+    for (const SongTimestamp& ts : song.sequence) {
+        if (ts.timecode.ticks() <= prev) ticks_ok = false;
+        prev = ts.timecode.ticks();
+        const std::string code = ts.chord.code();
+        if (code.empty() || Chord::from_code(code).code() != code) codes_ok = false;
+    }
+    CHECK(codes_ok);
+    CHECK(ticks_ok);
 }

@@ -118,6 +118,11 @@ struct ActivationRating {
     bool early_backend_warns = false;
     bool late_note_warns = false;
     bool early_note_warns = false;
+    // True when the activation's SP window was cap-clamped AND the activation
+    // lists a squeeze the frontend decides: any SqIn/SqOut, or any backend
+    // row that rate_activation judges (squeezed_out, or offset > kDifficultMs).
+    // Drives the overfill warning in the details view.
+    bool cap_clamped = false;
     // One entry per act.display_backends() row, in that order.
     std::vector<BackendRating> backends;
 };

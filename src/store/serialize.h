@@ -36,13 +36,15 @@ namespace hydra::store {
 // frontend transfer scales (pre/post x early/late) to each activation; older
 // blobs read back with the 1.0 flat-tempo defaults. Version 4 appended each
 // activation's deact_tick -- the deactivation node the search stamps on it;
-// older blobs read back with it unset, and nothing re-derives it. Version 1
-// blobs are still read -- they simply have no all-0 path until the chart is
+// older blobs read back with it unset, and nothing re-derives it. Version 5
+// appended each activation's clamp_tick -- the collecting note the SP cap
+// pinned the window to; older blobs read back with it unset. Version 1 blobs
+// are still read -- they simply have no all-0 path until the chart is
 // re-analyzed. That does not make them Ready, though: the store's Ready rule
 // also checks the stored path-structure format against
 // kPathStructureFormatVersion (path_codec.h), so a library analyzed under an
 // older path layout reads Stale until it is re-analyzed.
-constexpr uint32_t kBlobFormatVersion = 4;
+constexpr uint32_t kBlobFormatVersion = 5;
 
 class SerializeError : public std::runtime_error {
 public:

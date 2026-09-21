@@ -54,6 +54,15 @@ double activation_fill_deadline_ms(const SongTiming& timing,
 
 struct ScoreGraphEdge;
 
+// Where one pending SP end moves when a phrase is collected: +2 measures,
+// unless the SP cap's ceiling (2 * cap measures past the collecting note) is
+// earlier. `clamped` says the ceiling won -- the end is now pinned to the
+// collecting note, not to whatever anchored it before.
+struct SpExtension {
+    int64_t to_tick = 0;
+    bool clamped = false;
+};
+
 struct ScoreGraphNode {
     Timecode timecode;
     ScoreGraphEdge* adv_edge = nullptr;
@@ -74,8 +83,9 @@ struct ScoreGraphEdge {
     int64_t ghostscore = 0;
 
     // (sp_timecode, extension_map) per SP phrase collected on this advance edge.
-    // The extension map is from_tick -> to_tick; the engine scans it by key.
-    std::vector<std::pair<Timecode, std::map<int64_t, int64_t>>> sp_times;
+    // The extension map is from_tick -> where that end moves (and whether the
+    // cap pinned it there); the engine scans it by key.
+    std::vector<std::pair<Timecode, std::map<int64_t, SpExtension>>> sp_times;
 
     std::optional<FrontendSqueeze> frontend;
     std::vector<BackendSqueeze> backends;
@@ -130,8 +140,15 @@ private:
                            int sqout_points);
 
     int max_sp_bars() const;
-    // Returns (from_tc, to_tc) pairs for the given deact timecodes.
-    std::vector<std::pair<Timecode, Timecode>> extend_deacts(
+    // One moved end per given deact timecode, in order: where it goes and
+    // whether the SP cap's ceiling (measured from sp_timecode) is what put
+    // it there.
+    struct DeactExtension {
+        Timecode from;
+        Timecode to;
+        bool clamped = false;
+    };
+    std::vector<DeactExtension> extend_deacts(
         const std::vector<Timecode>& deact_tcs, const Timecode& sp_timecode);
 
     double head_time_offset(const Timecode& tc) const {

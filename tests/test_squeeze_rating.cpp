@@ -721,3 +721,38 @@ TEST_CASE("display_backends: 500 ms window keeps everything the 500 ms search gr
     CHECK(kept[2].offset_ms == doctest::Approx(-300.0));
     CHECK(kept[3].offset_ms == doctest::Approx(499.0));
 }
+
+TEST_CASE("rate_activation: cap_clamped flag") {
+    // cap_clamped is only meaningful when both halves are true: the window
+    // was cap-clamped (clamp_tick is set) AND the activation actually lists a
+    // squeeze the frontend decides (a SqIn/SqOut, or a backend row that's
+    // squeezed out or past the difficult floor). Either half missing means
+    // there's no frontend-decided squeeze for the overfill warning to attach
+    // to, so the flag stays false.
+
+    // clamp_tick set, plus a SqOut -- both halves true, so this is the case
+    // the overfill warning is for.
+    Activation clamped_with_squeeze;
+    clamped_with_squeeze.clamp_tick = 3072;
+    clamped_with_squeeze.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -50.0});
+    ActivationRating r1 = rate_activation(clamped_with_squeeze, nullptr, 85.0);
+    CHECK(r1.cap_clamped);
+
+    // clamp_tick set, but the only backend row is at -30 ms -- inside the
+    // kDifficultMs floor, so it isn't a squeeze the frontend decides. No
+    // SqIn/SqOut either, so cap_clamped stays false.
+    Activation clamped_no_squeeze;
+    clamped_no_squeeze.clamp_tick = 3072;
+    BackendSqueeze mild_row;
+    mild_row.offset_ms = -30.0;
+    clamped_no_squeeze.backends.push_back(mild_row);
+    ActivationRating r2 = rate_activation(clamped_no_squeeze, nullptr, 85.0);
+    CHECK_FALSE(r2.cap_clamped);
+
+    // A SqOut with no clamp_tick at all -- the window was never cap-clamped,
+    // so there's nothing to warn about regardless of the squeeze.
+    Activation unclamped_with_squeeze;
+    unclamped_with_squeeze.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -50.0});
+    ActivationRating r3 = rate_activation(unclamped_with_squeeze, nullptr, 85.0);
+    CHECK_FALSE(r3.cap_clamped);
+}

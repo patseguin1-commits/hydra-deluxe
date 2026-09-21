@@ -300,16 +300,20 @@ TEST_CASE("path codec: a missing node or a bad structure blob throws") {
     future.structure[0] = static_cast<uint8_t>(kPathStructureFormatVersion + 1);
     CHECK_THROWS_AS(rebuild_record(future), SerializeError);
 
-    // Version 1 is a real old version, not just "some other number": the
-    // structure format was bumped from 1 to 2, and the old layout is refused
-    // the same as any unknown one.
-    FlatRecord past = flat;
-    past.structure[0] = 1;
-    CHECK_THROWS_AS(rebuild_record(past), SerializeError);
+    // Versions 1 and 2 are real old versions, not just "some other number":
+    // the structure format was bumped through 1 -> 2 -> 3, and the old
+    // layouts are refused the same as any unknown one.
+    FlatRecord past1 = flat;
+    past1.structure[0] = 1;
+    CHECK_THROWS_AS(rebuild_record(past1), SerializeError);
 
-    // The current version is 2, and the unmodified flat record -- still at
+    FlatRecord past2 = flat;
+    past2.structure[0] = 2;
+    CHECK_THROWS_AS(rebuild_record(past2), SerializeError);
+
+    // The current version is 3, and the unmodified flat record -- still at
     // that version -- round-trips through rebuild_record without throwing.
-    CHECK(kPathStructureFormatVersion == 2);
+    CHECK(kPathStructureFormatVersion == 3);
     CHECK(flat.structure[0] == static_cast<uint8_t>(kPathStructureFormatVersion));
     HydraRecord rebuilt = rebuild_record(flat);
     CHECK(rebuilt.paths.size() == rec.paths.size());

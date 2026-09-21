@@ -155,6 +155,23 @@ ActivationRating rate_activation(const Activation& act,
     out.late_warns = out.late_backend_warns || out.late_note_warns;
     out.early_warns = out.early_backend_warns || out.early_note_warns;
 
+    // The cap-clamped flag fires when the activation has a clamp_tick AND at
+    // least one squeeze the frontend decides: any SqIn/SqOut, or any backend
+    // row that was squeezed out or sits past the difficult threshold.
+    if (act.clamp_tick.has_value()) {
+        bool has_frontend_squeeze = !act.sqinouts.empty();
+        if (!has_frontend_squeeze) {
+            for (const BackendRating& br : out.backends) {
+                if (br.squeezed_out ||
+                    (br.row.offset_ms && *br.row.offset_ms > kDifficultMs)) {
+                    has_frontend_squeeze = true;
+                    break;
+                }
+            }
+        }
+        out.cap_clamped = has_frontend_squeeze;
+    }
+
     return out;
 }
 

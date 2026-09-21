@@ -5,6 +5,7 @@
 
 #include "doctest.h"
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -237,6 +238,57 @@ TEST_CASE("build_activations: the scale warning prints the end that warned") {
     warn = warning_of(both);
     CHECK(warn ==
           "Frontend timing scales x0.80 (late, backends) / x0.50 (late, SqIn).");
+}
+
+TEST_CASE("build_activations: overfill warning text") {
+    // 120 BPM, 4/4, 192 ticks per beat -- a measure is 4 beats, so 768 ticks
+    // per measure. Tick 960 is one full measure plus one beat in, which
+    // prints as m2.2.0 (the display is 1-based: measure 2, beat 2, tick 0).
+    std::map<int64_t, int64_t> tpm{{0, 768}};
+    std::map<int64_t, double> bpm{{0, 120.0}};
+    SongTiming timing(192, tpm, bpm);
+
+    // clamp_tick says the cap pinned this window's end to the note at tick
+    // 960; the SqOut is the frontend-decided squeeze the warning needs to
+    // have something to attach to (see the cap_clamped tests above).
+    Activation act;
+    act.timecode = timing.timecode(0);
+    act.sp_meter = 2;
+    act.clamp_tick = 960;
+    act.deact_tick = 6144;
+    act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -50.0});
+
+    Path path;
+    path.activations.push_back(act);
+
+    HydraRecord record;
+    record.sp_cap = 4;
+
+    // With a SongTiming at hand, the warning names the exact measure the
+    // clamped note falls on.
+    ActivationsView with_timing = build_activations(path, record, &timing, 85.0);
+    REQUIRE(with_timing.acts.size() == 1);
+    CHECK(with_timing.acts[0].overfill_warning ==
+          "SP overfilled at m2.2.0: that note's timing, not the activation's, "
+          "moves the SP end.");
+
+    // Without a SongTiming (no songmeta row), there is no way to turn the
+    // clamped tick into a measure string, so the line names the note by role.
+    ActivationsView without_timing = build_activations(path, record, nullptr, 85.0);
+    REQUIRE(without_timing.acts.size() == 1);
+    CHECK(without_timing.acts[0].overfill_warning ==
+          "SP overfilled: the collecting note's timing, not the activation's, "
+          "moves the SP end.");
+
+    // No clamp_tick at all -- the window was never cap-clamped, so there is
+    // nothing to warn about even with the same SqOut present.
+    Activation unclamped = act;
+    unclamped.clamp_tick.reset();
+    Path plain_path;
+    plain_path.activations.push_back(unclamped);
+    ActivationsView plain = build_activations(plain_path, record, &timing, 85.0);
+    REQUIRE(plain.acts.size() == 1);
+    CHECK(plain.acts[0].overfill_warning.empty());
 }
 
 TEST_CASE("build_activations: the backend limit hides far rows but never "

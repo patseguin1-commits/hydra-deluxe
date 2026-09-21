@@ -16,10 +16,9 @@ bool allows_cymbals(NoteColor c) {
            c == NoteColor::Green;
 }
 
-bool allows_dynamics(NoteColor c) {
-    return c == NoteColor::Red || c == NoteColor::Yellow ||
-           c == NoteColor::Blue || c == NoteColor::Green;
-}
+// Every lane, kick included: Clone Hero prices a velocity-1 kick as a ghost
+// and a velocity-127 kick as an accent, the same rule the pads use.
+bool allows_dynamics(NoteColor) { return true; }
 
 std::string color_str(NoteColor c) {
     switch (c) {
@@ -66,16 +65,22 @@ std::string ChordNote::str() const {
     if (allows_cymbals(colortype))
         cym = cymbaltype == NoteCymbalType::Cymbal ? "Cym" : "Tom";
 
-    std::string mod;
+    // Every modifier goes in one parenthesis, dynamic first, so a ghost 2x
+    // kick reads "Kick (Ghost, 2x)".
+    std::vector<std::string> mods;
     if (allows_dynamics(colortype)) {
         switch (dynamictype) {
-            case NoteDynamicType::Normal: mod = ""; break;
-            case NoteDynamicType::Ghost: mod = " (Ghost)"; break;
-            case NoteDynamicType::Accent: mod = " (Accent)"; break;
+            case NoteDynamicType::Normal: break;
+            case NoteDynamicType::Ghost: mods.push_back("Ghost"); break;
+            case NoteDynamicType::Accent: mods.push_back("Accent"); break;
         }
-    } else if (is2x) {
-        mod = " (2x)";
     }
+    if (is2x) mods.push_back("2x");
+
+    std::string mod;
+    for (size_t i = 0; i < mods.size(); ++i)
+        mod += (i == 0 ? " (" : ", ") + mods[i];
+    if (!mod.empty()) mod += ")";
 
     return color_str(colortype) + cym + mod;
 }

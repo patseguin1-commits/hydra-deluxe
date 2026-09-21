@@ -145,6 +145,14 @@ The backends have a (made up by me) rating that just conveys how difficult it wo
 
 One important caveat: Star Power length is measured in measures, not milliseconds. If the SP end falls where measures last a different amount of time than at the activation point (a different time signature and/or tempo), frontend timing only partially transfers to the SP end — hitting the activation 50ms late might move the SP end only 25ms. When this matters, the activation details show a scale warning (e.g. `x0.51`), and affected backend rows show an effective timing (`eff.`) that puts the real difficulty back on the nominal two-hit scale (twice the hit window). The warning appears whenever the scaling is material to a listed squeeze — even a ratio within a fraction of a percent of 1.0 shows up when a large gap makes it decide success. Late and early frontend hits can even scale differently, when the activation or the SP end sits exactly on a signature or tempo change.
 
+Sometimes a phrase you collect partway through Star Power fills the meter
+all the way to the SP cap (the most bars of SP you can hold at once).
+When that happens, the activation details show an overfill warning. It
+means the note that filled the meter — not the activation — is now the one
+whose early or late timing moves the SP end. The squeeze numbers below the
+warning are unaffected by this; only which note you'd need to move to change
+them has shifted.
+
 One INI setting feeds these displays (`hydra_settings.ini`, no UI control yet): `hit_window_ms` (default 85 — the registrable Clone Hero Pro Drums window per side).
 
 #### Score breakdown

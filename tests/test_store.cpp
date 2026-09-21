@@ -341,6 +341,31 @@ TEST_CASE("record blob: a v3 write drops deact_tick, a v4 write keeps it") {
     CHECK(as_current.best_path().all_activations().front().deact_tick == 4800);
 }
 
+// Same gate, one version later: clamp_tick is the field version 5 added, so a
+// v4 write has nowhere to put it and must come back unset, while the default
+// (v5) write keeps it.
+TEST_CASE("record blob: a v4 write drops clamp_tick, a v5 write keeps it") {
+    Activation act;
+    act.timecode = Timecode::raw(960);
+    act.clamp_tick = 3072;
+
+    Path path;
+    path.activations.push_back(act);
+
+    HydraRecord record;
+    record.sp_cap = 4;
+    record.paths.push_back(path);
+
+    HydraRecord as_v4 = read_record(write_record(record, 4));
+    REQUIRE(as_v4.paths.size() == 1);
+    CHECK_FALSE(
+        as_v4.best_path().all_activations().front().clamp_tick.has_value());
+
+    HydraRecord as_current = read_record(write_record(record));
+    REQUIRE(as_current.paths.size() == 1);
+    CHECK(as_current.best_path().all_activations().front().clamp_tick == 3072);
+}
+
 TEST_CASE("RecordStore maintenance: has_record, list_records, reindex, drop_stale_records") {
     std::optional<Song> song;
     std::optional<HydraRecord> record;

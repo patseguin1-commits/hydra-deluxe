@@ -63,6 +63,14 @@ const char* const kTransferScaleHint =
     "Early and late hits scale differently when the activation\n"
     "or SP end sits exactly on a signature or tempo change.";
 
+const char* const kOverfillHint =
+    "SP lasts a set number of measures from the note it is\n"
+    "tied to -- normally the activation. When a mid-SP phrase\n"
+    "fills the meter to the cap, the end is measured from that\n"
+    "phrase's last note instead, so that note's timing is what\n"
+    "moves the end. The ms figures here are still measured at\n"
+    "the SP end; only the note you move them with changes.";
+
 ActivationsView build_activations(const Path& path, const HydraRecord& record,
                                   const SongTiming* timing,
                                   double hit_window_ms,
@@ -174,6 +182,22 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
                 parts += buf;
             }
             av.scale_warning = "Frontend timing scales " + parts + ".";
+        }
+
+        // When the SP window was cap-clamped and this activation lists a
+        // squeeze the frontend decides, warn that the anchor is the
+        // collecting note, not the activation.
+        if (rate.cap_clamped) {
+            if (timing && act.clamp_tick) {
+                av.overfill_warning =
+                    "SP overfilled at " +
+                    measurestr(timing->timecode(*act.clamp_tick)) +
+                    ": that note's timing, not the activation's, moves the SP end.";
+            } else {
+                av.overfill_warning =
+                    "SP overfilled: the collecting note's timing, not the "
+                    "activation's, moves the SP end.";
+            }
         }
 
         for (const SPSqueeze& sq : act.sqinouts)

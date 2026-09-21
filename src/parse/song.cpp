@@ -369,27 +369,29 @@ MOp MidiParser::optype(const Message& msg, int64_t tick) {
         if (is_noteon) {
             // The difficulty's own five pitches come first: base is the kick,
             // the next four are Red/Yellow/Blue/Green.
+            // Clone Hero reads the kick's velocity exactly as it reads a
+            // pad's: 127 is an accent, 1 is a ghost, and both score double.
+            const NoteDynamicType vel_dyn =
+                velocity == 127   ? NoteDynamicType::Accent
+                : velocity == 1   ? NoteDynamicType::Ghost
+                                  : NoteDynamicType::Normal;
             if (note == base_) {
-                return {MPhase::Notes, [this] {
-                            op_note(NoteColor::Kick,
-                                    NoteDynamicType::Normal, false);
+                return {MPhase::Notes, [this, vel_dyn] {
+                            op_note(NoteColor::Kick, vel_dyn, false);
                         }};
             }
             if (note > base_ && note <= base_ + 4) {
                 // base+1 -> Red(2), as 97 -> Red(2) on Expert.
                 NoteColor color = static_cast<NoteColor>(note - base_ + 1);
-                NoteDynamicType dyn = NoteDynamicType::Normal;
-                if (velocity == 127) dyn = NoteDynamicType::Accent;
-                else if (velocity == 1) dyn = NoteDynamicType::Ghost;
-                return {MPhase::Notes,
-                        [this, color, dyn] { op_note(color, dyn, false); }};
+                return {MPhase::Notes, [this, color, vel_dyn] {
+                            op_note(color, vel_dyn, false);
+                        }};
             }
             switch (note) {
                 case 95:
                     if (mode_bass2x_)
-                        return {MPhase::Notes, [this] {
-                                    op_note(NoteColor::Kick,
-                                            NoteDynamicType::Normal, true);
+                        return {MPhase::Notes, [this, vel_dyn] {
+                                    op_note(NoteColor::Kick, vel_dyn, true);
                                 }};
                     return {};
                 case 120:

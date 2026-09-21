@@ -139,3 +139,55 @@ TEST_CASE("Chord rowstr / notationstr / disco flip") {
     CHECK(d.at(NoteColor::Yellow)->cymbaltype == NoteCymbalType::Cymbal);
     CHECK_FALSE(d.at(NoteColor::Red).has_value());
 }
+
+TEST_CASE("a ghost or accent kick scores double, like a pad") {
+    CHECK(ChordNote{NoteColor::Kick}.basescore() == 50);
+    CHECK(ChordNote{NoteColor::Kick, NoteDynamicType::Ghost}.basescore() == 100);
+    CHECK(ChordNote{NoteColor::Kick, NoteDynamicType::Accent}.basescore() == 100);
+    // A 2x kick is still a kick: the foot, not the value, is what changes.
+    CHECK(ChordNote{NoteColor::Kick, NoteDynamicType::Ghost,
+                    NoteCymbalType::Normal, true}
+              .basescore() == 100);
+    CHECK(allows_dynamics(NoteColor::Kick));
+}
+
+TEST_CASE("ChordNote::str shows the kick's dynamic and its 2x flag") {
+    auto kick = [](NoteDynamicType dyn, bool is2x) {
+        return ChordNote{NoteColor::Kick, dyn, NoteCymbalType::Normal, is2x}.str();
+    };
+    CHECK(kick(NoteDynamicType::Normal, false) == "Kick");
+    CHECK(kick(NoteDynamicType::Ghost, false) == "Kick (Ghost)");
+    CHECK(kick(NoteDynamicType::Accent, false) == "Kick (Accent)");
+    CHECK(kick(NoteDynamicType::Normal, true) == "Kick (2x)");
+    CHECK(kick(NoteDynamicType::Ghost, true) == "Kick (Ghost, 2x)");
+    CHECK(kick(NoteDynamicType::Accent, true) == "Kick (Accent, 2x)");
+
+    // Pads read exactly as they always did.
+    CHECK(ChordNote{NoteColor::Red}.str() == "Red");
+    CHECK(ChordNote{NoteColor::Red, NoteDynamicType::Ghost}.str() ==
+          "Red (Ghost)");
+    CHECK(ChordNote{NoteColor::Yellow, NoteDynamicType::Accent,
+                    NoteCymbalType::Cymbal, false}
+              .str() == "YellowCym (Accent)");
+}
+
+TEST_CASE("Chord::code prefixes a ghost/accent kick chord with g/a") {
+    Chord normal;
+    normal.add_note(NoteColor::Kick);
+    normal.add_note(NoteColor::Red);
+    const std::string base = normal.code();
+
+    Chord ghost;
+    ghost.add_note(NoteColor::Kick).dynamictype = NoteDynamicType::Ghost;
+    ghost.add_note(NoteColor::Red);
+    CHECK(ghost.code() == "g" + base);
+    CHECK(Chord::from_code("g" + base) == ghost);
+
+    Chord accent;
+    accent.add_note(NoteColor::Kick).dynamictype = NoteDynamicType::Accent;
+    accent.add_note(NoteColor::Red);
+    CHECK(accent.code() == "a" + base);
+    CHECK(Chord::from_code("a" + base) == accent);
+
+    CHECK(ghost.rowstr() == "[Kick (Ghost) - Red]");
+}

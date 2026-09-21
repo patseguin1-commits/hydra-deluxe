@@ -46,20 +46,20 @@ namespace hydra::store {
 // Bumped when a node payload's layout changes. A payload is the write_path
 // field order minus the variant list and var_point. Version 1 held
 // activations in the kBlobFormatVersion == 3 layout; version 2 holds them in
-// the version 4 layout, which adds each activation's deact_tick. Only
-// version 2 is written, and only version 2 is decoded. A version-1 node can
-// be reached only through a version-1 structure, and the store never decodes
-// one of those (see row_is_ready in record_store.cpp), so the version-1 read
-// path is dead and one layout is the only one anybody spells.
-constexpr uint32_t kPathNodeFormatVersion = 2;
+// the version 4 layout (adds deact_tick); version 3 holds them in the
+// version 5 layout (adds clamp_tick). Only version 3 is written, and only
+// version 3 is decoded. A version-1 or -2 node can be reached only through
+// an older structure, and the store never decodes one of those (see
+// row_is_ready in record_store.cpp), so the old read paths are dead.
+constexpr uint32_t kPathNodeFormatVersion = 3;
 
 // Bumped when the structure blob's layout changes, and also when the node
-// layout it points at changes. Version 2 is the same byte layout as version
-// 1, but a version-2 structure references node payloads in node format 2
-// (activations carry deact_tick). This version is what the store's Ready
-// rule reads off a stored row, so bumping the node layout means bumping this
-// too.
-constexpr uint32_t kPathStructureFormatVersion = 2;
+// layout it points at changes. Version 3 is the same byte layout as version
+// 2, but a version-3 structure references node payloads in node format 3
+// (activations carry clamp_tick). This version is what the store's Ready
+// rule reads off a stored row, so bumping the node layout means bumping
+// this too.
+constexpr uint32_t kPathStructureFormatVersion = 3;
 
 // The 128-bit content hash of a node payload, raw. The structure blob stores
 // these 16 bytes; path_hash() renders the same value as lowercase hex.

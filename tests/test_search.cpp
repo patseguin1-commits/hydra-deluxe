@@ -509,3 +509,139 @@ TEST_CASE("SP past the last note: synthesized rows survive a store round-trip") 
     REQUIRE(act.deact_tick.has_value());
     CHECK(ract.deact_tick == act.deact_tick);
 }
+
+// ---- SP cap overfill: a phrase collected mid-SP can clamp the end ------
+//
+// The meter holds a fixed number of bars. Once it's full, a phrase you
+// collect while SP is active can't push the end out by a plain 2 measures
+// any more -- it gets capped at 2*cap measures past that phrase's own note.
+// When the cap wins, the note that pinned the end (not the activation) is
+// what the timing warning has to point at, so the search stamps that note's
+// tick onto the activation as clamp_tick.
+
+TEST_CASE("SP cap overfill: a mid-SP phrase that clamps records the "
+          "collecting note") {
+    // Cap 2 bars. Two SP phrases fill the meter before the activation at
+    // tick 2304 (meter 2), whose plain end is 4 measures later at 5376.
+    // The phrase collected at 3072, mid-SP, wants to push the end out by 2
+    // more measures to 4608 + 1536 = ... no -- the pending end simply moves
+    // to min(prev_end + 2 measures, 3072 + 2*cap measures). prev_end + 2
+    // measures is 5376 + 1536 = 6912; the cap ceiling is 3072 + 4*768 =
+    // 6144. The ceiling is smaller, so it wins: the end is pinned to 6144,
+    // and clamp_tick records the note that pinned it, 3072.
+    Song song = build_tail_song({{0, true, false},
+                                 {768, true, false},
+                                 {2304, false, true},
+                                 {3072, true, false},
+                                 {3840},
+                                 {4608},
+                                 {5376},
+                                 {6000}});
+
+    ScoreGraph graph(song, 2);
+    std::vector<Path> paths =
+        run_search(graph, DepthMode::Scores, 0, std::nullopt);
+
+    const Activation& act = last_act(paths);
+    REQUIRE(act.sp_meter.has_value());
+    CHECK(*act.sp_meter == 2);
+    REQUIRE(act.timecode.has_value());
+    CHECK(act.timecode->ticks() == 2304);
+
+    auto deact = activation_deact_tick(act);
+    REQUIRE(deact.has_value());
+    CHECK(*deact == 6144);
+
+    REQUIRE(act.clamp_tick.has_value());
+    CHECK(*act.clamp_tick == 3072);
+}
+
+TEST_CASE("SP cap overfill: a mid-SP phrase that only ties the cap does "
+          "not clamp") {
+    // Same cap and activation as above, but the mid-SP phrase lands at 3840
+    // instead of 3072. Now both options land on the same tick: prev_end + 2
+    // measures is 5376 + 1536 = 6912, and the cap ceiling is 3840 + 4*768 =
+    // 6912 too. A tie means the plain extension wins, not the cap -- so this
+    // is not a clamp, and clamp_tick stays unset.
+    Song song = build_tail_song({{0, true, false},
+                                 {768, true, false},
+                                 {2304, false, true},
+                                 {3840, true, false},
+                                 {4608},
+                                 {5376},
+                                 {6000},
+                                 {6500}});
+
+    ScoreGraph graph(song, 2);
+    std::vector<Path> paths =
+        run_search(graph, DepthMode::Scores, 0, std::nullopt);
+
+    const Activation& act = last_act(paths);
+    REQUIRE(act.sp_meter.has_value());
+    CHECK(*act.sp_meter == 2);
+
+    auto deact = activation_deact_tick(act);
+    REQUIRE(deact.has_value());
+    CHECK(*deact == 6912);
+
+    CHECK_FALSE(act.clamp_tick.has_value());
+}
+
+TEST_CASE("SP cap overfill: a later unclamped extension keeps the earlier "
+          "clamp_tick") {
+    // Same cap and activation, but SP is extended twice. The first mid-SP
+    // phrase, at 3072, clamps exactly as in the first case above: the end is
+    // pinned to 6144, with clamp_tick 3072. The second phrase, at 5760,
+    // wants to move the end again -- the cap ceiling from THAT note would be
+    // 5760 + 4*768 = 8832, but the plain +2-measure step from the current
+    // end (6144 + 1536 = 7680) is smaller and wins instead. Because this
+    // second extension is not itself a clamp, the note that pinned the
+    // window stays the first one: clamp_tick is still 3072, even though the
+    // end has moved again.
+    Song song = build_tail_song({{0, true, false},
+                                 {768, true, false},
+                                 {2304, false, true},
+                                 {3072, true, false},
+                                 {3840},
+                                 {4608},
+                                 {5376},
+                                 {5760, true, false},
+                                 {6000},
+                                 {6768},
+                                 {7500}});
+
+    ScoreGraph graph(song, 2);
+    std::vector<Path> paths =
+        run_search(graph, DepthMode::Scores, 0, std::nullopt);
+
+    const Activation& act = last_act(paths);
+    REQUIRE(act.sp_meter.has_value());
+    CHECK(*act.sp_meter == 2);
+
+    // The chart ends at 7500, before the SP end at 7680, so this is the same
+    // "SP outlasts the chart" case as the tests above: the tail rows are
+    // synthesized against the tracked end rather than a real deactivation.
+    auto deact = activation_deact_tick(act);
+    REQUIRE(deact.has_value());
+    CHECK(*deact == 7680);
+
+    REQUIRE(act.clamp_tick.has_value());
+    CHECK(*act.clamp_tick == 3072);
+}
+
+TEST_CASE("path codec: encode/decode a path node keeps clamp_tick") {
+    // clamp_tick is the newest field on Activation (blob v5 / node v3): a
+    // plain node round trip has to carry it, the same way the deact_tick
+    // round trip above pins the field before it.
+    Activation act;
+    act.timecode = Timecode::raw(2304);
+    act.clamp_tick = 3072;
+
+    Path path;
+    path.activations.push_back(act);
+
+    Path decoded = store::decode_path_node(store::encode_path_node(path));
+    REQUIRE(decoded.activations.size() == 1);
+    REQUIRE(decoded.activations.front().clamp_tick.has_value());
+    CHECK(*decoded.activations.front().clamp_tick == 3072);
+}

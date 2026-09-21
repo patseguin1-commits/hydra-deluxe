@@ -12,6 +12,7 @@
 
 #include "parse/midi.h"
 #include "corpus_util.h"
+#include "midi_util.h"
 
 namespace {
 
@@ -46,19 +47,8 @@ json event_view(const hydra::MidiFile& mid) {
     return view;
 }
 
-// Assemble a minimal single-track SMF (format 0, 480 tpqn) from raw track
-// bytes (delta+event stream, without the MTrk header).
-std::vector<uint8_t> smf(const std::vector<uint8_t>& track) {
-    std::vector<uint8_t> d = {
-        'M', 'T', 'h', 'd', 0, 0, 0, 6, 0, 0, 0, 1, 0x01, 0xE0,  // div=480
-        'M', 'T', 'r', 'k',
-    };
-    uint32_t n = static_cast<uint32_t>(track.size());
-    d.push_back(uint8_t(n >> 24)); d.push_back(uint8_t(n >> 16));
-    d.push_back(uint8_t(n >> 8));  d.push_back(uint8_t(n));
-    d.insert(d.end(), track.begin(), track.end());
-    return d;
-}
+// smf() now lives in midi_util.h so test_song.cpp can build files too.
+using testmidi::smf;
 
 }  // namespace
 

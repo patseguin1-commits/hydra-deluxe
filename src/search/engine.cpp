@@ -130,6 +130,10 @@ struct Act {
     int32_t sq_tail;
     int32_t depth;
     double e_offset;
+    // The collecting note the SP cap pinned this activation's end to, or
+    // NO_TIME when the window never hit the cap. Copied off the live path
+    // when the activation closes.
+    int64_t clamp_tick;
 };
 struct SqNode {
     int32_t prev;
@@ -148,6 +152,7 @@ struct Variant {
     int32_t var_head;
     int32_t tied_count;
     int64_t sp_end;
+    int64_t clamp_tick;
 };
 struct Path {
     int32_t node;
@@ -163,6 +168,9 @@ struct Path {
     int32_t sc[6];
     int64_t score;
     int64_t sp_end_time;
+    // The collecting note the SP cap pinned the window's end to, or NO_TIME
+    // when the window never hit the cap. Stamped onto the Act at deactivation.
+    int64_t clamp_tick;
     double sp_ready_ms;
     double skipped_e_offset;
     double diff_prefix;
@@ -181,6 +189,8 @@ struct OutAct {
     // Only set (non-NO_TIME) on a path's last activation when it never
     // deactivated: the engine's tracked SP end, extensions included.
     int64_t final_sp_end;
+    // The collecting note the SP cap pinned the window to, or NO_TIME.
+    int64_t clamp_tick;
 };
 struct OutSq {
     int32_t kind;
@@ -309,6 +319,7 @@ private:
         a.sq_tail = -1;
         a.depth = (parent < 0 ? 0 : acts_[(size_t)parent].depth) + 1;
         a.e_offset = e_offset;
+        a.clamp_tick = NO_TIME;
         acts_.push_back(a);
         return (int32_t)acts_.size() - 1;
     }
@@ -345,8 +356,8 @@ private:
 
     void emit_path(const Path& p);
     void emit_variant(int32_t v, int32_t depth);
-    void emit_acts(int32_t act_tail, int64_t sp_end_time, int32_t* begin,
-                   int32_t* end);
+    void emit_acts(int32_t act_tail, int64_t sp_end_time, int64_t clamp_tick,
+                   int32_t* begin, int32_t* end);
 
     const Enum& en_;
     bool has_sp_cap_;
@@ -434,14 +445,15 @@ void Engine::advance(Path& p) {
                     --buffered;
                     continue;
                 }
-                const std::map<int64_t, int64_t>& emap =
-                    eo->sp_times[(size_t)i].second;
+                const auto& emap = eo->sp_times[(size_t)i].second;
                 auto mit = emap.find(sp_end_time);
                 if (mit == emap.end()) {
                     p.node = NODE_BROKEN;
                     return;
                 }
-                sp_end_time = mit->second;
+                sp_end_time = mit->second.to_tick;
+                if (mit->second.clamped)
+                    p.clamp_tick = eo->sp_times[(size_t)i].first.ticks();
             }
             p.sp_end_time = sp_end_time;
             p.buffered = buffered;
@@ -512,6 +524,7 @@ bool Engine::branch_activate(Path& p, Path* child) {
     c.skipped_e_offset = NO_DOUBLE;
     c.sp_ready_ms = NO_DOUBLE;
     c.sp_end_time = aiet_val;
+    c.clamp_tick = NO_TIME;
 
     p.currentskips += 1;
 
@@ -538,11 +551,13 @@ void Engine::create_deactivated_path(const Path& p, Path* child, bool is_sq_out)
     c.node = e.dest;
     c.sp = is_sq_out ? 1 : 0;
     c.sp_end_time = NO_TIME;
+    c.clamp_tick = NO_TIME;
 
     c.act_tail = clone_tail(p.act_tail);
     if (c.act_tail >= 0) {
         Act& a = acts_[(size_t)c.act_tail];
         a.deact_edge = deact_edge;
+        a.clamp_tick = p.clamp_tick;
         if (is_sq_out) {
             a.sq_tail = push_sq(a.sq_tail, SQ_OUT, e.sqinout_timing);
         }
@@ -717,6 +732,7 @@ void Engine::reduce_group(const int32_t* members, int32_t n) {
             v.var_head = p.var_head;
             v.tied_count = p.tied_count;
             v.sp_end = p.sp_end_time;
+            v.clamp_tick = p.clamp_tick;
             variants_.push_back(v);
             leader.var_head = (int32_t)variants_.size() - 1;
             leader.tied_count += p.tied_count;
@@ -882,8 +898,8 @@ void Engine::reduce_iteration_paths() {
 }
 
 // --- output --------------------------------------------------------------
-void Engine::emit_acts(int32_t act_tail, int64_t sp_end_time, int32_t* begin,
-                       int32_t* end) {
+void Engine::emit_acts(int32_t act_tail, int64_t sp_end_time,
+                       int64_t clamp_tick, int32_t* begin, int32_t* end) {
     chain_scratch_.clear();
     for (int32_t a = act_tail; a >= 0; a = acts_[(size_t)a].parent) {
         chain_scratch_.push_back(a);
@@ -913,6 +929,7 @@ void Engine::emit_acts(int32_t act_tail, int64_t sp_end_time, int32_t* begin,
         }
         oa.sq_end = (int32_t)out_sqs_.size();
         oa.final_sp_end = NO_TIME;
+        oa.clamp_tick = a.clamp_tick;
         out_acts_.push_back(oa);
     }
     *end = (int32_t)out_acts_.size();
@@ -922,7 +939,10 @@ void Engine::emit_acts(int32_t act_tail, int64_t sp_end_time, int32_t* begin,
     // SP end the search tracked, so it can measure the trailing notes.
     if (*end > *begin) {
         OutAct& last = out_acts_[(size_t)(*end - 1)];
-        if (last.deact_edge < 0) last.final_sp_end = sp_end_time;
+        if (last.deact_edge < 0) {
+            last.final_sp_end = sp_end_time;
+            last.clamp_tick = clamp_tick;
+        }
     }
 }
 
@@ -946,7 +966,8 @@ void Engine::emit_variant(int32_t v, int32_t depth) {
         op.skipped_ghosts = var.skipped_ghosts;
         op.var_point = var.var_point;
         op.depth = depth;
-        emit_acts(var.act_tail, var.sp_end, &op.act_begin, &op.act_end);
+        emit_acts(var.act_tail, var.sp_end, var.clamp_tick, &op.act_begin,
+                 &op.act_end);
         out_paths_.push_back(op);
 
         emit_variant(var.var_head, depth + 1);
@@ -967,7 +988,8 @@ void Engine::emit_path(const Path& p) {
     op.skipped_ghosts = p.skipped_ghosts;
     op.var_point = -1;
     op.depth = 0;
-    emit_acts(p.act_tail, p.sp_end_time, &op.act_begin, &op.act_end);
+    emit_acts(p.act_tail, p.sp_end_time, p.clamp_tick, &op.act_begin,
+             &op.act_end);
     out_paths_.push_back(op);
 
     emit_variant(p.var_head, 1);
@@ -982,6 +1004,7 @@ bool Engine::run() {
     root.var_head = -1;
     root.tied_count = 1;
     root.sp_end_time = NO_TIME;
+    root.clamp_tick = NO_TIME;
     root.sp_ready_ms = NO_DOUBLE;
     root.skipped_e_offset = NO_DOUBLE;
     root.diff_prefix = NO_DOUBLE;
@@ -1203,6 +1226,9 @@ std::vector<MPath> rebuild(const Enum& en, const std::vector<OutPath>& out_paths
                 act.deact_tick = oa.final_sp_end;
             }
             // Otherwise it stays unset. Nothing here invents a value.
+
+            // The collecting note the SP cap pinned this window to, if any.
+            if (oa.clamp_tick != NO_TIME) act.clamp_tick = oa.clamp_tick;
 
             // Stamp the frontend transfer scales through the same function
             // the details display uses to recompute them, on the same inputs

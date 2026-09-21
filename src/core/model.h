@@ -77,10 +77,12 @@ constexpr double kBackendDisplayWindowMs = 500.0;
 
 // Calibration-fill (E) timing window, applied to e_offset in both directions:
 // an activation with e_offset < -window is illegal (the fill can't be
-// summoned), and one with e_offset < +window is E-critical. 85 since 1.5.0
-// (the +/-70 hit-window figure was outdated); search-load-bearing, so it is
-// a constant, never the hit_window_ms setting.
-constexpr double kCalibrationFillWindowMs = 85.0;
+// summoned), and one with e_offset < +window is E-critical. 60 since 2026-09
+// (was 85 from 1.5.0, +/-70 before that): across 18,773 analyzed charts the
+// hardest E0 on any best path was 57.7 ms, so nothing past 60 earns its
+// place. Search-load-bearing, so it is a constant, never the hit_window_ms
+// setting.
+constexpr double kCalibrationFillWindowMs = 60.0;
 
 // ---- ChordNote ----------------------------------------------------------
 
@@ -261,6 +263,13 @@ struct Activation {
     // by the search at copy-out (blob v4). Unset only on a record written
     // before v4; nothing in the codebase re-derives it.
     std::optional<int64_t> deact_tick;
+
+    // The collecting note the SP cap pinned this window's end to: when the
+    // meter was full and a phrase extended the window, the end sat a fixed
+    // distance from that phrase's note, not from the activation. Stamped by
+    // the search (blob v5). Unset when the window never hit the cap or on
+    // an older record. Nothing re-derives it.
+    std::optional<int64_t> clamp_tick;
 
     // Frontend transfer scales, computed by the search and stored with the
     // record (blob v3; older blobs default to 1.0 = the flat-tempo identity)

@@ -147,14 +147,14 @@ void ScoreGraph::build() {
             extendable_list.reserve(extendable.size());
             for (const auto& kv : extendable) extendable_list.push_back(kv.second);
 
-            std::vector<std::pair<Timecode, Timecode>> ext =
+            std::vector<DeactExtension> ext =
                 extend_deacts(extendable_list, timestamp.timecode);
 
-            std::map<int64_t, int64_t> ext_map;
+            std::map<int64_t, SpExtension> ext_map;
             std::unordered_map<int64_t, Timecode> new_pending;
-            for (const auto& pr : ext) {
-                ext_map[pr.first.ticks()] = pr.second.ticks();
-                new_pending[pr.second.ticks()] = pr.second;
+            for (const DeactExtension& de : ext) {
+                ext_map[de.from.ticks()] = SpExtension{de.to.ticks(), de.clamped};
+                new_pending[de.to.ticks()] = de.to;
             }
             for (const Timecode& t : sqout_deacts)
                 new_pending[t.ticks()] = t;
@@ -259,24 +259,26 @@ int ScoreGraph::max_sp_bars() const {
     return std::min(*sp_meter_cap_, sp_phrase_count_);
 }
 
-std::vector<std::pair<Timecode, Timecode>> ScoreGraph::extend_deacts(
+std::vector<ScoreGraph::DeactExtension> ScoreGraph::extend_deacts(
     const std::vector<Timecode>& deact_tcs, const Timecode& sp_timecode) {
-    std::vector<std::pair<Timecode, Timecode>> out;
+    std::vector<DeactExtension> out;
     out.reserve(deact_tcs.size());
 
     if (!sp_meter_cap_.has_value()) {
         for (const Timecode& tc : deact_tcs)
-            out.push_back({tc, plusmeasure(tc, 2)});
+            out.push_back({tc, plusmeasure(tc, 2), false});
         return out;
     }
 
     Timecode ceiling = plusmeasure(sp_timecode, 2 * (*sp_meter_cap_));
     for (const Timecode& tc : deact_tcs) {
         Timecode ext = plusmeasure(tc, 2);
-        // min(ext, ceiling): ceiling only when it is strictly earlier.
-        const Timecode& chosen =
-            (ceiling.ticks() < ext.ticks()) ? ceiling : ext;
-        out.push_back({tc, chosen});
+        // min(ext, ceiling): ceiling only when it is strictly earlier. When
+        // it wins, the meter was full to the cap on this phrase, and from
+        // here on the SP end is measured from this collecting note (a tie
+        // leaves the previous anchor in charge, like the engine's own min).
+        const bool clamped = ceiling.ticks() < ext.ticks();
+        out.push_back({tc, clamped ? ceiling : ext, clamped});
     }
     return out;
 }

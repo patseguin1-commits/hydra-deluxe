@@ -63,6 +63,7 @@ struct ActivationDetailsView {
     std::string calibration;    // "Calibration fill: ..."; empty when not E-critical
     std::string frontend;       // "Frontend: ..."
     std::string scale_warning;  // the transfer-scale prose; empty when immaterial
+    std::string overfill_warning;  // cap-clamped anchor prose; empty when not clamped
     std::vector<TextLine> sqinouts;
     std::vector<BackendRowView> backends;
 };
@@ -83,6 +84,9 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
 
 // The hover hint shown next to a scale warning.
 extern const char* const kTransferScaleHint;
+
+// The hover hint shown next to an overfill (cap-clamped) warning.
+extern const char* const kOverfillHint;
 
 // ---- score breakdown -------------------------------------------------------
 

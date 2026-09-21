@@ -114,6 +114,14 @@ squeeze timings are measured against it. The search stamps it onto the
 record as it runs, and nothing downstream re-derives it.
 _Avoid_: SP end tick (when the anchored search position is meant)
 
+**Cap-clamped window**:
+Normally an activation's Star Power window ends a fixed distance (measures)
+past the activation. But if a phrase collected partway through Star Power
+fills the meter all the way to the SP cap (the max bars of SP you can hold),
+the window's end gets pinned to that phrase's note instead — the meter can't
+go any higher, so collecting more SP can't push the end out any further.
+`clamp_tick` stores which note pinned it, so later code doesn't have to guess.
+
 **Squeeze rating**:
 The displayed difficulty judgement of a squeeze: its rating label, its
 effective ms once the transfer scale is applied, and whether the scale is
@@ -139,7 +147,9 @@ _Avoid_: fretboard, track
 **Gem**:
 One drawn note on the note highway. Its model shows the drum type (tom, cymbal,
 or kick), its texture shows the lane, the note's dynamics, and whether it sits
-in an SP phrase.
+in an SP phrase. Dynamics are a velocity rule that applies to every lane, kick
+included: velocity 1 is a ghost, velocity 127 an accent, and both score double
+(see docs/adr/0012).
 _Avoid_: note (the chart datum), block
 
 **Lane**:

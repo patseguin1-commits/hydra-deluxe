@@ -36,3 +36,6 @@ dist/
 
 # second build tree used when Hydra.exe is running and build-cpp cannot relink
 build-rel/
+
+# Python bytecode (tools/ch_probe and friends)
+__pycache__/
