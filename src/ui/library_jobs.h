@@ -119,6 +119,7 @@ public:
 
     const store::ChartLibraryEntry& song() const { return song_; }
     const store::RecordKey& key() const { return key_; }
+    const app::AnalysisSettings& settings() const { return settings_; }
 
     // Monotonic 0..1 search progress, or a negative value before the first
     // report (i.e. show an indeterminate spinner until then).

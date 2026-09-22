@@ -18,8 +18,10 @@
 
 #include "app/analysis.h"
 #include "app/config.h"
+#include "app/dynamics_breakdown.h"
 #include "store/record_store.h"
 #include "ui/dm_jobs.h"
+#include "ui/dynamics_load_job.h"
 #include "ui/generation.h"
 #include "ui/library_jobs.h"
 
@@ -131,6 +133,20 @@ public:
     void set_render_device(ID3D11Device* device, ID3D11DeviceContext* context);
     PreviewController* preview_controller();
     std::unique_ptr<PreviewController> preview;
+
+    // Dynamics tab: a background job that re-parses the chart for per-pad
+    // ghost/accent/normal counts, plus its cached result (keyed by chart +
+    // pro + difficulty; invalidated when any of those change).
+    std::unique_ptr<DynamicsLoadJob> dynamics_job;
+    std::optional<app::DynamicsBreakdown> dynamics_result;
+    std::string dynamics_key;  // the key the cached result was built for
+    std::string dynamics_store_error;  // non-empty when put_dynamics failed
+
+    // Dynamics lifecycle: check the store for a cached breakdown, manage the
+    // background parse job, and persist new results. Called every frame from
+    // the details modal, before the Dynamics tab draws. Keeps store access
+    // on the UI thread and out of the render function.
+    void update_dynamics();
 
     // Background jobs (at most one of each kind runs at a time).
     std::unique_ptr<ScanJob> scan_job;

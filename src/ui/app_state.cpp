@@ -76,6 +76,11 @@ void AppState::select(const store::ChartLibraryEntry& entry) {
     // before a new chart's is opened, and the highway must not keep playing the
     // old song.
     if (preview) preview->close();
+    // Drop the dynamics cache: the new chart needs its own parse.
+    if (dynamics_job) { dynamics_job->cancel(); dynamics_job.reset(); }
+    dynamics_result.reset();
+    dynamics_key.clear();
+    dynamics_store_error.clear();
     selected = entry;
     show_details = true;
     refresh_viewed_record();
@@ -88,6 +93,70 @@ void AppState::refresh_viewed_record() {
     }
     viewed = store->get_record(settings.record_key(selected->md5));
     record_generation.bump();
+}
+
+void AppState::update_dynamics() {
+    if (!selected) return;
+
+    bool pro = settings.view_prodrums;
+    Difficulty diff = settings.difficulty();
+    std::string want_key = selected->notespath + "|" +
+                           (pro ? "pro" : "std") + "|" +
+                           difficulty_name(diff);
+
+    // If the cached result is from a different key, drop it.
+    if (!dynamics_key.empty() && dynamics_key != want_key) {
+        dynamics_result.reset();
+        dynamics_key.clear();
+        dynamics_store_error.clear();
+    }
+    // Cancel any in-flight job that was started for a different key.
+    if (dynamics_job && dynamics_job->key() != want_key) {
+        dynamics_job->cancel();
+        dynamics_job.reset();
+    }
+
+    // Already have a result -- nothing to do.
+    if (dynamics_result) return;
+
+    // Try the store before starting a background parse.
+    if (!dynamics_job) {
+        store::DynamicsKey dk{selected->md5, difficulty_name(diff), pro};
+        auto blob = store->get_dynamics(dk);
+        if (blob) {
+            auto decoded = app::decode_dynamics(*blob);
+            if (decoded) {
+                dynamics_result = std::move(*decoded);
+                dynamics_key = want_key;
+                return;
+            }
+            // Decode failure: fall through and re-parse.
+        }
+        // Store miss or decode failure: start the background job.
+        dynamics_job = std::make_unique<DynamicsLoadJob>(
+            *selected, pro, diff);
+        dynamics_job->start();
+    }
+
+    // Reap a finished job.
+    if (dynamics_job && dynamics_job->finished()) {
+        if (dynamics_job->ok()) {
+            dynamics_result = dynamics_job->take_result();
+            dynamics_key = dynamics_job->key();
+            // Persist to the store so the next open is instant.
+            try {
+                store::DynamicsKey dk{selected->md5, difficulty_name(diff), pro};
+                auto blob = app::encode_dynamics(*dynamics_result);
+                store->put_dynamics(dk, blob);
+                dynamics_store_error.clear();
+            } catch (const std::exception& e) {
+                dynamics_store_error =
+                    std::string("Counted, but saving failed: ") + e.what();
+            }
+            dynamics_job.reset();
+        }
+        // On failure, keep the job around so we can read its error().
+    }
 }
 
 void AppState::start_scan() {
@@ -129,6 +198,25 @@ std::string AppState::store_finished_analysis() {
         store->add_song(song.md5, song.title, song.artist, song.charter,
                         result.song);
         store->add_record(analyze_job->key(), result.record);
+        // The analysis already parsed the chart, so store the dynamics
+        // breakdown as a free by-product -- but only when bass2x was on,
+        // because with bass2x off the parse dropped the 2x kicks and the
+        // stored counts would be incomplete.
+        // Key it by the settings the job snapshotted, not the current ones:
+        // the user may have moved the difficulty box since it started.
+        const app::AnalysisSettings& as = analyze_job->settings();
+        if (as.bass2x) {
+            try {
+                auto bd = app::count_dynamics(result.song);
+                auto blob = app::encode_dynamics(bd);
+                store::DynamicsKey dk{song.md5, difficulty_name(as.difficulty),
+                                      as.prodrums};
+                store->put_dynamics(dk, blob);
+            } catch (...) {
+                // Best effort: a dynamics save failure must not block the
+                // analysis record from being stored.
+            }
+        }
         refresh_viewed_record();
         refresh_page();  // the library row's Best Path cell is cached per page
         return "";

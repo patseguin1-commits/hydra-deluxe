@@ -163,6 +163,16 @@ The score includes multiplier squeezes, frontend squeezes, and backend squeezes,
 
 Double squeezes are currently not considered in this scoring unless they're `2ms` or less, there's a slight margin.
 
+### Dynamics tab
+
+The third tab in the details screen counts the chart's ghost and accent notes. Ghosts and accents are the soft and hard hits that score double in Clone Hero.
+
+The Pads table shows, for each pad (and each cymbal separately under Pro Drums), how many notes are ghosts, accents and normal hits. The Kicks section does the same for kicks, with 2x kicks on their own row and a line saying how many of the kick notes are 2x. When 2x Bass is off, the 2x kick row stays visible but greyed out and is left out of the totals.
+
+The Chart box says whether the chart has dynamics turned on. A MIDI chart has to opt in; without that flag Clone Hero ignores the velocity markings, so Hydra reports the counts but notes that the game will not apply them.
+
+Counts are worked out the first time you open the tab and saved in the library database, so the tab opens instantly after that. Analyzing a song with 2x Bass on also saves its counts as a by-product.
+
 ## Command line tools
 
 Two console programs ship alongside the app and share its settings and library:

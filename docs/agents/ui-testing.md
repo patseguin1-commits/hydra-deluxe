@@ -74,7 +74,7 @@ Lines print as they run; a failing line prints `!! failed at line N`.
 
 Label cheat-sheet (main window `Hydra`): `Manage folders... (N)`, `Scan charts` / `Refresh scan`, `Analyze library` / `Analyze search (N)`, `redo existing`, `Compare dmleaderboards user...`, `Pro Drums`, `2x Bass`, `##search`, `Open path report` / `Building path report...`, `##pageleft`, `##pageright`.
 Modals: `Scanning charts` (`Continue`, `Cancel`), `Analyzing` (`Start`, `Cancel`, `Continue`, `Open path report`, `Open automatically`), `Compare dmleaderboards user` (`##dmfilter`, `Close`, `Open report again`, `Compare another`), `Song folders`.
-Song Details (`//$FOCUSED`): tabs `##DetailsTabs/Paths` and `##DetailsTabs/Preview`; `Analyze paths!`, `Copy path string`, `Play` / `Pause`, `##scrub`, `##volume`. There is no Close button — the modal closes via its title-bar X.
+Song Details (`//$FOCUSED`): tabs `##DetailsTabs/Paths`, `##DetailsTabs/Preview` and `##DetailsTabs/Dynamics`; `Analyze paths!`, `Copy path string`, `Play` / `Pause`, `##scrub`, `##volume`. There is no Close button — the modal closes via its title-bar X.
 
 When unsure, `dump` the window and read the labels off it.
 
@@ -103,7 +103,7 @@ void test_thing(ImGuiTestContext* ctx) {
 // then add {"thing", test_thing} to the table in register_tests().
 ```
 
-Rules of thumb: wait on app state (`h.app->…`) with `wait_until`, never on frame counts — jobs are real threads. `wait_until` yields one extra frame after its condition holds, so `visible_text` reflects it. An `IM_CHECK` inside a helper only returns from the helper; check `ctx->IsError()` after calling one.
+Rules of thumb: wait on app state (`h.app->…`) with `wait_until`, never on frame counts — jobs are real threads. `wait_until` yields one extra frame after its condition holds, so `visible_text` reflects it. An `IM_CHECK` inside a helper only returns from the helper; check `ctx->IsError()` after calling one. The Dynamics tab reads stored counts from the database first; a second open of the same chart shows them with no background job.
 
 ## Layout
 

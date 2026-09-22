@@ -15,7 +15,7 @@
 cmake_minimum_required(VERSION 3.21)
 # The single source of the version: window titles, the record staleness stamp,
 # and the HTTP User-Agent all derive from it via src/core/version.h.
-project(Hydra VERSION 1.7.9 LANGUAGES C CXX RC)
+project(Hydra VERSION 1.7.10 LANGUAGES C CXX RC)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -145,6 +145,7 @@ add_library(hydra_core STATIC
     src/app/analysis.cpp
     src/app/config.cpp
     src/app/html_page.cpp
+    src/app/dynamics_breakdown.cpp
     src/app/path_view.cpp
     src/app/preview_view.cpp
     src/app/preview_source.cpp
@@ -229,6 +230,7 @@ add_library(hydra_ui STATIC
     src/ui/library_jobs.cpp
     src/ui/library_view.cpp
     src/ui/preview_controller.cpp
+    src/ui/dynamics_load_job.cpp
     src/ui/preview_load_job.cpp
     src/ui/preview_transport.cpp
     src/ui/theme.cpp
@@ -317,6 +319,8 @@ add_executable(hydra_tests
     tests/test_preview_transport.cpp
     tests/test_image_decode.cpp
     tests/test_preview_renderer.cpp
+    tests/test_dynamics_breakdown.cpp
+    tests/test_dynamics_store.cpp
     tests/test_song.cpp
     tests/test_srb.cpp
     tests/test_search.cpp

@@ -10,9 +10,11 @@
 #include "uitest_harness.h"
 
 #include "app/config.h"
+#include "app/dynamics_breakdown.h"
 #include "app/preview_view.h"
 #include "app/report_files.h"
 #include "ui/app_state.h"
+#include "ui/dynamics_load_job.h"
 #include "ui/preview_controller.h"
 #include "ui/preview_load_job.h"
 
@@ -565,6 +567,137 @@ void test_backend_limit(ImGuiTestContext* ctx) {
     IM_CHECK(!h.app->settings.backend_limit().has_value());
 }
 
+void test_dynamics(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+
+    // Search for the chart that the doctest pins dynamics on.
+    ctx->SetRef("//Hydra");
+    ctx->ItemInputValue("##search", "Acid Romance");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->search == "Acid Romance"; }, 5));
+    IM_CHECK(wait_until(ctx, [&] {
+        return !h.app->current_page.rows.empty() &&
+               h.app->current_page.rows[0].title == "Acid Romance";
+    }, 5));
+    open_details(ctx, 0);
+    if (ctx->IsError()) return;
+
+    // Click the Dynamics tab and wait for the background parse to finish.
+    ctx->ItemClick("##DetailsTabs/Dynamics");
+    IM_CHECK(wait_until(ctx, [&] {
+        return h.app->dynamics_result.has_value();
+    }, 60));
+
+    std::string text = visible_text(h);
+    IM_CHECK(text.find("Dynamics enabled: yes") != std::string::npos);
+    IM_CHECK(text.find("2x kicks:") != std::string::npos);
+    // The doctest pins 5 ghosts for this chart (all from the red snare).
+    IM_CHECK(text.find("Ghosts: 5") != std::string::npos);
+
+    // Toggle 2x Bass off via app state (the checkbox is behind the modal)
+    // and verify the Dynamics tab updates without re-parsing.
+    h.app->settings.view_bass2x = false;
+    h.app->commit_settings();
+    ctx->Yield(2);
+    IM_CHECK(wait_until(ctx, [&] {
+        return visible_text(h).find("not counted (2x Bass off)") != std::string::npos;
+    }, 5));
+
+    // Restore.
+    h.app->settings.view_bass2x = true;
+    h.app->commit_settings();
+}
+
+// Stored dynamics: the first open parses and stores; a second open reads
+// the store and skips the parse job entirely. An analysis with 2x Bass on
+// also stores the breakdown as a by-product, so the Dynamics tab after an
+// analysis shows counts with no parse job.
+void test_dynamics_stored(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+
+    // ---- Scenario 1: parse, store, then re-open from store ----
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+
+    // Open Acid Romance. Set the search via app state to avoid the ImGui
+    // input-buffer residue from the previous dynamics test.
+    h.app->search = "Acid Romance";
+    h.app->refresh_page();
+    ctx->Yield(2);
+    IM_CHECK(!h.app->current_page.rows.empty());
+    IM_CHECK(h.app->current_page.rows[0].title == "Acid Romance");
+    open_details(ctx, 0);
+    if (ctx->IsError()) return;
+
+    // Click the Dynamics tab and wait for the background parse to finish.
+    ctx->ItemClick("##DetailsTabs/Dynamics");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->dynamics_result.has_value(); }, 60));
+    IM_CHECK(visible_text(h).find("Ghosts: 5") != std::string::npos);
+
+    // Select a different chart so the in-memory dynamics cache for Acid
+    // Romance is dropped, then close the modal so the tab stops rendering.
+    h.app->search.clear();
+    h.app->refresh_page();
+    size_t other_idx = 0;
+    for (size_t i = 0; i < h.app->current_page.rows.size(); ++i) {
+        if (h.app->current_page.rows[i].title != "Acid Romance") {
+            other_idx = i;
+            break;
+        }
+    }
+    h.app->select(h.app->current_page.rows[other_idx]);
+    h.app->show_details = false;
+    ctx->Yield(3);
+
+    // Reopen Acid Romance. The Dynamics tab loads its counts from the
+    // store (put there by the first open's job), so no parse job starts.
+    h.app->search = "Acid Romance";
+    h.app->refresh_page();
+    ctx->Yield(2);
+    IM_CHECK(!h.app->current_page.rows.empty());
+    IM_CHECK(h.app->current_page.rows[0].title == "Acid Romance");
+    // Clear any leftover dynamics state from the other chart.
+    h.app->dynamics_result.reset();
+    h.app->dynamics_key.clear();
+    if (h.app->dynamics_job) { h.app->dynamics_job->cancel(); h.app->dynamics_job.reset(); }
+    open_details(ctx, 0);
+    if (ctx->IsError()) return;
+
+    ctx->ItemClick("##DetailsTabs/Dynamics");
+    ctx->Yield(3);
+    // The stored breakdown was read from the store: no job was started.
+    IM_CHECK(h.app->dynamics_result.has_value());
+    IM_CHECK(h.app->dynamics_job == nullptr);
+    IM_CHECK(visible_text(h).find("Ghosts: 5") != std::string::npos);
+
+    // ---- Scenario 2: analysis stores dynamics as a by-product ----
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+
+    // Open any chart (first row) and analyze it with 2x Bass on (the default).
+    open_details(ctx, 0);
+    if (ctx->IsError()) return;
+    IM_CHECK(h.app->settings.effective_bass2x());
+    ctx->ItemClick("**/Analyze paths!");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
+    IM_CHECK(h.app->viewed.record.has_value());
+
+    // Now click the Dynamics tab. The analysis stored the breakdown, so the
+    // tab should show counts with no parse job.
+    ctx->ItemClick("##DetailsTabs/Dynamics");
+    ctx->Yield(3);
+    IM_CHECK(h.app->dynamics_result.has_value());
+    IM_CHECK(h.app->dynamics_job == nullptr);
+    // The counts are on screen (the first chart has notes, so "All" > 0).
+    std::string text = visible_text(h);
+    IM_CHECK(text.find("Ghosts:") != std::string::npos ||
+             text.find("Accents:") != std::string::npos);
+}
+
 }  // namespace
 
 void register_tests(Harness& h) {
@@ -585,6 +718,8 @@ void register_tests(Harness& h) {
         {"batch-modal-drift", test_batch_modal_drift},
         {"settings-and-reports", test_settings_and_reports},
         {"backend-limit", test_backend_limit},
+        {"dynamics", test_dynamics},
+        {"dynamics-stored", test_dynamics_stored},
     };
     for (const Entry& e : entries) {
         ImGuiTest* t = IM_REGISTER_TEST(h.engine, "hydra", e.name);

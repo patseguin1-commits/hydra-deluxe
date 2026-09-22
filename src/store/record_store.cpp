@@ -492,6 +492,13 @@ RecordStore::RecordStore(const std::string& dbpath) {
         "CREATE TABLE IF NOT EXISTS meta ("
         "  key   TEXT PRIMARY KEY,"
         "  value TEXT"
+        ");"
+        "CREATE TABLE IF NOT EXISTS dynamics ("
+        "  md5        TEXT NOT NULL,"
+        "  difficulty TEXT NOT NULL,"
+        "  pro        INTEGER NOT NULL,"
+        "  blob       BLOB NOT NULL,"
+        "  PRIMARY KEY (md5, difficulty, pro)"
         ");");
     // A pre-1.6 or 1.6 file still has the old single-blob `records` table.
     // Bring it to the v1 shape (keyed by cap) first, then fold it into the
@@ -563,6 +570,29 @@ std::optional<std::string> RecordStore::engine_mode() {
 void RecordStore::set_engine_mode(const std::string& mode) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     meta_set("engine_mode", mode);
+}
+
+void RecordStore::put_dynamics(const DynamicsKey& key, const std::vector<uint8_t>& blob) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    Stmt s = prepare(db_,
+        "INSERT OR REPLACE INTO dynamics (md5, difficulty, pro, blob) VALUES (?,?,?,?)");
+    bind_text(s, 1, key.md5);
+    bind_text(s, 2, key.difficulty);
+    sqlite3_bind_int(s, 3, key.pro ? 1 : 0);
+    bind_blob(s, 4, blob);
+    if (sqlite3_step(s) != SQLITE_DONE)
+        throw std::runtime_error(std::string("put_dynamics failed: ") + sqlite3_errmsg(db_));
+}
+
+std::optional<std::vector<uint8_t>> RecordStore::get_dynamics(const DynamicsKey& key) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    Stmt s = prepare(db_,
+        "SELECT blob FROM dynamics WHERE md5=? AND difficulty=? AND pro=?");
+    bind_text(s, 1, key.md5);
+    bind_text(s, 2, key.difficulty);
+    sqlite3_bind_int(s, 3, key.pro ? 1 : 0);
+    if (sqlite3_step(s) != SQLITE_ROW) return std::nullopt;
+    return column_blob(s, 0);
 }
 
 void RecordStore::migrate_records_to_cap_key() {

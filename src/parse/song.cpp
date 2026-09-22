@@ -575,6 +575,7 @@ Song MidiParser::parse(const MidiFile& mid, bool pro, bool bass2x,
             msg_buffer_.push_back(&msg);
         }
         push_timestamp(elapsed);
+        song.dynamics_enabled = dynamics_enabled_;
         break;
     }
 
@@ -1002,6 +1003,7 @@ Song ChartParser::parse(const std::vector<uint8_t>& data, bool pro,
                          });
     }
 
+    song.dynamics_enabled = true;
     song.check_activations();
     return song;
 }

@@ -74,6 +74,7 @@ public:
 
     std::vector<SongTimestamp> sequence;
     std::vector<std::string> features;
+    bool dynamics_enabled = false;
 
     // Practice sections in tick order. A section marker can sit past the last
     // note, so these ticks are not bounded by the sequence.

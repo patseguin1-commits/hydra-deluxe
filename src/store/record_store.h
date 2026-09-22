@@ -234,6 +234,13 @@ struct ChartCacheEntry {
 };
 using ChartLibraryCache = std::unordered_map<std::string, ChartCacheEntry>;
 
+// Key for a dynamics-breakdown cache row: chart identity + difficulty + pro flag.
+struct DynamicsKey {
+    std::string md5;
+    std::string difficulty;  // difficulty_name(), e.g. "Expert"
+    bool pro = false;
+};
+
 class RecordStore {
 public:
     // dbpath may be ":memory:" for an ephemeral store (used by tests). A db
@@ -257,6 +264,11 @@ public:
 
     void add_record(const RecordKey& key, const HydraRecord& record);
     void add_row(const PreparedRow& row);
+
+    // Stores a dynamics-breakdown blob (INSERT OR REPLACE).
+    void put_dynamics(const DynamicsKey& key, const std::vector<uint8_t>& blob);
+    // Returns the blob for this key, or nullopt when the row is missing.
+    std::optional<std::vector<uint8_t>> get_dynamics(const DynamicsKey& key);
 
     // ---- reading ------------------------------------------------------
 

@@ -16,6 +16,7 @@
 #include <thread>
 #include <tuple>
 
+#include "app/dynamics_breakdown.h"
 #include "core/winstr.h"
 #include "parse/srb.h"
 #include "search/pather.h"
@@ -693,6 +694,21 @@ void run_batch(const std::vector<ScanItem>& items, const std::string& chartmode,
             store.add_song(wr.item.md5, wr.item.title, wr.item.artist, wr.item.charter,
                            wr.analysis->song);
             store.add_row(*wr.row);
+            // Store the dynamics breakdown as a free by-product: the chart
+            // is already parsed, so counting costs almost nothing. Only when
+            // bass2x is on, because with it off the 2x kicks were dropped.
+            if (settings.bass2x) {
+                try {
+                    auto bd = count_dynamics(wr.analysis->song);
+                    auto blob = encode_dynamics(bd);
+                    store::DynamicsKey dk{wr.item.md5,
+                                          difficulty_name(settings.difficulty),
+                                          settings.prodrums};
+                    store.put_dynamics(dk, blob);
+                } catch (...) {
+                    // Best effort: never block the analysis record.
+                }
+            }
             if (on_result) on_result(wr.item, *wr.row);
         }
 
