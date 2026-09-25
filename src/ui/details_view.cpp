@@ -10,6 +10,7 @@
 #include "core/model.h"   // group_thousands
 #include "core/winstr.h"
 #include "imgui.h"
+#include "imgui_internal.h"  // SetKeyOwner, owner-aware IsKeyPressed
 #include "ui/dynamics_load_job.h"
 #include "ui/fonts.h"
 #include "ui/generation.h"
@@ -620,12 +621,26 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
         return;
     }
 
-    // Transport row: play/pause, a scrubber, and the time readout. Every
-    // piece whose text changes while playing sits in a fixed slot (see
-    // widgets.h): otherwise the Vol slider walked under a held mouse as the
-    // readout's digits changed width.
+    // Transport row: back 5 s, back a tick, play/pause, forward a tick,
+    // forward 5 s, a scrubber, and the time readout. Every piece whose text
+    // changes while playing sits in a fixed slot (see widgets.h): otherwise
+    // the Vol slider walked under a held mouse as the readout's digits
+    // changed width. The four step buttons have fixed labels, so they need
+    // no slot.
+    if (ImGui::Button("-5s")) pc->jump_ms(-5000.0);
+    hint("Back 5 seconds (Left arrow)");
+    ImGui::SameLine();
+    if (ImGui::Button("< Tick")) pc->step_ticks(-1);
+    hint("Back one tick (Comma)");
+    ImGui::SameLine();
     const float play_w = std::max(button_slot_width("Play"), button_slot_width("Pause"));
     if (button_in_slot(pc->playing() ? "Pause" : "Play", play_w)) pc->toggle();
+    ImGui::SameLine();
+    if (ImGui::Button("Tick >")) pc->step_ticks(1);
+    hint("Forward one tick (Period)");
+    ImGui::SameLine();
+    if (ImGui::Button("+5s")) pc->jump_ms(5000.0);
+    hint("Forward 5 seconds (Right arrow)");
     ImGui::SameLine();
 
     // The clock drives the scrubber, so a chart with no audio still scrubs.
@@ -660,6 +675,25 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
         pc->set_volume(volume);
     }
     if (ImGui::IsItemDeactivatedAfterEdit()) app.commit_settings();
+
+    // Keys: Left/Right jump 5 s, comma/period step one tick; a held key
+    // repeats. Not while a text field has the keyboard. Keyboard navigation
+    // (on in app_shell.cpp) reads the arrows only when nobody owns them, so
+    // the Preview claims Left and Right every frame it shows; a claim made
+    // this frame still holds during next frame's navigation update, so even
+    // the first press lands here rather than moving focus or nudging the
+    // scrubber.
+    if (!ImGui::GetIO().WantTextInput) {
+        const ImGuiID keys_owner = ImGui::GetID("##preview_keys");
+        ImGui::SetKeyOwner(ImGuiKey_LeftArrow, keys_owner);
+        ImGui::SetKeyOwner(ImGuiKey_RightArrow, keys_owner);
+        if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, ImGuiInputFlags_Repeat, keys_owner))
+            pc->jump_ms(-5000.0);
+        if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, ImGuiInputFlags_Repeat, keys_owner))
+            pc->jump_ms(5000.0);
+        if (ImGui::IsKeyPressed(ImGuiKey_Comma, true)) pc->step_ticks(-1);
+        if (ImGui::IsKeyPressed(ImGuiKey_Period, true)) pc->step_ticks(1);
+    }
 
     // Highway viewport: size the offscreen target to the remaining region.
     ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -701,6 +735,35 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
         for (int i = 0; i < line_count; ++i)
             dl->AddText(font, size, ImVec2(origin.x + margin, origin.y + margin + line_h * i),
                         IM_COL32(255, 255, 255, 255), lines[i]);
+
+        // The score box, under the time box in the same panel style: the
+        // running score in large type, then "x<mult> · combo <n>" in light
+        // grey. Absent until the chart is analyzed; "Score unavailable" (at
+        // the time box's size) when the path can't be replayed to its stored
+        // score. Right corners rounded, since it sits against the left edge.
+        hydra::app::PreviewScoreBox score = pc->score_box();
+        if (score.shown) {
+            const float score_size = score.available ? size * 1.8f : size;
+            const float score_h = score_size * 1.2f;
+            const float gap = px(6.0f);
+            const float score_w =
+                font->CalcTextSizeA(score_size, FLT_MAX, 0.0f, score.score.c_str()).x;
+            const float detail_w =
+                score.detail.empty()
+                    ? 0.0f
+                    : font->CalcTextSizeA(size, FLT_MAX, 0.0f, score.detail.c_str()).x;
+            const float lines_h = score_h + (score.detail.empty() ? 0.0f : line_h);
+            ImVec2 s_min(origin.x, box_max.y + gap);
+            ImVec2 s_max(origin.x + margin + std::max(score_w, detail_w) + pad * 2.0f,
+                         s_min.y + pad + lines_h + pad);
+            dl->AddRectFilled(s_min, s_max, IM_COL32(0, 0, 0, 128), px(6.0f),
+                              ImDrawFlags_RoundCornersRight);
+            dl->AddText(font, score_size, ImVec2(origin.x + margin, s_min.y + pad),
+                        IM_COL32(255, 255, 255, 255), score.score.c_str());
+            if (!score.detail.empty())
+                dl->AddText(font, size, ImVec2(origin.x + margin, s_min.y + pad + score_h),
+                            IM_COL32(200, 200, 200, 255), score.detail.c_str());
+        }
 
         // The Star Power meter: a gauge down the image's right edge, filling
         // bottom-up as phrases are collected and draining while SP is active.
