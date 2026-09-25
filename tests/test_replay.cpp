@@ -192,6 +192,38 @@ TEST_CASE("replay without Star Power scores no doubling at all") {
     CHECK(r.chords.back().cum_onscreen_total == r.final.total());
 }
 
+// Round and Round's shape on a hand-built chart: a window whose squeeze-out
+// sits on an R+Y phrase chord ~479 ms past the SP end. That chord is outside
+// the window and outside the leeway, so it earns no doubling at all -- the
+// squeeze-out changes nothing. The chord on the deactivation node is paid.
+TEST_CASE("a squeezed-out chord past the leeway earns nothing") {
+    // 4/4, 120 BPM, 192 ticks per beat: 768 ticks and 2000 ms per measure.
+    Song song(192);
+    song.tpm_changes[0] = 768;
+    song.bpm_changes[0] = 120.0;
+    song.build_timing();
+    for (int64_t tick : {0, 768, 1536, 2304, 3072, 3256}) {
+        SongTimestamp ts;
+        ts.timecode = song.timecode(tick);
+        ts.chord.add_note(NoteColor::Red);
+        ts.chord.add_note(NoteColor::Yellow);
+        ts.flag_sp = tick == 3256;
+        song.sequence.push_back(ts);
+    }
+
+    ReplayWindow w;
+    w.act_tick = 0;
+    w.deact_tick = 3072;
+    w.sqout_offset_ms = song.timecode(3256).ms() - song.timecode(3072).ms();
+
+    const ReplayResult r = replay_path(song, {w});
+    REQUIRE(r.chords.size() == 6);
+    CHECK(r.chords[4].in_sp);  // on the deactivation node: paid in full
+    CHECK(r.chords[4].points.sp > 0);
+    CHECK_FALSE(r.chords[5].in_sp);
+    CHECK(r.chords[5].points.sp == 0);
+}
+
 // `score --path` prices a path straight out of the JSON `dump` and `target`
 // write. The reason to read the file rather than retype the path as an
 // "act:deact,..." string is that the file carries the squeeze-out offset and

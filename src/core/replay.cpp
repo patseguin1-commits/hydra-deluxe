@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <stdexcept>
 
+#include "core/backend_value.h"
 #include "core/scoring.h"
 #include "core/squeeze_rating.h"
 #include "core/timing.h"
@@ -101,25 +102,28 @@ ReplayResult replay_path(const Song& song, std::vector<ReplayWindow> windows,
         int sp_claims = 0;
         for (const Window& w : wins) {
             if (row.tick < w.act_tick) continue;
-            const bool inclusive = row.tick <= w.deact_tick;
-            const bool leeway = row.ms > w.deact_ms &&
-                                row.ms < w.deact_ms + rules.backend_leeway_ms;
-            if (!inclusive && !leeway) continue;
-
+            // The row's offset from the SP end, as the graph measures it. A
+            // chord on or before the deactivation node is inside the window
+            // whatever its ms says.
+            const double offset = row.tick <= w.deact_tick
+                                      ? std::min(row.ms - w.deact_ms, 0.0)
+                                      : row.ms - w.deact_ms;
+            core::SqOutPosition pos = core::SqOutPosition::NoSqOut;
             if (w.has_sqout) {
-                // Nothing past the squeezed-out note is under Star Power any
-                // more; the note itself keeps all but its first hit's share.
-                if (row.ms > w.sqout_ms + kSameNoteMs) continue;
-                ++sp_claims;
-                if (std::fabs(row.ms - w.sqout_ms) < kSameNoteMs) {
-                    sp_points += sg.sp - sg.sqout_reduction;
-                    continue;
-                }
-                sp_points += sg.sp;
-                continue;
+                if (row.ms > w.sqout_ms + kSameNoteMs)
+                    pos = core::SqOutPosition::After;
+                else if (std::fabs(row.ms - w.sqout_ms) < kSameNoteMs)
+                    pos = core::SqOutPosition::Exact;
+                else
+                    pos = core::SqOutPosition::Before;
             }
+            if (pos == core::SqOutPosition::After ||
+                !core::counted_without_squeeze(offset, rules.backend_leeway_ms))
+                continue;
             ++sp_claims;
-            sp_points += sg.sp;
+            sp_points += core::backend_row_value(
+                offset, sg.sp, sg.sp - sg.sqout_reduction, pos,
+                rules.backend_leeway_ms);
         }
         row.in_sp = sp_claims > 0;
 

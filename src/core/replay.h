@@ -13,7 +13,7 @@
 //   2. The Star Power window is inclusive at both ends: the activation chord
 //      earns its doubling, and so does the chord sitting on the deactivation
 //      node. A chord landing within Rules::backend_leeway_ms after the deactivation
-//      earns it too (search/engine.cpp create_deactivated_path).
+//      earns it too (core/backend_value.h, the same function the search calls).
 //   3. A solo pays 100 per note on both tracks and is never doubled.
 //
 // Display and tooling only, like core/squeeze_rating.h: nothing in the

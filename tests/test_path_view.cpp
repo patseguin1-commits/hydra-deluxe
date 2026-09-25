@@ -268,17 +268,13 @@ TEST_CASE("build_activations: overfill warning text") {
     // clamped note falls on.
     ActivationsView with_timing = build_activations(path, record, &timing, 85.0);
     REQUIRE(with_timing.acts.size() == 1);
-    CHECK(with_timing.acts[0].overfill_warning ==
-          "SP overfilled at m2.2.0: that note's timing, not the activation's, "
-          "moves the SP end.");
+    CHECK(with_timing.acts[0].overfill_warning == "SP overfilled at m2.2.0");
 
     // Without a SongTiming (no songmeta row), there is no way to turn the
-    // clamped tick into a measure string, so the line names the note by role.
+    // clamped tick into a measure string, so the line drops the position.
     ActivationsView without_timing = build_activations(path, record, nullptr, 85.0);
     REQUIRE(without_timing.acts.size() == 1);
-    CHECK(without_timing.acts[0].overfill_warning ==
-          "SP overfilled: the collecting note's timing, not the activation's, "
-          "moves the SP end.");
+    CHECK(without_timing.acts[0].overfill_warning == "SP overfilled");
 
     // No clamp_tick at all -- the window was never cap-clamped, so there is
     // nothing to warn about even with the same SqOut present.
@@ -328,7 +324,131 @@ TEST_CASE("build_activations: the backend limit hides far rows but never "
     CHECK(limited[0].timing == "-30.0");
     CHECK_FALSE(limited[0].warn);
     CHECK(limited[1].timing == "60.0");
-    CHECK(limited[1].warn);
+    // +60 ms is past the leeway: the engine never counted this chord, so the
+    // row is tagged uncounted and not highlighted (user decision 19).
+    CHECK(limited[1].rating.find("squeezed out (uncounted)") != std::string::npos);
+    CHECK_FALSE(limited[1].warn);
+}
+
+TEST_CASE("build_activations: a squeezed-out row past the leeway is worth 0") {
+    HydraRecord rec;  // only feeds the footer
+
+    // Round and Round (Ratt), second activation: an R+Y chord squeezed out
+    // 479.999 ms past the SP end. The engine never counts it, so the table
+    // must not claim it banks 260 and loses 200, and must not highlight it.
+    Activation far;
+    far.skips = 0;
+    far.e_offset = 300.0;  // not e-critical
+    BackendSqueeze far_row;
+    far_row.timecode = Timecode::raw(3256);
+    far_row.points = 460;
+    far_row.sqout_points = 260;
+    far_row.is_sp = true;
+    far_row.offset_ms = 479.999;
+    far.backends.push_back(far_row);
+    far.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, 479.999});
+    far.sqout_tick = 3256;
+
+    Path p;
+    p.activations.push_back(far);
+    ActivationsView v = build_activations(p, rec, nullptr, 85.0);
+    REQUIRE(v.acts.size() == 1);
+    REQUIRE(v.acts[0].backends.size() == 1);
+    CHECK(v.acts[0].backends[0].points == "0");
+    CHECK(v.acts[0].backends[0].rating ==
+          "Free SqOut <-- squeezed out (uncounted)");
+    CHECK_FALSE(v.acts[0].backends[0].warn);
+
+    // The same chord squeezed out 5 ms inside SP really costs 200, and
+    // that row keeps its warning colour.
+    Activation near = far;
+    near.backends[0].offset_ms = -5.0;
+    near.sqinouts[0].offset_ms = -5.0;
+    Path q;
+    q.activations.push_back(near);
+    v = build_activations(q, rec, nullptr, 85.0);
+    REQUIRE(v.acts[0].backends.size() == 1);
+    CHECK(v.acts[0].backends[0].points == "260");
+    CHECK(v.acts[0].backends[0].rating ==
+          "Standard SqOut <-- squeezed out (-200)");
+    CHECK(v.acts[0].backends[0].warn);
+}
+
+// User decision 19: every row the engine does not count reads 0 and is not
+// highlighted, not only squeezed-out ones. Labels stay as they are.
+TEST_CASE("build_activations: plain rows past the leeway show 0") {
+    HydraRecord rec;  // only feeds the footer
+
+    Activation act;
+    act.skips = 0;
+    act.e_offset = 300.0;  // not e-critical
+    // Inside SP, inside the 3 ms leeway, just past it, far past it.
+    const std::pair<int64_t, double> rows_at[] = {
+        {100, -40.0}, {200, 2.5}, {300, 20.0}, {400, 120.0}};
+    for (const auto& [tick, ms] : rows_at) {
+        BackendSqueeze row;
+        row.timecode = Timecode::raw(tick);
+        row.points = 460;
+        row.sqout_points = 260;
+        row.offset_ms = ms;
+        act.backends.push_back(row);
+    }
+    // A phrase chord past the leeway that this path did not squeeze out.
+    BackendSqueeze phrase;
+    phrase.timecode = Timecode::raw(500);
+    phrase.points = 460;
+    phrase.sqout_points = 260;
+    phrase.is_sp = true;
+    phrase.offset_ms = 150.0;
+    act.backends.push_back(phrase);
+
+    Path p;
+    p.activations.push_back(act);
+    ActivationsView v = build_activations(p, rec, nullptr, 85.0);
+    REQUIRE(v.acts.size() == 1);
+    const std::vector<BackendRowView>& b = v.acts[0].backends;
+    REQUIRE(b.size() == 5);
+    CHECK(b[0].points == "460");
+    CHECK(b[0].rating == "Easy");
+    CHECK(b[1].points == "460");
+    CHECK(b[1].rating == "Standard");
+    CHECK(b[2].points == "0");
+    CHECK(b[2].rating == "Hard (uncounted)");
+    CHECK(b[3].points == "0");
+    CHECK(b[3].rating == "Insane (uncounted)");
+    CHECK(b[4].points == "0");
+    CHECK(b[4].rating == "Free SqOut");
+    for (const BackendRowView& row : b) CHECK_FALSE(row.warn);
+}
+
+// Not an invariant: it names a chart the GUI test can open to see an
+// uncounted squeezed-out row for real. Prints nothing when none exists.
+TEST_CASE("find a chart with an uncounted squeezed-out row" * doctest::skip()) {
+    AnalysisSettings settings;
+    settings.depth_mode = DepthMode::Scores;
+    settings.depth_value = 2;
+    for (const std::string& path : corpus::chart_paths()) {
+        // AnalysisResult has no default constructor (Song needs a
+        // resolution), so it lives in an optional.
+        std::optional<AnalysisResult> analyzed_chart;
+        try {
+            analyzed_chart.emplace(analyze_chart_file(path, settings));
+        } catch (const std::exception&) {
+            continue;
+        }
+        const AnalysisResult& r = *analyzed_chart;
+        if (r.record.paths.empty()) continue;
+        ActivationsView v = build_activations(r.record.best_path(), r.record,
+                                              &r.song.timing(), 85.0);
+        for (const ActivationDetailsView& av : v.acts)
+            for (const BackendRowView& row : av.backends)
+                if (row.rating.find("squeezed out (uncounted)") !=
+                    std::string::npos) {
+                    MESSAGE(path << " | " << av.header);
+                    return;
+                }
+    }
+    MESSAGE("no corpus chart has one at depth 2");
 }
 
 TEST_CASE("build_multsqueezes: one labeled entry per squeeze") {

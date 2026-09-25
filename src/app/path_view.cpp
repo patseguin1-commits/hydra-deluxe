@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <cstdio>
 
+#include "core/backend_value.h"
+
 namespace hydra::app {
 
 namespace {
@@ -74,7 +76,8 @@ const char* const kOverfillHint =
 ActivationsView build_activations(const Path& path, const HydraRecord& record,
                                   const SongTiming* timing,
                                   double hit_window_ms,
-                                  std::optional<double> backend_limit_ms) {
+                                  std::optional<double> backend_limit_ms,
+                                  const core::Rules& rules) {
     ActivationsView view;
     const double W = hit_window_ms;
 
@@ -191,12 +194,9 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
             if (timing && act.clamp_tick) {
                 av.overfill_warning =
                     "SP overfilled at " +
-                    measurestr(timing->timecode(*act.clamp_tick)) +
-                    ": that note's timing, not the activation's, moves the SP end.";
+                    measurestr(timing->timecode(*act.clamp_tick));
             } else {
-                av.overfill_warning =
-                    "SP overfilled: the collecting note's timing, not the "
-                    "activation's, moves the SP end.";
+                av.overfill_warning = "SP overfilled";
             }
         }
 
@@ -230,8 +230,19 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
                 row.tooltip = tip;
             }
             row.chord = bsq.chord.notationstr();
-            row.points =
-                std::to_string(br.squeezed_out ? bsq.sqout_points : bsq.points);
+            // What the engine actually paid for this row on this path, from
+            // the same function the search calls. display_backends already
+            // dropped every row past the squeezed-out chord, so a row here is
+            // either that chord or priced as if nothing was squeezed out.
+            const double off = bsq.offset_ms.value_or(0.0);
+            const bool counted =
+                core::counted_without_squeeze(off, rules.backend_leeway_ms);
+            const int value = core::backend_row_value(
+                off, bsq.points, bsq.sqout_points,
+                br.squeezed_out ? core::SqOutPosition::Exact
+                                : core::SqOutPosition::NoSqOut,
+                rules.backend_leeway_ms);
+            row.points = std::to_string(value);
             row.rating = bsq.summarystr(W);
             if (br.effective_ms) {
                 char effbuf[32];
@@ -240,11 +251,19 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
                 row.rating += effbuf;
             }
             if (br.squeezed_out) {
+                // "(-N)" and the warning colour only when the squeeze-out
+                // really costs points. A row the engine never counted costs
+                // nothing either way (user decisions 1 and 19).
                 char extra[48];
-                std::snprintf(extra, sizeof(extra), " <-- squeezed out (-%d)",
-                              bsq.points - bsq.sqout_points);
+                if (counted) {
+                    std::snprintf(extra, sizeof(extra),
+                                  " <-- squeezed out (-%d)", bsq.points - value);
+                    row.warn = true;
+                } else {
+                    std::snprintf(extra, sizeof(extra),
+                                  " <-- squeezed out (uncounted)");
+                }
                 row.rating += extra;
-                row.warn = true;
             }
             av.backends.push_back(std::move(row));
         }

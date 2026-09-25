@@ -279,7 +279,7 @@ void render_activations_section(const Path* path, const HydraRecord& record,
         app::ActivationsView view = app::build_activations(
             *path, record, timing,
             static_cast<double>(settings.hit_window_ms),
-            settings.backend_limit());
+            settings.backend_limit(), settings.rules);
 
         if (view.acts.empty()) ImGui::TextDisabled("None.");
         for (const app::ActivationDetailsView& av : view.acts) {

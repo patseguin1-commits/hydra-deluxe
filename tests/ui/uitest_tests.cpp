@@ -722,6 +722,33 @@ void test_rules_error(ImGuiTestContext* ctx) {
     IM_CHECK(h.app->analyze_job == nullptr);
 }
 
+// A squeezed-out row the engine never counted reads "0" and "(uncounted)"
+// in the real details table, not the old "(-N)".
+void test_squeezed_out_uncounted(ImGuiTestContext* ctx) {
+    // Found by the skipped doctest "find a chart with an uncounted
+    // squeezed-out row" (tests/test_path_view.cpp): Ne Obliviscaris'
+    // chart's best path at depth 2, cap 4 has one.
+    static const char* kTitle = "Tapestry of the Starless Abstract (Shortened)";
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    ctx->SetRef("//Hydra");
+    ctx->ItemInputValue("##search", kTitle);
+    IM_CHECK(wait_until(ctx, [&] { return h.app->search == kTitle; }, 5));
+    IM_CHECK(wait_until(ctx, [&] { return !h.app->current_page.rows.empty(); }, 5));
+    open_details(ctx, 0);
+    if (ctx->IsError()) return;
+    ctx->ItemClick("**/Analyze paths!");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
+    IM_CHECK(h.app->viewed.record.has_value());
+    // Activation headers are closed tree nodes; open every one.
+    ctx->ItemOpenAll("**/Activations");
+    ctx->Yield(2);
+    const std::string text = visible_text(h);
+    IM_CHECK(text.find("squeezed out (uncounted)") != std::string::npos);
+}
+
 }  // namespace
 
 void register_tests(Harness& h) {
@@ -745,6 +772,7 @@ void register_tests(Harness& h) {
         {"dynamics", test_dynamics},
         {"dynamics-stored", test_dynamics_stored},
         {"rules-error", test_rules_error},
+        {"squeezed_out_uncounted", test_squeezed_out_uncounted},
     };
     for (const Entry& e : entries) {
         ImGuiTest* t = IM_REGISTER_TEST(h.engine, "hydra", e.name);

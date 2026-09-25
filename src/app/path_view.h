@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "core/model.h"
+#include "core/rules.h"
 #include "core/squeeze_rating.h"
 #include "core/timing.h"
 #include "store/record_store.h"
@@ -52,9 +53,9 @@ struct BackendRowView {
     std::string timing;   // "%.1f" raw offset
     std::string tooltip;  // effective-ms explanation; empty when none
     std::string chord;
-    std::string points;
-    std::string rating;   // summarystr + " (eff. ...)" + " <-- squeezed out (-N)"
-    bool warn = false;    // the squeezed-out row
+    std::string points;   // what the engine paid for the row; 0 when uncounted
+    std::string rating;   // summarystr + " (eff. ...)" + " <-- squeezed out (-N)" or " (uncounted)"
+    bool warn = false;    // a squeezed-out row the engine counts (it costs points)
 };
 
 struct ActivationDetailsView {
@@ -80,7 +81,8 @@ struct ActivationsView {
 ActivationsView build_activations(const Path& path, const HydraRecord& record,
                                   const SongTiming* timing,
                                   double hit_window_ms,
-                                  std::optional<double> backend_limit_ms = std::nullopt);
+                                  std::optional<double> backend_limit_ms = std::nullopt,
+                                  const core::Rules& rules = core::default_rules());
 
 // The hover hint shown next to a scale warning.
 extern const char* const kTransferScaleHint;

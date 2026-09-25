@@ -6,10 +6,12 @@
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
 
+#include "core/backend_value.h"
 #include "core/squeeze_rating.h"
 
 namespace hydra {
@@ -619,37 +621,23 @@ void Engine::create_deactivated_path(const Path& p, Path* child, bool is_sq_out)
         }
     }
 
+    // Each row adds what it is worth on this path minus what the SP walk
+    // already paid for it. The walk pays rows at or before the SP end in
+    // full; core::backend_row_value is the one place that says what a row
+    // is worth, shared with the replay and the details table.
+    const std::optional<int64_t> sqout_tick =
+        is_sq_out ? std::optional<int64_t>(e.sqinout_time) : std::nullopt;
     int32_t sp_delta = 0;
     for (const BackendSqueeze& beo : eo->backends) {
-        const int64_t be_tick = beo.timecode.ticks();
         const double be_offset = beo.offset_ms.value_or(0.0);
-        const int32_t be_points = beo.points;
-        const int32_t be_sqout_points = beo.sqout_points;
-
-        const bool is_already_counted = be_offset <= 0;
-        const bool is_leeway = be_offset > 0 && be_offset < backend_leeway_ms_;
-
-        if (is_sq_out) {
-            const bool is_before_sqout = be_tick < e.sqinout_time;
-            const bool is_exact_sqout = be_tick == e.sqinout_time;
-            const bool is_after_sqout = be_tick > e.sqinout_time;
-
-            if (is_already_counted) {
-                if (is_exact_sqout) {
-                    sp_delta += -be_points + be_sqout_points;
-                } else if (is_after_sqout) {
-                    sp_delta += -be_points;
-                }
-            } else if (is_leeway) {
-                if (is_before_sqout) {
-                    sp_delta += be_points;
-                } else if (is_exact_sqout) {
-                    sp_delta += be_sqout_points;
-                }
-            }
-        } else {
-            if (is_leeway) sp_delta += be_points;
-        }
+        const core::SqOutPosition pos =
+            core::sqout_position(beo.timecode.ticks(), sqout_tick);
+        const int32_t already_paid =
+            core::paid_by_sp_walk(be_offset) ? beo.points : 0;
+        sp_delta += core::backend_row_value(be_offset, beo.points,
+                                            beo.sqout_points, pos,
+                                            backend_leeway_ms_) -
+                    already_paid;
     }
 
     if (sp_delta) {

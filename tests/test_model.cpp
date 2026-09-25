@@ -9,6 +9,8 @@
 #include <vector>
 
 #include "core/model.h"
+#include "core/backend_value.h"
+#include "core/rules.h"
 
 using namespace hydra;
 
@@ -190,4 +192,51 @@ TEST_CASE("Chord::code prefixes a ghost/accent kick chord with g/a") {
     CHECK(Chord::from_code("a" + base) == accent);
 
     CHECK(ghost.rowstr() == "[Kick (Ghost) - Red]");
+}
+
+// The engine's three cases, as values. The deactivation edge in
+// create_deactivated_path adds `value - already_paid`, where rows at or
+// before the SP end were already paid in full by the SP walk.
+TEST_CASE("backend_row_value: every engine case") {
+    const double lw = core::default_rules().backend_leeway_ms;  // 3 ms
+    using P = core::SqOutPosition;
+    using core::backend_row_value;
+
+    // No squeeze-out: full value inside SP or inside the leeway, else 0.
+    CHECK(backend_row_value(-50.0, 460, 260, P::NoSqOut, lw) == 460);
+    CHECK(backend_row_value(0.0, 460, 260, P::NoSqOut, lw) == 460);
+    CHECK(backend_row_value(2.999, 460, 260, P::NoSqOut, lw) == 460);
+    CHECK(backend_row_value(3.0, 460, 260, P::NoSqOut, lw) == 0);
+
+    // Before the squeezed-out chord: same as no squeeze-out.
+    CHECK(backend_row_value(-50.0, 460, 260, P::Before, lw) == 460);
+    CHECK(backend_row_value(1.5, 460, 260, P::Before, lw) == 460);
+    CHECK(backend_row_value(10.0, 460, 260, P::Before, lw) == 0);
+
+    // The squeezed-out chord itself keeps only its reduced value, and only
+    // where it would have been counted at all.
+    CHECK(backend_row_value(-5.0, 460, 260, P::Exact, lw) == 260);
+    CHECK(backend_row_value(1.5, 460, 260, P::Exact, lw) == 260);
+    // Round and Round (Ratt), second activation: R+Y squeezed out
+    // 479.999 ms past the SP end. The engine counts it as 0.
+    CHECK(backend_row_value(479.999, 460, 260, P::Exact, lw) == 0);
+
+    // After the squeezed-out chord nothing is under Star Power.
+    CHECK(backend_row_value(-50.0, 460, 260, P::After, lw) == 0);
+    CHECK(backend_row_value(1.5, 460, 260, P::After, lw) == 0);
+
+    // The leeway is the user's rule (hydra_rules.ini), not a constant.
+    CHECK(backend_row_value(5.0, 460, 260, P::NoSqOut, 10.0) == 460);
+    CHECK(backend_row_value(5.0, 460, 260, P::NoSqOut, lw) == 0);
+
+    // Position comes from ticks, the way the engine compares them.
+    CHECK(core::sqout_position(100, std::nullopt) == P::NoSqOut);
+    CHECK(core::sqout_position(99, 100) == P::Before);
+    CHECK(core::sqout_position(100, 100) == P::Exact);
+    CHECK(core::sqout_position(101, 100) == P::After);
+
+    // Only rows at or before the SP end were paid by the SP walk.
+    CHECK(core::paid_by_sp_walk(0.0));
+    CHECK(core::paid_by_sp_walk(-0.5));
+    CHECK_FALSE(core::paid_by_sp_walk(0.5));
 }
