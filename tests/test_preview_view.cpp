@@ -16,6 +16,8 @@
 #include "core/squeeze_rating.h"
 #include "corpus_util.h"
 #include "parse/song.h"
+#include "search/engine.h"
+#include "search/graph.h"
 
 using namespace hydra;
 using namespace hydra::app;
@@ -133,7 +135,7 @@ Song make_sp_song(const std::vector<int64_t>& phrase_ends, int64_t last_tick,
 // spends, and the deactivation node the search stamped on it. Nothing derives
 // that node any more, so the fixture has to state it. The default is the plain
 // act + 2*sp_meter measures — an activation that collects no phrase mid-SP.
-// A fixture that collects one overwrites `deact_tick` itself.
+// A fixture that collects one overwrites `deact_tick` and sets `collected_phrase_ticks` itself.
 Activation sp_act_at(const Song& song, int64_t tick, int sp_meter) {
     Activation a;
     a.timecode = song.timecode(tick);
@@ -156,6 +158,33 @@ void check_curve_well_formed(const SpMeterCurve& curve) {
         CHECK(s.start_bars <= static_cast<double>(curve.cap) + 1e-9);
         CHECK(s.end_bars <= static_cast<double>(curve.cap) + 1e-9);
     }
+}
+
+// The engine fixture from test_search.cpp ("SP cap overfill: a second clamp
+// in the same window replaces clamp_tick"), rebuilt with each phrase's start
+// tick set so the Preview draws the phrases. 192 ticks per beat, 4/4, 120
+// BPM: a measure is 768 ticks and 2000 ms.
+Song make_overfill_song() {
+    struct N { int64_t tick; bool phrase; bool fill; };
+    const std::vector<N> notes = {{0, true, false},    {768, true, false},
+                                  {2304, false, true}, {3072, true, false},
+                                  {3840, true, false}, {4608, false, false},
+                                  {5376, false, false}, {6000, false, false},
+                                  {6768, false, false}, {7500, false, false}};
+    Song song(192);
+    song.tpm_changes[0] = 768;
+    song.bpm_changes[0] = 120.0;
+    song.build_timing();
+    for (const N& n : notes) {
+        SongTimestamp ts;
+        ts.timecode = song.timecode(n.tick);
+        ts.chord.add_note(NoteColor::Red);
+        ts.flag_sp = n.phrase;
+        if (n.phrase) ts.sp_phrase_start = n.tick;
+        if (n.fill) ts.activation_length = 384;
+        song.sequence.push_back(ts);
+    }
+    return song;
 }
 
 // One analyzed corpus chart (the first that yields paths), shared across cases.
@@ -566,6 +595,7 @@ TEST_CASE("sp meter curve: a phrase collected mid-activation jumps the meter a b
     Activation act = sp_act_at(song, 3840, /*sp_meter=*/2);
     act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, 0.0});
     act.deact_tick = 3840 + 6 * 1920;  // 4 measures banked, 2 for the collection
+    act.collected_phrase_ticks = {5760};  // the engine's record of that collection
     path.activations = {act};
 
     PreviewScene scene = build_preview_scene(song, &path);
@@ -646,6 +676,7 @@ TEST_CASE("sp meter curve: a full bank that collects a phrase and stores no row"
     Path path;
     Activation act = sp_act_at(song, act_tick, /*sp_meter=*/4);
     act.deact_tick = deact;
+    act.collected_phrase_ticks = {phrase_tick};
     REQUIRE(act.backends.empty());
     path.activations = {act};
 
@@ -671,6 +702,45 @@ TEST_CASE("sp meter curve: a full bank that collects a phrase and stores no row"
     // Still 0 after D. The phrase was collected during SP, not squeezed out,
     // so there is no bar waiting at the window's close.
     CHECK(sp_meter_bars_at(c, 26000.0) == doctest::Approx(0.0));
+}
+
+TEST_CASE("sp meter curve: two clamped collections refill twice and empty at the deact node") {
+    // Cap 2. Two phrases bank 2 bars; the activation at tick 2304 (6000 ms)
+    // spends them. The phrases at 3072 (8000 ms) and 3840 (10000 ms) are both
+    // collected during SP, and each one clamps at the cap. The engine puts
+    // the deact node at 6912 (18000 ms). The old gauge counted the
+    // collections off the deact node: (9 - 3) / 2 - 2 = 1, so it drew one
+    // refill and then showed a bar after SP ended that was never banked.
+    Song song = make_overfill_song();
+    ScoreGraph graph(song, 2);
+    std::vector<Path> paths = run_search(graph, DepthMode::Scores, 0, std::nullopt);
+    REQUIRE(!paths.empty());
+    REQUIRE(paths.front().activations.size() == 1);
+    const Activation& act = paths.front().activations.front();
+    REQUIRE(act.timecode.has_value());
+    REQUIRE(act.timecode->ticks() == 2304);
+    REQUIRE(activation_deact_tick(act) == std::optional<int64_t>(6912));
+    // Extra parentheses: the braced list's comma would split the macro.
+    REQUIRE((act.collected_phrase_ticks == std::vector<int64_t>{3072, 3840}));
+
+    PreviewScene scene = build_preview_scene(song, &paths.front(), /*sp_cap=*/2);
+    const SpMeterCurve& c = scene.sp_meter;
+    check_curve_well_formed(c);
+    CHECK(c.cap == 2);
+
+    // The activation snaps to the 2 bars the engine recorded.
+    CHECK(sp_meter_bars_at(c, 6000.0) == doctest::Approx(2.0));
+    // One measure of drain, then the first collection tops back up to the cap.
+    CHECK(sp_meter_bars_at(c, 8000.0 - 1e-6) == doctest::Approx(1.5));
+    CHECK(sp_meter_bars_at(c, 8000.0) == doctest::Approx(2.0));
+    // Another measure of drain, then the second collection does the same.
+    CHECK(sp_meter_bars_at(c, 10000.0 - 1e-6) == doctest::Approx(1.5));
+    CHECK(sp_meter_bars_at(c, 10000.0) == doctest::Approx(2.0));
+    // Four measures from 10000 ms burn the 2 bars exactly at the deact node.
+    CHECK(sp_meter_bars_at(c, 14000.0) == doctest::Approx(1.0));
+    CHECK(sp_meter_bars_at(c, 18000.0) == doctest::Approx(0.0));
+    // Both window phrases were collected, so nothing banks when SP ends.
+    CHECK(sp_meter_bars_at(c, 19000.0) == doctest::Approx(0.0));
 }
 
 TEST_CASE("sp meter curve: a phrase ending on the activation note is not counted twice") {

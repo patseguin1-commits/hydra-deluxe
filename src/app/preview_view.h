@@ -83,6 +83,12 @@ struct PreviewActivation {
     bool has_sp_end = false;
     int64_t sp_end_tick = 0;
     double sp_end_ms = 0.0;
+    // The ticks of the SP phrase-end chords this activation collected while
+    // SP was running, in order, copied from the record (blob v6). Late-SqIn
+    // and cap-clamped phrases are included: they are what the gauge really
+    // received. The gauge refills at exactly these; a phrase in the window
+    // that is not listed was squeezed out and banks when SP ends.
+    std::vector<int64_t> collected_phrase_ticks;
     // The activation note's lane (the chord's highest-priority note, Green
     // first): the lane the activated fill lights. Kick when the record has no
     // chord.
@@ -163,9 +169,9 @@ struct PreviewScene {
     // neither SP phrases nor activations. Without a path there is nothing to
     // drain it, so it fills and then pins at the cap — deliberate: that is the
     // chart's own truth, and an unanalyzed chart has no activations to spend
-    // the bank on. Phrases collected mid-SP are counted from the deact node
-    // rather than from where they sit on the highway, so a squeezed-out phrase
-    // steps the gauge the moment SP ends, not during the drain.
+    // the bank on. Phrases collected mid-SP come from the record's own list
+    // (`collected_phrase_ticks`), so a squeezed-out phrase steps the gauge the
+    // moment SP ends, not during the drain.
     SpMeterCurve sp_meter;
     // The song's own timing. The time box asks it for ms->tick and for
     // measure:beat:tick rather than re-deriving either from the flattened
