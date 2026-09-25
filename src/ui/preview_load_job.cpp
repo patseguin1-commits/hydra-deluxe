@@ -43,10 +43,15 @@ void PreviewLoadJob::run() {
                 stems_done_.store(done);
                 if (done == total) step_.store(Step::Mixing);
             });
+        double offset_ms = source.audio_offset_ms;
+        if (offset_ms < 0.0) {
+            audio::pad_front_ms(mixed, -offset_ms);
+            offset_ms = 0.0;
+        }
         step_.store(Step::Building);
         const Path* path = path_ ? &*path_ : nullptr;
         app::PreviewScene scene = app::build_preview_scene(source.song, path, sp_cap_);
-        result_ = Result{std::move(scene), std::move(mixed), std::move(source.song)};
+        result_ = Result{std::move(scene), std::move(mixed), offset_ms, std::move(source.song)};
         return true;
     });
 }

@@ -1,6 +1,8 @@
 #include "audio/mixer.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstddef>
 #include <stdexcept>
 
 #include "app/preview_source.h"
@@ -92,6 +94,12 @@ DecodedAudio decode_and_mix(const std::vector<app::PreviewAudioStem>& stems,
         if (on_progress) on_progress(++done, total);
     }
     return mix_stems(decoded, out_rate, out_channels);
+}
+
+void pad_front_ms(DecodedAudio& audio, double ms) {
+    if (ms <= 0.0 || audio.channels <= 0 || audio.sample_rate <= 0) return;
+    const auto frames = static_cast<std::size_t>(std::llround(ms * audio.sample_rate / 1000.0));
+    audio.samples.insert(audio.samples.begin(), frames * static_cast<std::size_t>(audio.channels), 0.0f);
 }
 
 }  // namespace hydra::audio

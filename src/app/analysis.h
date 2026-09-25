@@ -83,6 +83,14 @@ std::map<std::string, int> count_chart_chords(const std::string& filepath);
 // by path alone. Returns an empty string if the file cannot be read.
 std::string hash_chart_file(const std::string& path);
 
+// The [song] section of a song.ini as lower-cased key -> value, with the
+// value's leading blanks trimmed. A key seen twice keeps its last value.
+// Section and key names match in any case, `;` and `#` start comments, and a
+// UTF-8 BOM is skipped. Throws std::runtime_error when the file cannot be
+// read. The library scan (name, artist, charter) and the Preview (delay) both
+// read song.ini through here.
+std::map<std::string, std::string> read_song_ini_keys(const std::string& path);
+
 // The settings a batch run applies uniformly, mirroring the `settings` tuple
 // hybatch.analyze_for_store's job carries. Everything the search itself reads
 // lives on the SearchSettings base; the two flags here are parse-time only.

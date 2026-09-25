@@ -996,6 +996,22 @@ Song ChartParser::parse(const std::vector<uint8_t>& data, bool pro,
     Song song(tick_resolution);
     song_ = &song;
 
+    // Offset is a decimal number of seconds. ChartDataEntry keeps a
+    // non-integer value in property_str, so parse that.
+    if (auto it = song_sec.prop_data.find("Offset");
+        it != song_sec.prop_data.end() && !it->second.empty()) {
+        const ChartDataEntry& e = it->second.at(0);
+        if (e.property_int) {
+            song.chart_offset_s = static_cast<double>(*e.property_int);
+        } else if (e.property_str) {
+            try {
+                song.chart_offset_s = std::stod(*e.property_str);
+            } catch (const std::exception&) {
+                // An unreadable Offset is treated as absent, like CH's default 0.
+            }
+        }
+    }
+
     // Map tempo and time signatures from the sync track.
     auto sync_it = sections_.find("SyncTrack");
     if (sync_it != sections_.end()) {

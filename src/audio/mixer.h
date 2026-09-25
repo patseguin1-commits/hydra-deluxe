@@ -37,6 +37,11 @@ DecodedAudio decode_and_mix(const std::vector<app::PreviewAudioStem>& stems,
                             int out_rate, int out_channels,
                             const DecodeProgress& on_progress = nullptr);
 
+// Prepend `ms` of silence (rounded to whole frames). A negative chart offset
+// means the chart starts before the audio, and the playhead cannot seek below
+// 0, so the load job pads the front instead and plays with offset 0.
+void pad_front_ms(DecodedAudio& audio, double ms);
+
 }  // namespace hydra::audio
 
 #endif  // HYDRA_AUDIO_MIXER_H

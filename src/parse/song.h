@@ -101,6 +101,9 @@ public:
     std::vector<SongTimestamp> sequence;
     std::vector<std::string> features;
     bool dynamics_enabled = false;
+    // .chart [Song] Offset, in seconds, when the file sets one. Only the
+    // Preview reads it (to line the audio up); scoring works in chart time.
+    std::optional<double> chart_offset_s;
 
     // Practice sections in tick order. A section marker can sit past the last
     // note, so these ticks are not bounded by the sequence.

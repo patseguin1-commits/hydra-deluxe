@@ -104,7 +104,7 @@ void PreviewController::poll() {
         scene_dirty_ = true;
         transport_.set_gain(static_cast<float>(volume_pct_) / 100.0f);
         transport_.load(std::make_unique<audio::Playhead>(std::move(result.mixed)),
-                        scene_.song_length_ms);
+                        scene_.song_length_ms, result.audio_offset_ms);
         // Open the output device only when there is audio to play; a chart with
         // no locatable stems previews silently (the highway still draws).
         if (transport_.has_audio()) {
