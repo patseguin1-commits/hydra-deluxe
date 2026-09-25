@@ -1,5 +1,7 @@
 #include "core/squeeze_rating.h"
 
+#include "core/backend_value.h"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -77,7 +79,8 @@ bool transfer_is_material(double gap_ms, double transfer_r,
 
 ActivationRating rate_activation(const Activation& act,
                                  const SongTiming* timing,
-                                 double hit_window_ms) {
+                                 double hit_window_ms,
+                                 double backend_leeway_ms) {
     ActivationRating out;
 
     std::optional<ActTransferScales> scales;
@@ -116,7 +119,8 @@ ActivationRating rate_activation(const Activation& act,
                 applies = transfer_is_material(*bsq.offset_ms, row.scale,
                                                hit_window_ms);
                 out.early_backend_warns |= applies;
-            } else if (*bsq.offset_ms > kDifficultMs) {
+            } else if (!core::counted_without_squeeze(*bsq.offset_ms,
+                                                      backend_leeway_ms)) {
                 row.scale = scales->post.late;
                 applies = transfer_is_material(*bsq.offset_ms, row.scale,
                                                hit_window_ms);
@@ -157,13 +161,16 @@ ActivationRating rate_activation(const Activation& act,
 
     // The cap-clamped flag fires when the activation has a clamp_tick AND at
     // least one squeeze the frontend decides: any SqIn/SqOut, or any backend
-    // row that was squeezed out or sits past the difficult threshold.
+    // row that was squeezed out or that the engine does not count (at or past
+    // the leeway).
     if (act.clamp_tick.has_value()) {
         bool has_frontend_squeeze = !act.sqinouts.empty();
         if (!has_frontend_squeeze) {
             for (const BackendRating& br : out.backends) {
                 if (br.squeezed_out ||
-                    (br.row.offset_ms && *br.row.offset_ms > kDifficultMs)) {
+                    (br.row.offset_ms &&
+                     !core::counted_without_squeeze(*br.row.offset_ms,
+                                                    backend_leeway_ms))) {
                     has_frontend_squeeze = true;
                     break;
                 }

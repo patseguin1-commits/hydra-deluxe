@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "core/squeeze_rating.h"
+#include "core/rules.h"
 
 using namespace hydra;
 
@@ -448,7 +449,7 @@ TEST_CASE("rate_activation: stored scales, materiality-gated warns and rows") {
     CHECK(*r.backends[0].effective_ms ==
           doctest::Approx(effective_backend_ms(50.0, 0.5)));
 
-    // A row at or under the difficult floor never engages the late scale.
+    // A row inside the backend leeway never engages the late scale.
     Activation leeway = scaled;
     leeway.backends.clear();
     BackendSqueeze leeway_row;
@@ -730,7 +731,7 @@ TEST_CASE("rate_activation: cap_clamped flag") {
     // cap_clamped is only meaningful when both halves are true: the window
     // was cap-clamped (clamp_tick is set) AND the activation actually lists a
     // squeeze the frontend decides (a SqIn/SqOut, or a backend row that's
-    // squeezed out or past the difficult floor). Either half missing means
+    // squeezed out or at or past the backend leeway). Either half missing means
     // there's no frontend-decided squeeze for the overfill warning to attach
     // to, so the flag stays false.
 
@@ -743,8 +744,8 @@ TEST_CASE("rate_activation: cap_clamped flag") {
     CHECK(r1.cap_clamped);
 
     // clamp_tick set, but the only backend row is at -30 ms -- inside the
-    // kDifficultMs floor, so it isn't a squeeze the frontend decides. No
-    // SqIn/SqOut either, so cap_clamped stays false.
+    // SP window, so the engine counts it and it isn't a squeeze the frontend
+    // decides. No SqIn/SqOut either, so cap_clamped stays false.
     Activation clamped_no_squeeze;
     clamped_no_squeeze.clamp_tick = 3072;
     BackendSqueeze mild_row;
@@ -759,4 +760,42 @@ TEST_CASE("rate_activation: cap_clamped flag") {
     unclamped_with_squeeze.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -50.0});
     ActivationRating r3 = rate_activation(unclamped_with_squeeze, nullptr, 85.0);
     CHECK_FALSE(r3.cap_clamped);
+}
+
+// The engine counts a plain row less than the leeway past the SP end, so it
+// is not a squeeze the frontend decides. The rating, the late-row warn and
+// the overfill flag all use that same edge (user decision 7).
+TEST_CASE("rate_activation: a plain row inside the leeway is not a frontend squeeze") {
+    Activation act;
+    act.skips = 0;
+    act.e_offset = 300.0;  // not e-critical
+    act.clamp_tick = 3072;
+    // A late scale this small would make a row treated as late material:
+    // 2.5 ms reads as 4.2 ms, past the 1 ms impact floor.
+    act.transfer_post.late = 0.2;
+    BackendSqueeze row;
+    row.timecode = Timecode::raw(3080);
+    row.offset_ms = 2.5;
+    act.backends.push_back(row);
+
+    ActivationRating r = rate_activation(act, nullptr, 85.0);
+    CHECK_FALSE(r.cap_clamped);
+    CHECK_FALSE(r.late_backend_warns);
+    REQUIRE(r.backends.size() == 1);
+    CHECK_FALSE(r.backends[0].effective_ms.has_value());
+    CHECK(act.backends[0].summarystr(85.0) == "Standard");
+
+    // At the leeway edge the row is uncounted, so the frontend decides it.
+    act.backends[0].offset_ms = 3.0;
+    r = rate_activation(act, nullptr, 85.0);
+    CHECK(r.cap_clamped);
+    CHECK(act.backends[0].summarystr(85.0) == "Hard (uncounted)");
+
+    // The edge is the user's rule: a 2 ms leeway makes 2.5 ms uncounted.
+    const double narrow = 2.0;
+    REQUIRE(narrow != core::default_rules().backend_leeway_ms);
+    act.backends[0].offset_ms = 2.5;
+    r = rate_activation(act, nullptr, 85.0, narrow);
+    CHECK(r.cap_clamped);
+    CHECK(act.backends[0].summarystr(85.0, narrow) == "Hard (uncounted)");
 }

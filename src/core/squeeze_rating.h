@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "core/model.h"
+#include "core/rules.h"
 #include "core/timing.h"
 
 namespace hydra {
@@ -120,7 +121,8 @@ struct ActivationRating {
     bool early_note_warns = false;
     // True when the activation's SP window was cap-clamped AND the activation
     // lists a squeeze the frontend decides: any SqIn/SqOut, or any backend
-    // row that rate_activation judges (squeezed_out, or offset > kDifficultMs).
+    // row that rate_activation judges (squeezed_out, or a plain row the engine
+    // does not count: offset at or past the leeway).
     // Drives the overfill warning in the details view.
     bool cap_clamped = false;
     // One entry per act.display_backends() row, in that order.
@@ -132,9 +134,12 @@ struct ActivationRating {
 // more. `timing` may be null (no songmeta row): the stored scales are used
 // then. Backend rows are judged at the post (deact-node) end, SqIn/SqOut
 // phrase notes at the pre (pre-extension) end.
-ActivationRating rate_activation(const Activation& act,
-                                 const SongTiming* timing,
-                                 double hit_window_ms = kDefaultHitWindowMs);
+// backend_leeway_ms: Rules::backend_leeway_ms. A plain row less than this
+// past the SP end is counted by the engine, so it is not a late squeeze.
+ActivationRating rate_activation(
+    const Activation& act, const SongTiming* timing,
+    double hit_window_ms = kDefaultHitWindowMs,
+    double backend_leeway_ms = core::default_rules().backend_leeway_ms);
 
 // ---- timing tiers ---------------------------------------------------------
 
