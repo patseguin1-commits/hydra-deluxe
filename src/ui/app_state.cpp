@@ -147,18 +147,15 @@ void AppState::update_dynamics() {
 
     // Try the store before starting a background parse.
     if (!dynamics_job) {
-        store::DynamicsKey dk = app::dynamics_store_key(selected->md5, diff, pro);
-        auto blob = store->get_dynamics(dk);
-        if (blob) {
-            auto decoded = app::decode_dynamics(*blob);
-            if (decoded) {
-                dynamics_result = std::move(*decoded);
-                dynamics_key = want_key;
-                return;
-            }
-            // Decode failure: fall through and re-parse.
+        auto stored =
+            app::load_stored_dynamics(*store, app::dynamics_store_key(selected->md5, diff, pro));
+        if (stored) {
+            dynamics_result = std::move(*stored);
+            dynamics_key = want_key;
+            return;
         }
-        // Store miss or decode failure: start the background job.
+        // Store miss, an older count stamp or a decode failure: start the
+        // background job.
         dynamics_job = std::make_unique<DynamicsLoadJob>(
             *selected, pro, diff);
         dynamics_job->start();
@@ -171,9 +168,8 @@ void AppState::update_dynamics() {
             dynamics_key = dynamics_job->key();
             // Persist to the store so the next open is instant.
             try {
-                store::DynamicsKey dk = app::dynamics_store_key(selected->md5, diff, pro);
-                auto blob = app::encode_dynamics(*dynamics_result);
-                store->put_dynamics(dk, blob);
+                app::save_dynamics(*store, app::dynamics_store_key(selected->md5, diff, pro),
+                                   *dynamics_result);
                 dynamics_store_error.clear();
             } catch (const std::exception& e) {
                 dynamics_store_error =

@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "app/config.h"
+#include "app/dynamics_breakdown.h"
 #include "core/model.h"
 #include "core/winstr.h"
 #include "store/record_store.h"
@@ -283,4 +284,35 @@ TEST_CASE("under a bad hydra_rules.ini no stored record reads Ready") {
     AppState bad;
     REQUIRE(bad.analysis_blocked());
     CHECK(bad.store->get_summary(seeded).status == RecordStatus::Stale);
+}
+
+TEST_CASE("update_dynamics recounts a stored row with an older count stamp") {
+    ScratchPaths paths("appstate_dyn_old");
+    std::unique_ptr<AppState> app = app_on(paths);
+    const hydra::store::DynamicsKey key = hydra::app::dynamics_store_key(
+        library_entry(0).md5, app->settings.difficulty(), app->settings.view_prodrums);
+    // A row counted before the last bump of the counter.
+    app->store->put_dynamics(key, hydra::app::encode_dynamics(hydra::app::DynamicsBreakdown{}),
+                             hydra::app::kDynamicsCountVersion - 1);
+
+    app->update_dynamics();
+
+    // The old row was not shown; a background recount started instead. (The
+    // chart file does not exist, so the job itself fails. This test only
+    // cares that the recount was started.)
+    CHECK_FALSE(app->dynamics_result.has_value());
+    CHECK(app->dynamics_job != nullptr);
+}
+
+TEST_CASE("update_dynamics uses a stored row with the current count stamp") {
+    ScratchPaths paths("appstate_dyn_now");
+    std::unique_ptr<AppState> app = app_on(paths);
+    const hydra::store::DynamicsKey key = hydra::app::dynamics_store_key(
+        library_entry(0).md5, app->settings.difficulty(), app->settings.view_prodrums);
+    hydra::app::save_dynamics(*app->store, key, hydra::app::DynamicsBreakdown{});
+
+    app->update_dynamics();
+
+    CHECK(app->dynamics_result.has_value());
+    CHECK(app->dynamics_job == nullptr);  // no recount
 }

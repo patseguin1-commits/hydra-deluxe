@@ -273,10 +273,14 @@ public:
     void add_record(const RecordKey& key, const HydraRecord& record);
     void add_row(const PreparedRow& row);
 
-    // Stores a dynamics-breakdown blob (INSERT OR REPLACE).
-    void put_dynamics(const DynamicsKey& key, const std::vector<uint8_t>& blob);
-    // Returns the blob for this key, or nullopt when the row is missing.
-    std::optional<std::vector<uint8_t>> get_dynamics(const DynamicsKey& key);
+    // Stores a dynamics-breakdown blob (INSERT OR REPLACE) under the caller's
+    // count stamp (app::kDynamicsCountVersion; go through app::save_dynamics).
+    void put_dynamics(const DynamicsKey& key, const std::vector<uint8_t>& blob,
+                      int count_version);
+    // Returns the blob for this key, or nullopt when the row is missing or
+    // carries another count stamp (the caller then recounts it).
+    std::optional<std::vector<uint8_t>> get_dynamics(const DynamicsKey& key,
+                                                     int count_version);
 
     // ---- reading ------------------------------------------------------
 

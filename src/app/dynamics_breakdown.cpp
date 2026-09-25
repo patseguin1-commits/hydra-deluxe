@@ -181,12 +181,23 @@ store::DynamicsKey dynamics_store_key(const std::string& md5, Difficulty difficu
     return store::DynamicsKey{md5, difficulty_name(difficulty), pro};
 }
 
+std::optional<DynamicsBreakdown> load_stored_dynamics(store::RecordStore& store,
+                                                      const store::DynamicsKey& key) {
+    auto blob = store.get_dynamics(key, kDynamicsCountVersion);
+    if (!blob) return std::nullopt;
+    return decode_dynamics(*blob);
+}
+
+void save_dynamics(store::RecordStore& store, const store::DynamicsKey& key,
+                   const DynamicsBreakdown& breakdown) {
+    store.put_dynamics(key, encode_dynamics(breakdown), kDynamicsCountVersion);
+}
+
 void store_dynamics_from_analysis(store::RecordStore& store, const std::string& md5,
                                   const Song& song, bool bass2x, Difficulty difficulty, bool pro) {
     if (!bass2x) return;  // the 2x kicks were dropped; the counts would be incomplete
     try {
-        store.put_dynamics(dynamics_store_key(md5, difficulty, pro),
-                           encode_dynamics(count_dynamics(song)));
+        save_dynamics(store, dynamics_store_key(md5, difficulty, pro), count_dynamics(song));
     } catch (...) {
         // Best effort: never block the analysis record.
     }
