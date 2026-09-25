@@ -11,6 +11,7 @@
 
 #include "core/winstr.h"  // read_file_bytes
 #include "parse/midi.h"
+#include "parse/sng.h"
 #include "parse/chart_files.h"
 #include "parse/srb.h"
 
@@ -1075,67 +1076,30 @@ Song load_songpath_sng(const std::string& path, bool pro, bool bass2x,
                        Difficulty difficulty, const core::Rules& rules) {
     std::vector<uint8_t> buf = read_file_bytes(path);
 
-    auto read_u64 = [&buf](size_t pos) {
-        uint64_t v = 0;
-        for (int i = 0; i < 8; ++i)
-            v |= static_cast<uint64_t>(buf[pos + i]) << (8 * i);
-        return v;
-    };
-
-    const size_t XORMASK_OFFSET = 10;
-    uint8_t xormask[16];
-    std::memcpy(xormask, buf.data() + XORMASK_OFFSET, 16);
-
-    size_t pos = XORMASK_OFFSET + 16;
-    uint64_t metadata_len = read_u64(pos);
-    pos += 8;
-    pos += static_cast<size_t>(metadata_len);
-
-    pos += 8;  // skip section length
-    uint64_t file_count = read_u64(pos);
-    pos += 8;
-
-    enum class Loader { None, Mid, Chart } loader = Loader::None;
-    uint64_t chart_len = 0, chart_off = 0;
-
-    for (uint64_t i = 0; i < file_count; ++i) {
-        uint8_t filename_len = buf[pos];
-        pos += 1;
-        std::string filename(reinterpret_cast<const char*>(buf.data() + pos),
-                             filename_len);
-        pos += filename_len;
-        std::string fn = ascii_casefold(filename);
-        uint64_t contents_len = read_u64(pos);
-        pos += 8;
-        uint64_t contents_index = read_u64(pos);
-        pos += 8;
-
-        if (fn == "notes.mid") {
-            loader = Loader::Mid;
-            chart_len = contents_len;
-            chart_off = contents_index;
+    // A notes.mid wins over a notes.chart; among .chart entries the last one
+    // listed wins (the order this loader has always used).
+    const std::vector<SngFileEntry> entries = sng_read_file_table(buf);
+    const SngFileEntry* notes = nullptr;
+    ChartFormat format = ChartFormat::None;
+    for (const SngFileEntry& e : entries) {
+        const ChartFormat f = notes_file_format(e.name);
+        if (f == ChartFormat::Mid) {
+            notes = &e;
+            format = f;
             break;
-        } else if (fn == "notes.chart") {
-            loader = Loader::Chart;
-            chart_len = contents_len;
-            chart_off = contents_index;
+        }
+        if (f == ChartFormat::Chart) {
+            notes = &e;
+            format = f;
         }
     }
+    if (!notes) throw std::runtime_error("No chart files found in SNG file.");
 
-    if (loader == Loader::None)
-        throw std::runtime_error("No chart files found in SNG file.");
-
-    std::vector<uint8_t> notebytes(static_cast<size_t>(chart_len));
-    for (uint64_t i = 0; i < chart_len; ++i) {
-        uint8_t xorkey =
-            xormask[i % 16] ^ static_cast<uint8_t>(i & 0xff);
-        notebytes[static_cast<size_t>(i)] =
-            buf[static_cast<size_t>(chart_off + i)] ^ xorkey;
-    }
-
-    if (loader == Loader::Mid)
-        return load_songbytes_mid(notebytes, pro, bass2x, difficulty, rules);
-    return load_songbytes_chart(notebytes, pro, bass2x, difficulty, rules);
+    std::optional<std::vector<uint8_t>> notebytes = sng_decode_file(buf, *notes);
+    if (!notebytes) throw std::runtime_error("Truncated SNG file.");
+    if (format == ChartFormat::Mid)
+        return load_songbytes_mid(*notebytes, pro, bass2x, difficulty, rules);
+    return load_songbytes_chart(*notebytes, pro, bass2x, difficulty, rules);
 }
 
 Song load_songpath_srb(const std::string& path, bool pro, bool bass2x,
