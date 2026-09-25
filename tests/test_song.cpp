@@ -385,3 +385,20 @@ TEST_CASE("chart_files: a path's format comes from its extension in any case") {
     CHECK(chart_format_of("notes.txt") == ChartFormat::None);
     CHECK(chart_format_of("mid") == ChartFormat::None);
 }
+
+TEST_CASE("mid: a stray SP note-off flags nothing") {
+    std::vector<std::vector<uint8_t>> ev;
+    ev.push_back(testmidi::track_name("PART DRUMS"));
+    ev.push_back(testmidi::set_tempo());
+    ev.push_back(testmidi::note_on(116, 100));       // tick 0:   SP phrase starts
+    ev.push_back(testmidi::note_on(96, 100));        // tick 0:   kick, inside the phrase
+    ev.push_back({0x81, 0x70, 0x80, 116, 0});        // tick 240: SP phrase ends
+    ev.push_back({0x81, 0x70, 0x90, 96, 100});       // tick 480: kick, outside any phrase
+    ev.push_back({0x81, 0x70, 0x80, 116, 0});        // tick 720: stray SP note-off
+    ev.push_back(testmidi::end_of_track());
+    Song song = load_songbytes_mid(testmidi::smf(testmidi::concat(ev)), true, true);
+
+    REQUIRE(song.sequence.size() == 2);
+    CHECK(song.sequence[0].flag_sp);
+    CHECK_FALSE(song.sequence[1].flag_sp);
+}

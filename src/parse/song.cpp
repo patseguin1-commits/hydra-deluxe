@@ -125,6 +125,35 @@ bool fill_lands_on_chord(const Song& song, int64_t fill_end_tick, int64_t tick,
            (!prevchord_dist.has_value() || nextchord_dist <= *prevchord_dist);
 }
 
+// The parser handlers MIDI and .chart share. Each parser decides when to
+// call them (its own event phases); what they do to the Song lives here once.
+
+// A time signature: ticks per measure = resolution * 4 * num / den.
+void apply_timesig(Song& song, int64_t tick, int numerator, int denominator) {
+    song.tpm_changes[tick] = song.tick_resolution() * static_cast<int64_t>(numerator) * 4 /
+                             static_cast<int64_t>(denominator);
+}
+
+// A fill ending: the last chord becomes an activation chord whose fill began
+// at `starttick`.
+void apply_fill_end(Song& song, int64_t starttick) {
+    if (song.sequence.empty()) return;
+    SongTimestamp& last = song.sequence.back();
+    if (last.timecode.ticks() >= starttick)
+        last.activation_length = last.timecode.ticks() - starttick;
+}
+
+// An SP phrase ending: the last chord closes the phrase that began at
+// `starttick`, if it lies inside it.
+void mark_sp_phrase_end(Song& song, int64_t starttick) {
+    if (song.sequence.empty()) return;
+    SongTimestamp& last = song.sequence.back();
+    if (last.timecode.ticks() >= starttick) {
+        last.flag_sp = true;
+        last.sp_phrase_start = starttick;
+    }
+}
+
 // Emit the buffered chord as a sequence timestamp, shared by both parsers.
 // apply_flam is true only on the .mid path: MIDI charts carry a flam marker
 // that converts the chord, while the .chart format has no such marker, so
@@ -329,31 +358,18 @@ private:
         song_->bpm_changes[tick] = 60000000.0 / static_cast<double>(miditempo);
     }
     void op_timesig(int64_t tick, int numerator, int denominator) {
-        song_->tpm_changes[tick] = song_->tick_resolution() *
-                                   static_cast<int64_t>(numerator) * 4 /
-                                   static_cast<int64_t>(denominator);
+        apply_timesig(*song_, tick, numerator, denominator);
     }
     void op_fillstart(int64_t tick) {
         fill_start_tick_ = tick;
         fill_end_tick_.reset();
     }
     void op_store_fillend(int64_t tick) { fill_end_tick_ = tick; }
-    void op_apply_fill(int64_t starttick) {
-        if (song_->sequence.empty()) return;
-        SongTimestamp& last = song_->sequence.back();
-        if (last.timecode.ticks() >= starttick)
-            last.activation_length = last.timecode.ticks() - starttick;
-    }
+    void op_apply_fill(int64_t starttick) { apply_fill_end(*song_, starttick); }
     void op_sp_start(int64_t tick) { sp_start_tick_ = tick; }
     void op_sp_end() {
-        if (song_->sequence.empty()) {
-            sp_start_tick_.reset();
-            return;
-        }
-        if (song_->sequence.back().timecode.ticks() >= *sp_start_tick_) {
-            song_->sequence.back().flag_sp = true;
-            song_->sequence.back().sp_phrase_start = *sp_start_tick_;
-        }
+        // A note-off with no phrase open (a stray 116 off) closes nothing.
+        if (sp_start_tick_) mark_sp_phrase_end(*song_, *sp_start_tick_);
         sp_start_tick_.reset();
     }
     void op_tom(NoteColor color, NoteCymbalType cymbal) {
@@ -766,33 +782,19 @@ private:
     void op_disco(bool on) { flag_disco_ = on; }
     void op_tempo(int64_t tick, double bpm) { song_->bpm_changes[tick] = bpm; }
     void op_timesig(int64_t tick, int numerator, int denominator) {
-        song_->tpm_changes[tick] = song_->tick_resolution() *
-                                   static_cast<int64_t>(numerator) * 4 /
-                                   static_cast<int64_t>(denominator);
+        apply_timesig(*song_, tick, numerator, denominator);
     }
     void op_fillstart(int64_t start, int64_t end) {
         fill_start_tick_ = start;
         fill_end_tick_ = end;
     }
-    void op_fillend(int64_t starttick) {
-        if (song_->sequence.empty()) return;
-        SongTimestamp& last = song_->sequence.back();
-        if (last.timecode.ticks() >= starttick)
-            last.activation_length = last.timecode.ticks() - starttick;
-    }
+    void op_fillend(int64_t starttick) { apply_fill_end(*song_, starttick); }
     void op_sp_start(int64_t start, int64_t end) {
         sp_start_tick_ = start;
         sp_end_tick_ = end;
     }
     void op_sp_end(int64_t starttick) {
-        if (song_->sequence.empty()) {
-            sp_end_tick_.reset();
-            return;
-        }
-        if (song_->sequence.back().timecode.ticks() >= starttick) {
-            song_->sequence.back().flag_sp = true;
-            song_->sequence.back().sp_phrase_start = starttick;
-        }
+        mark_sp_phrase_end(*song_, starttick);
         sp_end_tick_.reset();
     }
     void op_solo(bool on) { flag_solo_ = on; }
