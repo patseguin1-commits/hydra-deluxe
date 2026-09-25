@@ -6,6 +6,7 @@
 #include "app/html_page.h"
 #include "app/report.h"  // report::plain — strips Clone Hero <color> markup
 #include "core/strutil.h"  // lower_hex
+#include "parse/song.h"  // title_or_unknown
 
 namespace hydra::app::dm_report {
 
@@ -267,7 +268,7 @@ std::vector<DmReportRow> collect_dm_rows(store::RecordStore& store,
             row.artist = s.artist;
             row.charter = s.charter;
         } else if (rec) {
-            row.song = report::plain(rec->ref_name);
+            row.song = title_or_unknown(report::plain(rec->ref_name));
             row.artist = report::plain(rec->ref_artist);
             row.charter = report::plain(rec->ref_charter);
         } else {

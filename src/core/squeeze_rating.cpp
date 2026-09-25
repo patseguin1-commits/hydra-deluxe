@@ -192,6 +192,13 @@ std::vector<TimingTier> timing_tiers(double hit_window_ms) {
     };
 }
 
+double beyond_edge_ms(double hit_window_ms) {
+    double edge = 0.0;
+    for (const TimingTier& t : timing_tiers(hit_window_ms))
+        if (t.cutoff) edge = std::max(edge, *t.cutoff);
+    return edge;
+}
+
 namespace {
 
 // Bisection ceiling: displacements past this are far outside anything a

@@ -1,6 +1,7 @@
 #include "parse/song.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <functional>
@@ -146,6 +147,31 @@ const char* difficulty_name(Difficulty difficulty) {
         case Difficulty::Easy: return "Easy";
         default: return "Expert";
     }
+}
+
+std::optional<Difficulty> difficulty_from_name(std::string_view name) {
+    for (Difficulty d : kAllDifficulties) {
+        const std::string_view want = difficulty_name(d);
+        if (name.size() != want.size()) continue;
+        if (std::equal(name.begin(), name.end(), want.begin(), [](char a, char b) {
+                return std::tolower(static_cast<unsigned char>(a)) ==
+                       std::tolower(static_cast<unsigned char>(b));
+            }))
+            return d;
+    }
+    return std::nullopt;
+}
+
+std::string no_notes_message(Difficulty difficulty, bool prodrums) {
+    return std::string("No ") + difficulty_name(difficulty) +
+           (prodrums ? " Pro Drums" : " Drums") + " notes in this chart.";
+}
+
+std::string title_or_unknown(std::string title) {
+    // The placeholder the metadata readers used before kUnknownTitle.
+    static constexpr const char* kOldPlaceholder = "<unknown title>";
+    if (title.empty() || title == kOldPlaceholder) return kUnknownTitle;
+    return title;
 }
 
 // ---- Song::sp_phrase_count ----------------------------------------------

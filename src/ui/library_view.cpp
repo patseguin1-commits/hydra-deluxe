@@ -232,11 +232,13 @@ void render_view_controls(AppState& app) {
     ImGui::TextUnformatted("View:");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(px(90));
-    const char* kDifficulties[] = {"Expert", "Hard", "Medium", "Easy"};
+    const char* difficulty_names[std::size(kAllDifficulties)];
+    for (size_t i = 0; i < std::size(kAllDifficulties); ++i)
+        difficulty_names[i] = difficulty_name(kAllDifficulties[i]);
     int difficulty_idx = static_cast<int>(app.settings.difficulty());
-    if (ImGui::Combo("##difficulty", &difficulty_idx, kDifficulties,
-                     IM_ARRAYSIZE(kDifficulties))) {
-        app.settings.view_difficulty = kDifficulties[difficulty_idx];
+    if (ImGui::Combo("##difficulty", &difficulty_idx, difficulty_names,
+                     IM_ARRAYSIZE(difficulty_names))) {
+        app.settings.view_difficulty = difficulty_names[difficulty_idx];
         // A different difficulty is a different chartmode, so commit_settings
         // resets the page, re-reads the library and rewrites the INI.
         app.commit_settings();

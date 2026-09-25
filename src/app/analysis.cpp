@@ -186,7 +186,8 @@ std::tuple<std::string, std::string, std::string> read_metadata_ini(const std::s
     if (raw.size() >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF) start = 3;
     std::string text(reinterpret_cast<const char*>(raw.data() + start), raw.size() - start);
 
-    std::string title = "<unknown title>";
+    // Empty = no usable name; discover_charts applies the one fallback.
+    std::string title;
     std::string artist = "<unknown artist>";
     std::string charter = "<unknown charter>";
 
@@ -237,7 +238,7 @@ std::tuple<std::string, std::string, std::string> read_metadata_ini(const std::s
 // being hashed — the old version read the entire archive (chart + audio, can
 // be hundreds of MB) a second time to get three strings from its first few
 // KB. A truncated buffer degrades exactly like a truncated file did: the
-// bounds checks stop early and missing keys keep their <unknown> defaults.
+// bounds checks stop early and a missing name stays empty and the other keys keep their <unknown> defaults.
 
 // How much of a .sng/.srb to keep for metadata. A .sng block starts at offset
 // 34 and a .srb's deflated block at offset 16; real metadata is a few KB, so
@@ -257,7 +258,8 @@ std::tuple<std::string, std::string, std::string> parse_sng_metadata(
         return v;
     };
 
-    std::string title = "<unknown title>";
+    // Empty = no usable name; discover_charts applies the one fallback.
+    std::string title;
     std::string artist = "<unknown artist>";
     std::string charter = "<unknown charter>";
 
@@ -301,7 +303,8 @@ std::tuple<std::string, std::string, std::string> parse_sng_metadata(
 
 std::tuple<std::string, std::string, std::string> parse_srb_metadata(
     const std::vector<uint8_t>& buf) {
-    std::string title = "<unknown title>";
+    // Empty = no usable name; discover_charts applies the one fallback.
+    std::string title;
     std::string artist = "<unknown artist>";
     std::string charter = "<unknown charter>";
 
@@ -546,8 +549,14 @@ std::pair<std::vector<ScanItem>, std::vector<std::string>> discover_charts(
 
     std::vector<ScanItem> scanitems;
     scanitems.reserve(results.size());
-    for (std::optional<ScanItem>& r : results)
-        if (r) scanitems.push_back(std::move(*r));
+    for (std::optional<ScanItem>& r : results) {
+        if (!r) continue;
+        // The one fallback, whichever source produced the title: a fresh
+        // song.ini, .sng or .srb read, or the rescan cache holding an older
+        // scan's blank or "<unknown title>".
+        r->title = title_or_unknown(std::move(r->title));
+        scanitems.push_back(std::move(*r));
+    }
     return {scanitems, errors};
 }
 
@@ -579,20 +588,9 @@ AnalysisResult analyze_chart_file(const std::string& filepath,
     // "no notes"; here we know what the user asked for, and a chart that
     // simply has no Hard charting is the common case.
     if (song.is_empty())
-        throw ChartFileError(std::string("No ") + difficulty_name(settings.difficulty) +
-                             (settings.prodrums ? " Pro Drums" : " Drums") +
-                             " notes in this chart.");
+        throw ChartFileError(no_notes_message(settings.difficulty, settings.prodrums));
     HydraRecord record = analyze_chart(song, settings, on_progress);
     return AnalysisResult{std::move(record), std::move(song)};
-}
-
-store::Lens lens_from(const AnalysisSettings& settings) {
-    // ms_filter is a double only because the engine compares against one; the
-    // value always came from Settings::mslimit_value, an int.
-    std::optional<int> ms;
-    if (settings.ms_filter) ms = static_cast<int>(*settings.ms_filter);
-    return store::Lens::from(ms, settings.depth_mode == DepthMode::Points ? 1 : 0,
-                             settings.depth_value);
 }
 
 // ---- batch runner -----------------------------------------------------
@@ -617,6 +615,7 @@ struct WorkResult {
 }  // namespace
 
 void run_batch(const std::vector<ScanItem>& items, const std::string& chartmode,
+              const store::Lens& lens,
               const AnalysisSettings& settings, store::RecordStore& store, bool redo,
               int worker_count,
               const std::function<void(const BatchProgress&)>& on_progress,
@@ -628,7 +627,6 @@ void run_batch(const std::vector<ScanItem>& items, const std::string& chartmode,
     // ms limit and score range, so stale rows, other caps' rows and other
     // settings' rows are re-run rather than skipped.
     const store::CapQuery cap = store::CapQuery::from_setting(settings.sp_cap);
-    const store::Lens lens = lens_from(settings);
     std::vector<const ScanItem*> todo;
     for (const ScanItem& item : items) {
         if (!redo && store.has_record(store::RecordKey{item.md5, chartmode, cap, lens}))

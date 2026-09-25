@@ -14,6 +14,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "core/model.h"
@@ -31,6 +32,30 @@ enum class Difficulty { Expert, Hard, Medium, Easy };
 // "Expert" / "Hard" / "Medium" / "Easy" — the name used in the .chart section
 // name, the chartmode key, and the user-facing error strings.
 const char* difficulty_name(Difficulty difficulty);
+
+// Every difficulty, in enum order. UI lists and name lookups walk this
+// instead of keeping their own copy of the four names.
+inline constexpr Difficulty kAllDifficulties[] = {Difficulty::Expert, Difficulty::Hard,
+                                                  Difficulty::Medium, Difficulty::Easy};
+
+// The difficulty whose name matches `name` in any case ("hard", "HARD" and
+// "Hard" all give Hard). nullopt for anything else. The settings INI and
+// hydra_replay's --difficulty both read names through this.
+std::optional<Difficulty> difficulty_from_name(std::string_view name);
+
+// "No Hard Pro Drums notes in this chart." The one wording for a chart that
+// lacks the requested difficulty, used by analysis and the Preview loader.
+std::string no_notes_message(Difficulty difficulty, bool prodrums);
+
+// What a song with no usable name is called everywhere it is shown.
+inline constexpr const char* kUnknownTitle = "(unknown)";
+
+// The one fallback for a song's name. A blank name (an empty `name =`, a
+// missing name key, an empty .sng/.srb name) and the "<unknown title>" the
+// metadata readers wrote before this existed both become kUnknownTitle.
+// Library rows and songmeta rows from older scans still hold those, so every
+// place that shows a stored name reads it through this.
+std::string title_or_unknown(std::string title);
 
 // A timecode paired with a chord and gameplay modifiers, mirroring
 // hysong.SongTimestamp.

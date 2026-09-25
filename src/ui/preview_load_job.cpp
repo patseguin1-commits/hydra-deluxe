@@ -35,9 +35,7 @@ void PreviewLoadJob::run() {
         // given. Throwing here surfaces it as "Preview failed: ...", the same
         // wording analysis uses.
         if (source.song.is_empty())
-            throw ChartFileError(std::string("No ") + difficulty_name(difficulty_) +
-                                 (pro_ ? " Pro Drums" : " Drums") +
-                                 " notes in this chart.");
+            throw ChartFileError(no_notes_message(difficulty_, pro_));
         step_.store(Step::Decoding);
         audio::DecodedAudio mixed = audio::decode_and_mix(
             source.stems, /*out_rate=*/48000, /*out_channels=*/2, [this](int done, int total) {

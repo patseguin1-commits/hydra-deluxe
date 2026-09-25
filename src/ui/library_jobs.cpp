@@ -89,9 +89,11 @@ void ScanJob::run() {
 // ---- BatchJob ---------------------------------------------------------
 
 BatchJob::BatchJob(std::optional<std::string> search, std::string chartmode,
-                   app::AnalysisSettings settings, store::RecordStore& store, bool redo)
+                   store::Lens lens, app::AnalysisSettings settings,
+                   store::RecordStore& store, bool redo)
     : search_(std::move(search)),
       chartmode_(std::move(chartmode)),
+      lens_(std::move(lens)),
       settings_(std::move(settings)),
       store_(store),
       redo_(redo),
@@ -135,7 +137,7 @@ void BatchJob::run() {
     bool total_known = false;
 
     app::run_batch(
-        items_, chartmode_, settings_, store_, redo_, workers_,
+        items_, chartmode_, lens_, settings_, store_, redo_, workers_,
         [this, &total_known](const app::BatchProgress& p) {
             std::lock_guard<std::mutex> lock(mu_);
             snap_.total = p.total;
@@ -219,7 +221,7 @@ void ReportJob::run() {
         // One seam for the whole page — rows, counts, and framing come from
         // generate_report, the same call the hydra_report CLI makes.
         app::report::ReportOptions options;
-        options.max_paths = 5;
+        options.max_paths = app::report::kDefaultReportPaths;
         options.cap = cap_;
         options.lens = lens_;
         options.hit_window_ms = hit_window_ms_;

@@ -78,8 +78,15 @@ std::string build_html(const std::vector<ReportRow>& rows, const std::string& su
 // adapters over this seam; both previously composed the same framing strings
 // by hand, where they could (and did) drift.
 
+// The path report's default: the top 5 paths per chart.
+inline constexpr int64_t kDefaultReportPaths = 5;
+// "--all-paths" asks for this many, which no chart reaches.
+inline constexpr int64_t kEveryPathSentinel = 1000000000;
+// A max_paths above this is labeled "every path" in the subtitle.
+inline constexpr int64_t kEveryPathLabelThreshold = 100000000;
+
 struct ReportOptions {
-    int64_t max_paths = 5;
+    int64_t max_paths = kDefaultReportPaths;
     // Which records the page lists: the user's current SP cap and lens.
     store::CapQuery cap = store::CapQuery::at(kCloneHeroSpCap);
     store::Lens lens;

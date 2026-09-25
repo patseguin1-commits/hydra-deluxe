@@ -134,6 +134,40 @@ TEST_CASE("report lists only the wanted cap and names it") {
     CHECK(rank1 == 1);
 }
 
+TEST_CASE("collect_rows: a blank or old-placeholder song name reads (unknown)") {
+    store::RecordStore store(":memory:");
+    AnalysisSettings settings;
+    settings.depth_mode = DepthMode::Scores;
+    settings.depth_value = 10;
+    settings.sp_cap = 4;
+    settings.time_budget_s = std::nullopt;
+
+    // songmeta names written before the fallback existed.
+    const std::vector<std::string> stored_names = {"", "<unknown title>"};
+    size_t added = 0;
+    for (const std::string& path : corpus::chart_paths()) {
+        if (added == stored_names.size()) break;
+        try {
+            AnalysisResult result = analyze_chart_file(path, settings);
+            if (result.song.is_empty() || result.record.paths.empty()) continue;
+            const std::string hyhash = "u" + std::to_string(added);
+            store.add_song(hyhash, stored_names[added], "Artist", "Charter", result.song);
+            store.add_record(
+                store::RecordKey{hyhash, "mode", store::CapQuery::from_setting(settings.sp_cap)},
+                result.record);
+            ++added;
+        } catch (const std::exception&) {
+            continue;
+        }
+    }
+    REQUIRE(added == stored_names.size());
+
+    std::vector<report::ReportRow> rows =
+        report::collect_rows(store, /*max_paths=*/100, store::CapQuery::at(4), store::Lens{});
+    REQUIRE(!rows.empty());
+    for (const report::ReportRow& row : rows) CHECK(row.song == kUnknownTitle);
+}
+
 TEST_CASE("tier_for: raw-ms bands derived from the two-hit budget") {
     using report::tier_for;
 
@@ -193,6 +227,13 @@ TEST_CASE("report payload carries the hit window and the tier table") {
     CHECK(html.find("Beyond 140ms") == std::string::npos);
 }
 
+TEST_CASE("report page reads the Beyond edge from the tier table") {
+    std::string html = report::build_html({}, "sub", "foot", /*hit_window_ms=*/85.0);
+    CHECK(html.find("const BEYOND = Math.max(") != std::string::npos);
+    CHECK(html.find("HIT_WINDOW * 2") == std::string::npos);
+    CHECK(html.find("'Past ' + BEYOND + ' ms'") != std::string::npos);
+}
+
 
 TEST_CASE("generate_report: one seam frames the page for every entry point") {
     store::RecordStore store(":memory:");
@@ -200,7 +241,7 @@ TEST_CASE("generate_report: one seam frames the page for every entry point") {
     REQUIRE(added > 0);
 
     report::ReportOptions options;
-    options.max_paths = 5;
+    options.max_paths = report::kDefaultReportPaths;
     options.db_path = "C:/somewhere/hydra.db";
     report::GeneratedReport result = report::generate_report(store, options);
     CHECK(result.songs == added);
@@ -218,7 +259,7 @@ TEST_CASE("generate_report: one seam frames the page for every entry point") {
     CHECK(result.html.find("past the 170 ms window") != std::string::npos);
 
     // --all-paths wording.
-    options.max_paths = 1000000000;
+    options.max_paths = report::kEveryPathSentinel;
     CHECK(report::generate_report(store, options)
               .html.find("songs — every path") != std::string::npos);
 

@@ -185,7 +185,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> failures;
 
     hydra::app::run_batch(
-        scanitems, chartmode, analysis, store, redo,
+        scanitems, chartmode, settings.lens(), analysis, store, redo,
         hydra::app::batch_worker_count(),
         [&](const hydra::app::BatchProgress& p) {
             if (!total_known) {

@@ -16,6 +16,7 @@
 #include "app/fill_report.h"
 #include "core/model.h"
 #include "corpus_util.h"
+#include "parse/song.h"
 #include "store/record_store.h"
 
 using namespace hydra;
@@ -243,4 +244,20 @@ TEST_CASE("generate_fill_report: tally and framing behind one seam") {
                                                store::Lens{});
     CHECK(none.stats.total == 0);
     CHECK(none.html.empty());
+}
+
+TEST_CASE("collect_fill_rows: a blank stored song name reads (unknown)") {
+    store::RecordStore old_store(":memory:");
+    store::RecordStore new_store(":memory:");
+
+    // A blank songmeta name from before the fallback. add_song keeps the first
+    // name it sees, so put()'s own "Song aa11" does not replace it.
+    old_store.add_song(kBoth, "", "Test Artist", "Test Charter", sample_chart().song);
+    new_store.add_song(kBoth, "", "Test Artist", "Test Charter", sample_chart().song);
+    put(old_store, kBoth, 1000000, 3, "old-path");
+    put(new_store, kBoth, 1000000, 3, "new-path");
+
+    std::vector<FillCompareRow> rows = compare(old_store, new_store);
+    REQUIRE(rows.size() == 1);
+    CHECK(rows[0].song == kUnknownTitle);
 }

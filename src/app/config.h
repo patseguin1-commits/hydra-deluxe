@@ -115,7 +115,8 @@ struct Settings {
     static Settings load_file(const std::string& path);
     bool save_file(const std::string& path) const;
 
-    // view_difficulty as the parsers' enum. An unrecognized string reads as
+    // view_difficulty as the parsers' enum. The name matches in any case
+    // ("hard" reads as Hard). An unrecognized string reads as
     // Expert; load_file normalizes the stored string too, so a hand-edited INI
     // can never put a junk word into chartmode_key().
     Difficulty difficulty() const;

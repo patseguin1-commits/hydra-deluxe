@@ -33,7 +33,7 @@
 int main(int argc, char** argv) {
     SetConsoleOutputCP(CP_UTF8);
 
-    int64_t max_paths = 5;
+    int64_t max_paths = hydra::app::report::kDefaultReportPaths;
     std::string out = "hydra_paths.html";
     std::optional<std::string> dbpath;
     std::optional<std::string> rulespath;
@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "--all-paths") max_paths = 1000000000;
+        if (arg == "--all-paths") max_paths = hydra::app::report::kEveryPathSentinel;
         else if (arg == "--paths" && i + 1 < argc) max_paths = std::atoll(argv[++i]);
         else if (arg == "--out" && i + 1 < argc) out = argv[++i];
         else if (arg == "--db" && i + 1 < argc) dbpath = argv[++i];

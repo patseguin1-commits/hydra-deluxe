@@ -94,12 +94,6 @@ struct AnalysisSettings : SearchSettings {
     Difficulty difficulty = Difficulty::Expert;
 };
 
-// The store lens these settings would produce a result under: the ms limit
-// and the score range, canonicalized. Agrees with Settings::lens() for the
-// same settings (test_config pins that), so the GUI and the CLIs file their
-// results under the same key.
-store::Lens lens_from(const AnalysisSettings& settings);
-
 // Loads and analyzes one chart file (.mid/.chart/.sng/.srb), producing a record and
 // the song's timing (for the store's songmeta row). Mirrors
 // hyutil.analyze_chart_file + hybatch.analyze_for_store's non-store half.
@@ -137,7 +131,9 @@ int batch_worker_count();
 // thread only (never from a worker) as each result comes back — safe to touch
 // UI state. on_result fires after the row is written to the store, with the
 // row it wrote (the batch CLI prints score/bestpath from it).
+// `lens` is the store key the caller's settings file results under: pass `Settings::lens()`.
 void run_batch(const std::vector<ScanItem>& items, const std::string& chartmode,
+               const store::Lens& lens,
                const AnalysisSettings& settings, store::RecordStore& store, bool redo,
                int worker_count,
                const std::function<void(const BatchProgress&)>& on_progress = nullptr,

@@ -145,10 +145,7 @@ bool Settings::save_file(const std::string& path) const {
 }
 
 Difficulty Settings::difficulty() const {
-    if (view_difficulty == "Hard") return Difficulty::Hard;
-    if (view_difficulty == "Medium") return Difficulty::Medium;
-    if (view_difficulty == "Easy") return Difficulty::Easy;
-    return Difficulty::Expert;
+    return difficulty_from_name(view_difficulty).value_or(Difficulty::Expert);
 }
 
 bool Settings::effective_bass2x() const {

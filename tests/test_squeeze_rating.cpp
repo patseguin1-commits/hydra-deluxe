@@ -805,3 +805,13 @@ TEST_CASE("squeeze_budget_ms: identity scale is twice the hit window") {
     CHECK(squeeze_budget_ms(1.0, 85.0) == 170.0);
     CHECK(squeeze_budget_ms(1.0, 40.0) == 80.0);
 }
+
+TEST_CASE("beyond_edge_ms: the last finite timing-tier cutoff") {
+    CHECK(beyond_edge_ms(85.0) == 170.0);
+    CHECK(beyond_edge_ms(40.0) == 80.0);
+    // It is the tier table's own number, not a second formula.
+    double last = 0.0;
+    for (const TimingTier& t : timing_tiers(85.0))
+        if (t.cutoff) last = *t.cutoff;
+    CHECK(beyond_edge_ms(85.0) == last);
+}

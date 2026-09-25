@@ -151,6 +151,10 @@ ActivationRating rate_activation(
 struct TimingTier { const char* name; const char* tok; std::optional<double> cutoff; };
 std::vector<TimingTier> timing_tiers(double hit_window_ms = kDefaultHitWindowMs);
 
+// Where the report's "Beyond" tier starts: the last finite cutoff of
+// timing_tiers. The footer and the page script both print this number.
+double beyond_edge_ms(double hit_window_ms);
+
 // ---- exact squeeze solver -------------------------------------------------
 // The transfer scale linearizes the SP-end map E(h) at one point; these
 // evaluate it exactly through SongTiming::sp_end_ms, so a displacement that
