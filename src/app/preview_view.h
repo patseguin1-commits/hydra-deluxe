@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "core/model.h"
+#include "core/rules.h"
 #include "core/timing.h"
 #include "parse/song.h"
 
@@ -153,6 +154,29 @@ struct SpMeterCurve {
     int cap = kCloneHeroSpCap;  // the ceiling in bars
 };
 
+// One step of the running score: what the game's counter reads from the
+// moment this chord is hit until the next one. Copied from core/replay.h,
+// which is proven equal to the engine's own totals for every corpus path.
+struct PreviewScoreStep {
+    double ms = 0.0;      // the chord's onset
+    int64_t total = 0;    // on-screen total: a solo's bonus lands on its last chord
+    int multiplier = 1;   // combo multiplier once the chord is hit, before SP doubles it
+    int combo = 0;        // notes hit so far, this chord included
+};
+
+// The running score for the path the overlay shows.
+//   None        — no path: the chart is not analyzed, so there is no score.
+//   Unavailable — the path cannot be replayed faithfully (an activation
+//                 without a stored deactivation node or squeeze-out tick),
+//                 or the replay's total is not the stored one. The box says
+//                 so rather than show a number nobody can vouch for.
+//   Ready       — `steps` holds one entry per chord, in time order.
+struct PreviewScore {
+    enum class State { None, Unavailable, Ready };
+    State state = State::None;
+    std::vector<PreviewScoreStep> steps;
+};
+
 // The whole chart as the Preview draws it. Notes are in tick order. Spans are
 // in start order and do not overlap within their own list.
 struct PreviewScene {
@@ -173,6 +197,8 @@ struct PreviewScene {
     // (`collected_phrase_ticks`), so a squeezed-out phrase steps the gauge the
     // moment SP ends, not during the drain.
     SpMeterCurve sp_meter;
+    // The running score the score box reads. None when built without a path.
+    PreviewScore score;
     // The song's own timing. The time box asks it for ms->tick and for
     // measure:beat:tick rather than re-deriving either from the flattened
     // tempo/meter lists above. Empty only on a default-built PreviewScene (no
@@ -204,6 +230,22 @@ struct PreviewTimeBox {
 PreviewTimeBox build_time_box(const PreviewScene& scene, double now_ms,
                               double length_ms);
 
+// The score box the Preview draws under the time box, at `now_ms`. `score`
+// is the total with thousands separators ("12,345"), and `detail` is
+// "x<multiplier> · combo <n>". The multiplier doubles while `now_ms` is
+// inside an activation's Star Power window (activation to deact node, the
+// span the highway tints). Hidden (`shown` false) when the scene has no
+// path; "Score unavailable" with an empty `detail` when the replay could not
+// be trusted.
+struct PreviewScoreBox {
+    bool shown = false;
+    bool available = false;
+    std::string score;
+    std::string detail;
+};
+
+PreviewScoreBox build_score_box(const PreviewScene& scene, double now_ms);
+
 // The playhead `delta_ticks` chart ticks from `now_ms`, for the Preview's
 // tick-step buttons. It starts from the tick the time box shows (the tempo
 // map's tick at `now_ms`, rounded to the nearest), so each step changes the
@@ -230,7 +272,12 @@ double sp_meter_bars_at(const SpMeterCurve& curve, double ms);
 // which is 4 for any normal Clone Hero run and differs only on a what-if
 // record analyzed at another cap. It scales the meter curve and nothing else;
 // no note, span or fill in the scene depends on it.
-PreviewScene build_preview_scene(const Song& song, const Path* path, int sp_cap = kCloneHeroSpCap);
+//
+// `rules` prices the running score (the replay reads the backend leeway and
+// the squeeze-out rule from it); nothing else in the scene depends on it.
+PreviewScene build_preview_scene(const Song& song, const Path* path,
+                                 int sp_cap = kCloneHeroSpCap,
+                                 const core::Rules& rules = core::default_rules());
 
 // Identity of the path an overlay was built from. Path has no operator==, so
 // callers that must notice a changed selection compare these keys instead. A
