@@ -163,7 +163,9 @@ target_compile_definitions(hydra_core PUBLIC HYDRA_VERSION="${PROJECT_VERSION}")
 # store/ needs sqlite3; app/ hashes chart files via CNG (bcrypt.lib) and walks
 # folders via the Win32 Find*File API (already linked into every Windows exe).
 # shell32: report_files.cpp hands finished report pages to the browser with
-# ShellExecuteW, for both the GUI's report jobs and the hydra_report CLI.
+# ShellExecuteW, for both the GUI's report jobs and the hydra_report CLI, and
+# winstr.cpp splits every entry point's Unicode command line with
+# CommandLineToArgvW.
 target_link_libraries(hydra_core PUBLIC sqlite3 miniz)
 target_link_libraries(hydra_core PRIVATE bcrypt shell32 hydra_warnings)
 
@@ -306,6 +308,7 @@ add_executable(hydra_tests
     tests/test_main.cpp
     tests/test_timing.cpp
     tests/test_chord_tables.cpp
+    tests/test_winstr.cpp
     tests/test_midi.cpp
     tests/test_model.cpp
     tests/test_squeeze_rating.cpp

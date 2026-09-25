@@ -40,6 +40,7 @@
 #include "app/config.h"
 #include "app/rules_file.h"
 #include "core/model.h"
+#include "core/winstr.h"
 #include "search/graph.h"
 #include "store/record_store.h"
 
@@ -80,8 +81,10 @@ bool same_file(const std::string& a, const std::string& b) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int main() {
     SetConsoleOutputCP(CP_UTF8);  // chart titles/artists are UTF-8
+    const std::vector<std::string> args = hydra::utf8_argv();
+    const int argc = static_cast<int>(args.size());
 
     bool redo = false, reindex_only = false, legacy_fills = false;
     std::optional<std::string> dbpath;
@@ -89,12 +92,12 @@ int main(int argc, char** argv) {
     std::vector<std::string> folder_args;
 
     for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
+        const std::string& arg = args[i];
         if (arg == "--redo") redo = true;
         else if (arg == "--reindex") reindex_only = true;
         else if (arg == "--legacy-fills") legacy_fills = true;
-        else if (arg == "--db" && i + 1 < argc) dbpath = argv[++i];
-        else if (arg == "--rules" && i + 1 < argc) rulespath = argv[++i];
+        else if (arg == "--db" && i + 1 < argc) dbpath = args[++i];
+        else if (arg == "--rules" && i + 1 < argc) rulespath = args[++i];
         else if (arg.rfind("--", 0) == 0) {
             std::fprintf(stderr, "Unknown option: %s\n", arg.c_str());
             return 2;

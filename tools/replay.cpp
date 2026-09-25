@@ -48,6 +48,7 @@
 #include "app/rules_file.h"
 #include "core/replay.h"
 #include "core/squeeze_rating.h"
+#include "core/winstr.h"
 #include "corpus_util.h"
 #include "parse/song.h"
 #include "search/pather.h"
@@ -159,7 +160,7 @@ void emit(const json& j, const std::string& out, bool pretty) {
         std::fputc('\n', stdout);
         return;
     }
-    std::ofstream f(out, std::ios::binary | std::ios::trunc);
+    std::ofstream f(std::filesystem::u8path(out), std::ios::binary | std::ios::trunc);
     f << text << "\n";
     std::printf("wrote %s (%zu bytes)\n", out.c_str(), text.size());
 }
@@ -274,7 +275,7 @@ int parse_index(const std::string& v) {
 // the file and the index, because "score came out wrong" is much harder to
 // notice than "that file does not have a path 7".
 std::vector<ReplayWindow> windows_from_file(const std::string& file, int index) {
-    std::ifstream in(file, std::ios::binary);
+    std::ifstream in(std::filesystem::u8path(file), std::ios::binary);
     if (!in) throw std::runtime_error("cannot read --path file: " + file);
 
     json doc;
@@ -432,11 +433,11 @@ std::string snapshot_db(const std::string& src) {
 
     const std::string dst =
         (tmp / ("hydra_replay_snapshot_" + std::to_string(_getpid()) + ".db"))
-            .string();
+            .u8string();
 
-    std::ifstream in(src, std::ios::binary);
+    std::ifstream in(std::filesystem::u8path(src), std::ios::binary);
     if (!in) throw std::runtime_error("cannot read database: " + src);
-    std::ofstream out(dst, std::ios::binary | std::ios::trunc);
+    std::ofstream out(std::filesystem::u8path(dst), std::ios::binary | std::ios::trunc);
     if (!out)
         throw std::runtime_error(
             "cannot make a snapshot of the database (cannot write " + dst +
@@ -512,7 +513,7 @@ int cmd_dump(const Args& a) {
         std::string path;
         ~SnapshotGuard() {
             std::error_code ec;
-            std::filesystem::remove(path, ec);
+            std::filesystem::remove(std::filesystem::u8path(path), ec);
         }
     } snapshot_guard{snapshot_path};
 
@@ -797,16 +798,18 @@ int cmd_selfcheck(const Args& a) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int main() {
+    const std::vector<std::string> args = hydra::utf8_argv();
+    const int argc = static_cast<int>(args.size());
     if (argc < 2) { usage(); return 2; }
 
     Args a;
-    a.command = argv[1];
+    a.command = args[1];
     for (int i = 2; i < argc; ++i) {
-        const std::string k = argv[i];
+        const std::string k = args[i];
         auto next = [&]() -> std::string {
             if (i + 1 >= argc) throw std::runtime_error("missing value for " + k);
-            return argv[++i];
+            return args[++i];
         };
         try {
             if (k == "--chart") a.chart = next();

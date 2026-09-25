@@ -16,9 +16,11 @@
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "app/config.h"
 #include "core/version.h"
+#include "core/winstr.h"
 #include "ui/resource.h"
 #include "ui/app_shell.h"
 #include "ui/app_state.h"
@@ -45,13 +47,15 @@ void CreateRenderTarget();
 void CleanupRenderTarget();
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-int main(int argc, char** argv)
+int main()
 {
     // --uitest <what> [--uitest-log <file>]; everything else is ignored.
+    const std::vector<std::string> args = hydra::utf8_argv();
+    const int argc = static_cast<int>(args.size());
     std::string uitest_what, uitest_log;
     for (int i = 1; i + 1 < argc; ++i) {
-        if (std::string(argv[i]) == "--uitest") uitest_what = argv[++i];
-        else if (std::string(argv[i]) == "--uitest-log") uitest_log = argv[++i];
+        if (args[i] == "--uitest") uitest_what = args[++i];
+        else if (args[i] == "--uitest-log") uitest_log = args[++i];
     }
 #ifndef HYDRA_UITEST_ATTACHED
     (void)uitest_what; (void)uitest_log;
@@ -133,10 +137,12 @@ int main(int argc, char** argv)
         // a GUI-subsystem exe has no console. Opened shareable so it can be
         // read (tail -f) while the window is still up.
         if (uitest_log.empty()) uitest_log = hydra::app::exe_dir() + "\\hydra_uitest.log";
-        // (freopen, not freopen_s: the _s form opens without sharing; and a
-        // GUI exe has no stdout fd to _dup2 onto.)
+        // (_wfreopen, not _wfreopen_s: the _s form opens without sharing; and
+        // a GUI exe has no stdout fd to _dup2 onto. Wide, because the path is
+        // UTF-8.)
 #pragma warning(suppress : 4996)
-        if (std::freopen(uitest_log.c_str(), "w", stdout)) setvbuf(stdout, nullptr, _IONBF, 0);
+        if (_wfreopen(hydra::utf8_to_wide(uitest_log).c_str(), L"w", stdout))
+            setvbuf(stdout, nullptr, _IONBF, 0);
         uitest = std::make_unique<uitest::Harness>();
         uitest->init_attached(g_pd3dDevice, g_pd3dDeviceContext, g_pSwapChain);
         uitest::register_tests(*uitest);

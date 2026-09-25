@@ -20,17 +20,21 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "app/config.h"
 #include "app/rules_file.h"
 #include "app/fill_report.h"
 #include "app/report_files.h"
 #include "core/model.h"
+#include "core/winstr.h"
 #include "search/graph.h"
 #include "store/record_store.h"
 
-int main(int argc, char** argv) {
+int main() {
     SetConsoleOutputCP(CP_UTF8);
+    const std::vector<std::string> args = hydra::utf8_argv();
+    const int argc = static_cast<int>(args.size());
 
     std::optional<std::string> old_path;
     std::optional<std::string> new_path;
@@ -39,11 +43,11 @@ int main(int argc, char** argv) {
     std::optional<std::string> rulespath;
 
     for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-        if (arg == "--old" && i + 1 < argc) old_path = argv[++i];
-        else if (arg == "--new" && i + 1 < argc) new_path = argv[++i];
-        else if (arg == "--out" && i + 1 < argc) out = argv[++i];
-        else if (arg == "--rules" && i + 1 < argc) rulespath = argv[++i];
+        const std::string& arg = args[i];
+        if (arg == "--old" && i + 1 < argc) old_path = args[++i];
+        else if (arg == "--new" && i + 1 < argc) new_path = args[++i];
+        else if (arg == "--out" && i + 1 < argc) out = args[++i];
+        else if (arg == "--rules" && i + 1 < argc) rulespath = args[++i];
         else if (arg == "--no-open") open_when_done = false;
         else {
             std::fprintf(stderr, "Unknown option: %s\n", arg.c_str());

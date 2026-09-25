@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "core/winstr.h"
 #include "uitest_harness.h"
 
 namespace {
@@ -25,16 +26,18 @@ int usage() {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int main() {
     bool list = false;
     std::vector<std::string> wanted;  // test names, "all", or a script path
     uitest::Harness h;
 
+    const std::vector<std::string> args = hydra::utf8_argv();
+    const int argc = static_cast<int>(args.size());
     for (int i = 1; i < argc; ++i) {
-        std::string a = argv[i];
+        const std::string& a = args[i];
         auto next = [&](std::string& out) {
             if (i + 1 >= argc) return false;
-            out = argv[++i];
+            out = args[++i];
             return true;
         };
         std::string v;
