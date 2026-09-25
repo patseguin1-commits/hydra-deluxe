@@ -137,12 +137,8 @@ app::Settings settings_from(const Args& a) {
     app::Settings s;  // struct defaults are the GUI defaults
     s.view_prodrums = a.prodrums;
     s.view_bass2x = a.bass2x;
-    std::string diff = a.difficulty;
-    for (char& c : diff) c = static_cast<char>(std::tolower((unsigned char)c));
-    if (diff == "hard") s.view_difficulty = "Hard";
-    else if (diff == "medium") s.view_difficulty = "Medium";
-    else if (diff == "easy") s.view_difficulty = "Easy";
-    else s.view_difficulty = "Expert";
+    s.view_difficulty =
+        difficulty_name(difficulty_from_name(a.difficulty).value_or(Difficulty::Expert));
 
     if (a.cap == "auto") s.sp_cap = std::nullopt;
     else s.sp_cap = std::atoi(a.cap.c_str());
@@ -169,8 +165,9 @@ void emit(const json& j, const std::string& out, bool pretty) {
 }
 
 json score_json(const ReplayScore& s) {
-    return json{{"base", s.base}, {"combo", s.combo}, {"sp", s.sp},
-                {"solo", s.solo}, {"accent", s.accent}, {"ghost", s.ghost}};
+    json j = json::object();
+    for (const ReplayScoreField& f : kReplayScoreFields) j[f.name] = s.*(f.member);
+    return j;
 }
 
 // The path list `dump` and `target` both print. One shape, so anything that
@@ -209,12 +206,7 @@ json paths_json(const std::vector<const Path*>& all, const SongTiming& timing) {
             {"index", index++},
             {"pathstring", p->pathstring()},
             {"total", p->totalscore()},
-            {"score", json{{"base", p->score_base},
-                           {"combo", p->score_combo},
-                           {"sp", p->score_sp},
-                           {"solo", p->score_solo},
-                           {"accent", p->score_accents},
-                           {"ghost", p->score_ghosts}}},
+            {"score", score_json(score_of(*p))},
             {"activations", acts},
         });
     }
@@ -736,8 +728,6 @@ struct Tally {
 
 bool g_verbose = false;
 
-const char* kFieldNames[6] = {"base", "combo", "sp", "solo", "accent", "ghost"};
-
 void check_chart(const std::string& path, const core::Rules& rules, Tally* tally) {
     // The GUI's defaults, straight from app::Settings rather than five
     // hand-written literals, under the rules this run loaded.
@@ -779,17 +769,13 @@ void check_chart(const std::string& path, const core::Rules& rules, Tally* tally
 
         std::string diffs;
         if (!(r.final == want)) {
-            const int64_t got[6] = {r.final.base, r.final.combo, r.final.sp,
-                                    r.final.solo, r.final.accent, r.final.ghost};
-            const int64_t want_fields[6] = {want.base,   want.combo, want.sp,
-                                            want.solo, want.accent, want.ghost};
-            for (int f = 0; f < 6; ++f) {
-                if (got[f] == want_fields[f]) continue;
+            for (const ReplayScoreField& f : kReplayScoreFields) {
+                const int64_t got = r.final.*(f.member);
+                const int64_t wanted = want.*(f.member);
+                if (got == wanted) continue;
                 if (!diffs.empty()) diffs += ", ";
-                diffs += std::string(kFieldNames[f]) + " " +
-                         std::to_string(got[f]) + " vs " +
-                         std::to_string(want_fields[f]) + " (" +
-                         std::to_string(got[f] - want_fields[f]) + ")";
+                diffs += std::string(f.name) + " " + std::to_string(got) + " vs " +
+                         std::to_string(wanted) + " (" + std::to_string(got - wanted) + ")";
             }
         }
         if (windows.size() != p->all_activations().size())

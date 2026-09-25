@@ -10,6 +10,7 @@
 #include "app/display_format.h"
 #include "app/html_page.h"
 #include "core/squeeze_rating.h"
+#include "parse/song.h"
 
 namespace hydra::app::report {
 
@@ -88,6 +89,7 @@ const char* const kDataJs = R"page(<script id="data" type="application/json">__D
 const DATA = JSON.parse(document.getElementById('data').textContent);
 const ROWS = DATA.rows;
 const HIT_WINDOW = DATA.hit_window;
+const BEYOND = Math.max(...DATA.tiers.filter(t => t.cutoff !== null).map(t => t.cutoff));
 
 // The tier dropdown mirrors the bands the rows were labeled with.
 {
@@ -95,7 +97,7 @@ const HIT_WINDOW = DATA.hit_window;
   for (const t of DATA.tiers) {
     const o = document.createElement('option');
     o.value = t.name;
-    o.textContent = t.name === 'Beyond' ? 'Beyond ' + (HIT_WINDOW * 2) + ' ms'
+    o.textContent = t.name === 'Beyond' ? 'Beyond ' + BEYOND + ' ms'
                   : t.name === 'None' ? 'No squeezes'
                   : t.name;
     sel.appendChild(o);
@@ -219,13 +221,13 @@ function renderStats(rows) {
   const withMs = rows.filter(r => r.ms !== null && r.ms !== undefined);
   const tightest = withMs.length ? Math.max(...withMs.map(r => r.ms)) : null;
   const maxSkip = rows.length ? Math.max(...rows.map(r => r.skip)) : 0;
-  const beyond = rows.filter(r => r.ms !== null && r.ms >= HIT_WINDOW * 2).length;
+  const beyond = rows.filter(r => r.ms !== null && r.ms >= BEYOND).length;
 
   const stats = [
     ['Charts', new Set(best.map(r => r.song + r.artist)).size.toLocaleString()],
     ['Paths shown', rows.length.toLocaleString()],
     ['Tightest squeeze', tightest === null ? '—' : tightest.toFixed(1) + ' ms'],
-    ['Past ' + (HIT_WINDOW * 2) + ' ms', beyond.toLocaleString()],
+    ['Past ' + BEYOND + ' ms', beyond.toLocaleString()],
     ['Highest skip', maxSkip],
   ];
 
@@ -356,8 +358,7 @@ std::vector<ReportRow> collect_rows(store::RecordStore& store, int64_t max_paths
             auto [label, token] = tier_for(s.hardest_ms, hit_window_ms);
 
             ReportRow row;
-            row.song = plain(meta.ref_name);
-            if (row.song.empty()) row.song = "(unknown)";
+            row.song = title_or_unknown(plain(meta.ref_name));
             row.artist = plain(meta.ref_artist);
             row.charter = plain(meta.ref_charter);
             row.mode = meta.chartmode;
@@ -464,7 +465,7 @@ GeneratedReport generate_report(store::RecordStore& store,
     out.rows = static_cast<int64_t>(rows.size());
     if (rows.empty()) return out;
 
-    std::string shown = options.max_paths > 100000000
+    std::string shown = options.max_paths > kEveryPathLabelThreshold
                             ? "every path"
                             : "top " + std::to_string(options.max_paths) +
                                   " paths per chart";
@@ -478,7 +479,7 @@ GeneratedReport generate_report(store::RecordStore& store,
     std::string footer = "Generated from " + dbname +
                          ". Timing tiers match Hydra's squeeze ratings; "
                          "'Beyond' is past the " +
-                         std::to_string(2 * options.hit_window_ms) +
+                         std::to_string(static_cast<int64_t>(beyond_edge_ms(w))) +
                          " ms window.";
     out.html = build_html(rows, subtitle, footer, w);
     return out;

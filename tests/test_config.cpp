@@ -171,6 +171,28 @@ TEST_CASE("view_difficulty round-trips, and a junk value normalizes to Expert") 
     std::remove(path.c_str());
 }
 
+TEST_CASE("view_difficulty matches any case and loads as the real name") {
+    const std::string path = temp_ini("difficulty_case");
+    for (const char* word : {"hard", "HARD", "hArD"}) {
+        CAPTURE(word);
+        {
+            std::ofstream f(path, std::ios::trunc);
+            f << "view_difficulty=" << word << "\n";
+        }
+        Settings r = Settings::load_file(path);
+        // What the app carries, and bakes into the store key, is the real name.
+        CHECK(r.view_difficulty == "Hard");
+        CHECK(r.difficulty() == hydra::Difficulty::Hard);
+        CHECK(r.chartmode_key() == "Hard Pro Drums, 1x Bass");
+    }
+    std::remove(path.c_str());
+
+    // The in-memory lookup matches any case too.
+    Settings s;
+    s.view_difficulty = "easy";
+    CHECK(s.difficulty() == hydra::Difficulty::Easy);
+}
+
 TEST_CASE("record_key carries the chartmode, the SP cap and the lens") {
     namespace store = hydra::store;
 
@@ -206,24 +228,6 @@ TEST_CASE("record_key carries the chartmode, the SP cap and the lens") {
     CHECK(s.lens().ms_value == 0);
     s.mslimit_value = 42;
     CHECK(s.lens() == store::Lens::from(std::nullopt, 1, 5000));
-}
-
-TEST_CASE("lens_from(AnalysisSettings) agrees with Settings::lens()") {
-    // The GUI keys a record off Settings; a batch run keys it off the
-    // AnalysisSettings it derived. If these two ever disagreed, the CLI would
-    // file results under a key the app never looks up.
-    Settings s;
-    for (bool ms_on : {true, false}) {
-        for (int mode : {0, 1}) {
-            for (int value : {0, 4, 5000}) {
-                s.mslimit_enabled = ms_on;
-                s.mslimit_value = 25;
-                s.depth_mode = mode;
-                s.depth_value = value;
-                CHECK(hydra::app::lens_from(s.to_analysis_settings()) == s.lens());
-            }
-        }
-    }
 }
 
 TEST_CASE("sp_cap round-trips as a number or auto; pre-1.6 keys are ignored") {

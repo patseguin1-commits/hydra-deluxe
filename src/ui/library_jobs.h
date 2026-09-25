@@ -66,7 +66,7 @@ public:
     // The job queries the library itself (filtered by `search`, like the
     // table) on its own thread — loading thousands of rows synchronously
     // before the progress modal appeared froze the UI for the whole query.
-    BatchJob(std::optional<std::string> search, std::string chartmode,
+    BatchJob(std::optional<std::string> search, std::string chartmode, store::Lens lens,
              app::AnalysisSettings settings, store::RecordStore& store, bool redo);
     ~BatchJob() { shutdown(); }
 
@@ -90,6 +90,7 @@ private:
     std::optional<std::string> search_;
     std::vector<app::ScanItem> items_;
     std::string chartmode_;
+    store::Lens lens_;
     app::AnalysisSettings settings_;
     store::RecordStore& store_;
     bool redo_;

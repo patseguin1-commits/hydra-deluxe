@@ -8,6 +8,7 @@
 #include "app/report.h"  // report::plain -- strips Clone Hero <color> markup
 #include "core/model.h"  // group_thousands
 #include "core/strutil.h"  // lower_hex
+#include "parse/song.h"  // title_or_unknown
 
 namespace hydra::app::fill_report {
 
@@ -286,7 +287,7 @@ std::vector<FillCompareRow> collect_fill_rows(store::RecordStore& old_store,
 
         // Identity prefers the 1.1 side; either side names the same chart.
         const store::RecordListing* id = new_rec ? new_rec : old_rec;
-        row.song = report::plain(id->ref_name);
+        row.song = title_or_unknown(report::plain(id->ref_name));
         row.artist = report::plain(id->ref_artist);
         row.charter = report::plain(id->ref_charter);
 

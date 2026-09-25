@@ -249,3 +249,20 @@ TEST_CASE("srb: discovery surfaces the embedded metadata") {
     CHECK(items[0].md5.size() == 32);
     CHECK(!items[0].sig.empty());
 }
+
+TEST_CASE("srb: an empty embedded name reads (unknown)") {
+    std::string dir = fixture_dir() + "\\scan_blank";
+    CreateDirectoryW(utf8_to_wide(dir).c_str(), nullptr);
+
+    std::vector<uint8_t> notes = read_bytes(corpus_chart_path(".chart"));
+    write_bytes(dir + "\\blank.srb",
+                make_srb(make_metadata("notes.chart", "", "Scanned Artist",
+                                       "Scanned Charter"),
+                         notes));
+
+    auto [items, errors] = hydra::app::discover_charts({dir});
+    REQUIRE(errors.empty());
+    REQUIRE(items.size() == 1);
+    CHECK(items[0].title == kUnknownTitle);
+    CHECK(items[0].artist == "Scanned Artist");
+}

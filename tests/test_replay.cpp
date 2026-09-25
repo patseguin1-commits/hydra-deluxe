@@ -693,3 +693,14 @@ TEST_CASE("replay multipliers agree with the combo on every corpus chord") {
         }
     }
 }
+
+TEST_CASE("replay score fields: one list in schema order") {
+    REQUIRE(std::size(kReplayScoreFields) == 6);
+    const char* want[] = {"base", "combo", "sp", "solo", "accent", "ghost"};
+    for (size_t i = 0; i < 6; ++i) CHECK(std::string(kReplayScoreFields[i].name) == want[i]);
+
+    ReplayScore s;
+    s.base = 1; s.combo = 2; s.sp = 3; s.solo = 4; s.accent = 5; s.ghost = 6;
+    for (size_t i = 0; i < 6; ++i)
+        CHECK(s.*(kReplayScoreFields[i].member) == static_cast<int64_t>(i + 1));
+}

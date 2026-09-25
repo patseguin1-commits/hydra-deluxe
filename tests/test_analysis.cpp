@@ -9,11 +9,14 @@
 #endif
 #include <windows.h>
 
+#include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "app/analysis.h"
@@ -160,4 +163,112 @@ TEST_CASE("rescan cache reproduces the scan without reading chart files") {
         CHECK(items2[i].rootfolder == items[i].rootfolder);
         CHECK(items2[i].sig == items[i].sig);
     }
+}
+
+TEST_CASE("run_batch files results under the lens it is given") {
+    std::string chart;
+    for (const std::string& p : corpus::chart_paths()) {
+        if (!hydra::load_songpath(p, true, true).is_empty()) { chart = p; break; }
+    }
+    REQUIRE(!chart.empty());
+
+    AnalysisSettings settings;
+    settings.depth_mode = hydra::DepthMode::Scores;
+    settings.depth_value = 10;
+    settings.ms_filter = 10.0;
+    const hydra::store::Lens lens =
+        hydra::store::Lens::from(std::optional<int>(10), 0, 10);
+
+    ScanItem item;
+    item.md5 = hash_chart_file(chart);
+    item.title = "t";
+    item.notespath = chart;
+    hydra::store::RecordStore store(":memory:");
+    run_batch({item}, "lens-test", lens, settings, store, /*redo=*/false, 1);
+
+    const hydra::store::CapQuery cap = hydra::store::CapQuery::from_setting(settings.sp_cap);
+    CHECK(store.has_record(hydra::store::RecordKey{item.md5, "lens-test", cap, lens}));
+}
+
+namespace {
+
+void write_sng_with_metadata(
+    const std::filesystem::path& path,
+    const std::vector<std::pair<std::string, std::string>>& metadata) {
+    std::ofstream f(path, std::ios::binary);
+    std::string header = "SNGPKG";
+    header.resize(34, '\0');
+    f.write(header.data(), static_cast<std::streamsize>(header.size()));
+    auto put_le = [&f](uint64_t v, int bytes) {
+        for (int i = 0; i < bytes; ++i) f.put(static_cast<char>((v >> (8 * i)) & 0xFF));
+    };
+    put_le(metadata.size(), 8);
+    for (const auto& [key, value] : metadata) {
+        put_le(key.size(), 4);
+        f.write(key.data(), static_cast<std::streamsize>(key.size()));
+        put_le(value.size(), 4);
+        f.write(value.data(), static_cast<std::streamsize>(value.size()));
+    }
+}
+
+}  // namespace
+
+TEST_CASE("discover_charts: a song with no usable name reads (unknown)") {
+    namespace fs = std::filesystem;
+    const std::string chart = corpus::first_chart_with_suffix(".chart");
+    REQUIRE(!chart.empty());
+
+    const fs::path root = fs::temp_directory_path() /
+        ("hydra_unknown_title_" + std::to_string(GetCurrentProcessId()));
+    fs::remove_all(root);
+
+    // An empty `name =` line.
+    fs::create_directories(root / "empty_name");
+    fs::copy_file(fs::u8path(chart), root / "empty_name" / "notes.chart");
+    {
+        std::ofstream ini(root / "empty_name" / "song.ini", std::ios::binary);
+        ini << "[song]\nname =\nartist = Someone\n";
+    }
+    // No name line at all.
+    fs::create_directories(root / "no_name");
+    fs::copy_file(fs::u8path(chart), root / "no_name" / "notes.chart");
+    {
+        std::ofstream ini(root / "no_name" / "song.ini", std::ios::binary);
+        ini << "[song]\nartist = Someone\n";
+    }
+    // A .sng whose embedded name is empty.
+    write_sng_with_metadata(root / "blank.sng",
+                            {{"name", ""}, {"artist", "Someone"}, {"charter", "C"}});
+
+    auto [items, errors] = discover_charts({root.u8string()});
+    fs::remove_all(root);
+    CHECK(errors.empty());
+    REQUIRE(items.size() == 3);
+    for (const ScanItem& it : items) {
+        CAPTURE(it.notespath);
+        CHECK(it.title == hydra::kUnknownTitle);
+        CHECK(it.artist == "Someone");
+    }
+}
+
+TEST_CASE("rescan cache: an old placeholder or blank title reads (unknown)") {
+    const std::string input = HYDRA_INPUT_DIR;
+    auto [items, errors] = discover_charts({input});
+    REQUIRE(!items.empty());
+
+    // Library rows written before the fallback existed: a blank title from an
+    // empty `name =`, or the old readers' "<unknown title>".
+    hydra::store::RecordStore store(":memory:");
+    std::vector<hydra::store::ChartLibraryEntry> entries;
+    for (size_t i = 0; i < items.size(); ++i) {
+        const ScanItem& it = items[i];
+        entries.push_back({it.md5, i % 2 ? "<unknown title>" : "", it.artist, it.charter,
+                           it.notespath, it.rootfolder, it.sig});
+    }
+    store.rebuild_chart_library(entries);
+    hydra::store::ChartLibraryCache cache = store.chart_library_cache();
+
+    auto [items2, errors2] = discover_charts({input}, ScanCallbacks{}, &cache);
+    REQUIRE(items2.size() == items.size());
+    for (const ScanItem& it : items2) CHECK(it.title == hydra::kUnknownTitle);
 }

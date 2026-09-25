@@ -6,6 +6,7 @@
 #include "doctest.h"
 
 #include <cmath>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,7 @@
 #include "core/timing.h"
 #include "core/backend_value.h"
 #include "core/rules.h"
+#include "parse/song.h"
 
 using namespace hydra;
 
@@ -330,4 +332,36 @@ TEST_CASE("backend_row_value: every engine case") {
     CHECK(core::paid_by_sp_walk(0.0));
     CHECK(core::paid_by_sp_walk(-0.5));
     CHECK_FALSE(core::paid_by_sp_walk(0.5));
+}
+
+TEST_CASE("difficulty names: one list, one spelling") {
+    // The dropdown indexes this list by the enum's value, so order matters.
+    REQUIRE(std::size(kAllDifficulties) == 4);
+    for (size_t i = 0; i < std::size(kAllDifficulties); ++i)
+        CHECK(static_cast<size_t>(kAllDifficulties[i]) == i);
+    CHECK(std::string(difficulty_name(kAllDifficulties[0])) == "Expert");
+    CHECK(std::string(difficulty_name(kAllDifficulties[3])) == "Easy");
+}
+
+TEST_CASE("difficulty_from_name: any case, nothing else") {
+    CHECK(difficulty_from_name("Hard") == Difficulty::Hard);
+    CHECK(difficulty_from_name("medium") == Difficulty::Medium);
+    CHECK(difficulty_from_name("EASY") == Difficulty::Easy);
+    CHECK(difficulty_from_name("eXpErT") == Difficulty::Expert);
+    CHECK_FALSE(difficulty_from_name("Legendary").has_value());
+    CHECK_FALSE(difficulty_from_name("Har").has_value());
+    CHECK_FALSE(difficulty_from_name("").has_value());
+}
+
+TEST_CASE("no_notes_message names the difficulty and the drum mode") {
+    CHECK(no_notes_message(Difficulty::Hard, true) == "No Hard Pro Drums notes in this chart.");
+    CHECK(no_notes_message(Difficulty::Expert, false) == "No Expert Drums notes in this chart.");
+}
+
+TEST_CASE("title_or_unknown: one fallback for a song with no usable name") {
+    CHECK(std::string(kUnknownTitle) == "(unknown)");
+    CHECK(title_or_unknown("") == "(unknown)");
+    // What the metadata readers wrote before this fallback existed.
+    CHECK(title_or_unknown("<unknown title>") == "(unknown)");
+    CHECK(title_or_unknown("Some Song") == "Some Song");
 }

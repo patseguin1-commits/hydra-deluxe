@@ -98,6 +98,18 @@ struct ReplayScore {
     }
 };
 
+// The six score categories, in the order hydra_replay's JSON and its check
+// output print them. One list, so the names and the fields cannot drift.
+struct ReplayScoreField {
+    const char* name;
+    int64_t ReplayScore::*member;
+};
+inline constexpr ReplayScoreField kReplayScoreFields[] = {
+    {"base", &ReplayScore::base},     {"combo", &ReplayScore::combo},
+    {"sp", &ReplayScore::sp},         {"solo", &ReplayScore::solo},
+    {"accent", &ReplayScore::accent}, {"ghost", &ReplayScore::ghost},
+};
+
 // One note of one chord, in the base-sorted order category_scores reads
 // (Chord::notes(true)). `sp_points` is what this note contributes to the
 // chord's doubling; it is reported whether or not the chord is under Star
