@@ -294,16 +294,20 @@ TEST_CASE("build_activations: the backend limit hides far rows but never "
     Activation act;
     act.skips = 0;
     act.e_offset = 300.0;  // not e-critical
-    for (double ms : {-30.0, -100.0, 60.0}) {
+    const std::pair<double, int64_t> rows_at[] = {{-30.0, 200}, {-100.0, 100},
+                                                   {60.0, 300}};
+    for (const auto& [ms, tick] : rows_at) {
         BackendSqueeze row;
+        row.timecode = Timecode::raw(tick);
         row.offset_ms = ms;
         act.backends.push_back(row);
     }
-    // Matches the +60 row (is_sqout_backend compares offsets within 0.01), so
-    // that row is the squeezed-out one. It has to be the last row in chart
-    // order: nothing can be a backend past the note squeezed out of SP, and
-    // display_backends drops any row that claims to be.
+    // sqout_tick names the +60 row (tick 300), so that row is the
+    // squeezed-out one. It has to be the last row in chart order: nothing can
+    // be a backend past the note squeezed out of SP, and display_backends
+    // drops any row that claims to be.
     act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, 60.0});
+    act.sqout_tick = 300;
 
     Path p;
     p.activations.push_back(act);

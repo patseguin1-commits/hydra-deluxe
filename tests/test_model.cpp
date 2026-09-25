@@ -103,8 +103,11 @@ TEST_CASE("Path pathstring and pathstring_verbose") {
 TEST_CASE("display_backends drops rows beyond a squeeze out") {
     Activation a;
     const std::vector<double> offsets = {-368.1, -184.0, 0.0, 184.0, 368.1};
+    int64_t tick = 100;  // chart order, one row per 100 ticks
     for (double off : offsets) {
         BackendSqueeze bsq;
+        bsq.timecode = Timecode::raw(tick);
+        tick += 100;
         bsq.points = 50;
         bsq.offset_ms = off;
         a.backends.push_back(bsq);
@@ -118,6 +121,7 @@ TEST_CASE("display_backends drops rows beyond a squeeze out") {
     // Squeezing out at -184.0 keeps that row and the one before it, and drops
     // the three that land after it.
     a.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -184.0});
+    a.sqout_tick = 200;  // the -184.0 row
     std::vector<BackendSqueeze> shown = a.display_backends();
     REQUIRE(shown.size() == 2);
     CHECK(shown[0].offset_ms.value() == -368.1);

@@ -105,6 +105,7 @@ void usage() {
         "squeeze-out offset, which an --acts string typed by hand usually drops\n"
         "and which is worth real points. --index picks the entry of that file's\n"
         "\"paths\" array (default 0). --path and --acts cannot both be given.\n"
+        "A typed SqOut offset is matched to the nearest phrase chord within 500 ms of the SP end and the chord used is printed on stderr; a chord the engine would never squeeze out is refused.\n"
         "Where a window ends on a Star Power phrase note but carries no\n"
         "squeeze-out offset, score prints a warning: the score is right if the\n"
         "player did not squeeze that note out, and high if they did. The\n"
@@ -197,6 +198,7 @@ json paths_json(const std::vector<const Path*>& all, const SongTiming& timing) {
             acts.push_back(json{
                 {"act_tick", act_tick},
                 {"deact_tick", d ? *d : -1},
+                {"sqout_tick", act.sqout_tick ? *act.sqout_tick : -1},
                 {"nominal_deact_tick", nominal},
                 {"sp_meter", act.sp_meter ? *act.sp_meter : -1},
                 {"skips", act.skips ? *act.skips : -1},
@@ -375,9 +377,24 @@ int cmd_score(const Args& a) {
         return 1;
     }
 
-    const std::vector<ReplayWindow> windows =
+    std::vector<ReplayWindow> windows =
         a.path.empty() ? parse_acts(a.acts)
                        : windows_from_file(a.path, a.index);
+    // A typed offset (or a dump from before sqout_tick existed) names a chord
+    // only approximately. Resolve it and say which chord was used, so a typo
+    // cannot quietly price a different squeeze-out. resolve_sqout_note throws
+    // for a chord the engine never squeezes out; main prints "error: ..." and
+    // exits 1, so nothing is priced.
+    for (ReplayWindow& w : windows) {
+        if (!w.sqout_offset_ms || w.sqout_tick) continue;
+        const SqOutNote n = resolve_sqout_note(song, w);
+        std::fprintf(stderr,
+                     "note: window %lld:%lld SqOut %.2f ms -> phrase chord at "
+                     "tick %lld (%.2f ms from the SP end)\n",
+                     (long long)w.act_tick, (long long)w.deact_tick,
+                     *w.sqout_offset_ms, (long long)n.tick, n.offset_ms);
+        w.sqout_tick = n.tick;
+    }
     const ReplayResult r = replay_path(song, windows, s.rules);
 
     // Say so when a window could be hiding a squeeze-out. The score is left
@@ -391,6 +408,7 @@ int cmd_score(const Args& a) {
     for (const ReplayWindow& w : windows) {
         json one{{"act_tick", w.act_tick}, {"deact_tick", w.deact_tick}};
         if (w.sqout_offset_ms) one["sqout_offset_ms"] = *w.sqout_offset_ms;
+        if (w.sqout_tick) one["sqout_tick"] = *w.sqout_tick;
         acts.push_back(one);
     }
 

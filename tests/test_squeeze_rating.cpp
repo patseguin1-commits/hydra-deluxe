@@ -499,8 +499,10 @@ TEST_CASE("rate_activation: free squeezes read the opposite scale direction") {
     freeout.transfer_pre = freeout.transfer_post;
     freeout.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, 300.0});
     BackendSqueeze out_row;
-    out_row.offset_ms = 300.0;  // matches the sqout offset within 0.01
+    out_row.timecode = Timecode::raw(3187);
+    out_row.offset_ms = 300.0;
     freeout.backends.push_back(out_row);
+    freeout.sqout_tick = 3187;  // this row is the squeezed-out chord
 
     ActivationRating r = rate_activation(freeout, nullptr, 85.0);
     REQUIRE(r.backends.size() == 1);
@@ -523,8 +525,10 @@ TEST_CASE("rate_activation: free squeezes read the opposite scale direction") {
     hardout.transfer_pre = hardout.transfer_post;
     hardout.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -50.0});
     BackendSqueeze hard_row;
+    hard_row.timecode = Timecode::raw(3053);
     hard_row.offset_ms = -50.0;
     hardout.backends.push_back(hard_row);
+    hardout.sqout_tick = 3053;
 
     r = rate_activation(hardout, nullptr, 85.0);
     REQUIRE(r.backends.size() == 1);

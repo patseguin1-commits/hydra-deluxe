@@ -546,31 +546,19 @@ std::optional<double> Path::difficulty() const {
     return best;
 }
 
+// The engine stamps the squeezed-out chord's tick at copy-out (record v6).
+// A record without it is Stale and is never guessed at.
 bool Activation::is_sqout_backend(const BackendSqueeze& bsq) const {
-    for (const SPSqueeze& sq : sqinouts) {
-        if (sq.kind == SqueezeKind::SqOut &&
-            std::fabs(bsq.offset_ms.value_or(0.0) - sq.offset()) < 0.01)
-            return true;
-    }
-    return false;
+    return sqout_tick.has_value() && bsq.timecode.ticks() == *sqout_tick;
 }
 
 std::vector<BackendSqueeze> Activation::display_backends() const {
     // Nothing past a squeezed-out note can be a backend: the sqout note is hit
     // after SP has ended, and every later note is hit after that one. The
-    // engine's record build drops those rows now, but records stored before
-    // that fix carry them inside their blobs, so the display guards again
-    // here. Both a row's offset and sq.offset() are measured against the same
-    // deactivation node, so comparing offsets is comparing chart order; 0.01
-    // is the same epsilon is_sqout_backend uses to spot the sqout row itself,
-    // which stays.
+    // engine's copy-out already drops those rows; this keeps the display
+    // honest for any list that still holds one. Chart order is tick order.
     auto is_beyond_sqout = [this](const BackendSqueeze& bsq) {
-        for (const SPSqueeze& sq : sqinouts) {
-            if (sq.kind == SqueezeKind::SqOut &&
-                bsq.offset_ms.value_or(0.0) > sq.offset() + 0.01)
-                return true;
-        }
-        return false;
+        return sqout_tick.has_value() && bsq.timecode.ticks() > *sqout_tick;
     };
 
     std::vector<BackendSqueeze> out;

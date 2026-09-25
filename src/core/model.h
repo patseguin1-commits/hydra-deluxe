@@ -307,8 +307,7 @@ struct Activation {
     std::optional<double> difficulty() const;
     bool is_difficult() const;
 
-    // Is this backend the note being squeezed out of SP? Mirrors
-    // hydata.Activation.is_sqout_backend.
+    // True for the row sitting on sqout_tick, the chord this activation squeezed out.
     bool is_sqout_backend(const BackendSqueeze& bsq) const;
 
     // Backends worth keeping: those near the deactivation, plus whatever note
