@@ -13,6 +13,8 @@
 
 #include "app/analysis.h"
 #include "app/preview_view.h"
+#include "core/model.h"
+#include "core/replay.h"
 #include "core/squeeze_rating.h"
 #include "core/timing.h"  // sp_bars_to_measures
 #include "corpus_util.h"
@@ -207,6 +209,25 @@ const AnalysisResult& analyzed() {
     }();
     return result;
 }
+
+// A path whose stored score is what the replay prices it at, so the scene
+// trusts it. The corpus case proves the replay against the engine; these
+// hand-built fixtures only test the Preview's plumbing.
+Path priced_path(const Song& song, std::vector<Activation> acts) {
+    Path p;
+    p.activations = std::move(acts);
+    const ReplayScore s = replay_path(song, windows_for_path(p, song)).final;
+    p.score_base = s.base;
+    p.score_combo = s.combo;
+    p.score_sp = s.sp;
+    p.score_solo = s.solo;
+    p.score_accents = s.accent;
+    p.score_ghosts = s.ghost;
+    return p;
+}
+
+// The detail line's separator: a middle dot, U+00B7, in UTF-8.
+const std::string kDot = "\xC2\xB7";
 
 }  // namespace
 
@@ -908,4 +929,110 @@ TEST_CASE("path_overlay_key: no overlay, the same path, and a changed path") {
         trimmed.activations.pop_back();
         CHECK(path_overlay_key(&first) != path_overlay_key(&trimmed));
     }
+}
+
+TEST_CASE("score box: no path hides the box") {
+    Song song = make_hand_song();
+    PreviewScene scene = build_preview_scene(song, nullptr);
+    CHECK(scene.score.state == PreviewScore::State::None);
+    CHECK(scene.score.steps.empty());
+    CHECK_FALSE(build_score_box(scene, 600.0).shown);
+}
+
+TEST_CASE("score box: a solo's bonus lands on its last note") {
+    // Hand song: chords at 0, 250, 500 and 750 ms. The solo is the chords at
+    // 250 and 500 ms, so its bonus is withheld at 250 and paid at 500.
+    Song song = make_hand_song();
+    Path path = priced_path(song, {});
+    PreviewScene scene = build_preview_scene(song, &path);
+    REQUIRE(scene.score.state == PreviewScore::State::Ready);
+    REQUIRE(scene.score.steps.size() == 4);
+
+    const ReplayResult r = replay_path(song, {});
+    REQUIRE(r.chords[1].points.solo > 0);
+    CHECK(scene.score.steps[1].total == r.chords[1].cum.total() - r.chords[1].points.solo);
+    CHECK(scene.score.steps[2].total == r.chords[2].cum.total());
+    CHECK(scene.score.steps[3].total == path.totalscore());
+
+    // Between the solo's two chords the box shows the withheld total.
+    PreviewScoreBox mid = build_score_box(scene, 400.0);
+    CHECK(mid.shown);
+    CHECK(mid.available);
+    CHECK(mid.score == group_thousands(scene.score.steps[1].total));
+    CHECK(mid.detail == "x1 " + kDot + " combo 2");
+
+    // A chord exactly at the playhead counts as hit.
+    PreviewScoreBox on = build_score_box(scene, scene.score.steps[2].ms);
+    CHECK(on.score == group_thousands(scene.score.steps[2].total));
+    CHECK(on.detail == "x1 " + kDot + " combo 3");
+}
+
+TEST_CASE("score box: before the first note nothing is hit yet") {
+    // The fill song's first note is at tick 480, 500 ms.
+    Song song = make_fill_song();
+    Path path = priced_path(song, {});
+    PreviewScene scene = build_preview_scene(song, &path);
+    REQUIRE(scene.score.state == PreviewScore::State::Ready);
+    PreviewScoreBox box = build_score_box(scene, 100.0);
+    CHECK(box.shown);
+    CHECK(box.available);
+    CHECK(box.score == "0");
+    CHECK(box.detail == "x1 " + kDot + " combo 0");
+}
+
+TEST_CASE("score box: Star Power doubles the multiplier inside the active window") {
+    // A Red note every 500 ms (tick 480 steps). One bar of SP activated at
+    // tick 2400 (2500 ms) runs two measures, to tick 6240 (6500 ms).
+    Song song = make_sp_song({1920}, 9600);
+    Path path = priced_path(song, {sp_act_at(song, 2400, 1)});
+    PreviewScene scene = build_preview_scene(song, &path);
+    REQUIRE(scene.score.state == PreviewScore::State::Ready);
+    REQUIRE(scene.activations.size() == 1);
+    REQUIRE(scene.activations[0].has_sp_end);
+    CHECK(scene.activations[0].sp_end_ms == doctest::Approx(6500.0));
+
+    // 2000 ms: five notes hit, before the activation.
+    CHECK(build_score_box(scene, 2000.0).detail == "x1 " + kDot + " combo 5");
+    // 3000 ms: seven notes hit, inside the window, so x1 doubles to x2.
+    CHECK(build_score_box(scene, 3000.0).detail == "x2 " + kDot + " combo 7");
+    // 7000 ms: fifteen notes hit, past the window: the plain x2 of combo 15.
+    CHECK(build_score_box(scene, 7000.0).detail == "x2 " + kDot + " combo 15");
+}
+
+TEST_CASE("score box: a path the replay can't reproduce says so") {
+    Song song = make_hand_song();
+
+    // The stored score disagrees with the replay by one point.
+    Path wrong = priced_path(song, {});
+    wrong.score_base += 1;
+    PreviewScene a = build_preview_scene(song, &wrong);
+    CHECK(a.score.state == PreviewScore::State::Unavailable);
+    PreviewScoreBox box = build_score_box(a, 600.0);
+    CHECK(box.shown);
+    CHECK_FALSE(box.available);
+    CHECK(box.score == "Score unavailable");
+    CHECK(box.detail.empty());
+
+    // An activation with no deactivation node (a record from before blob v4)
+    // yields no window, so the replay can't stand for the path.
+    Path old;
+    old.activations.push_back(act_at(song, 720, 0));
+    PreviewScene b = build_preview_scene(song, &old);
+    CHECK(b.score.state == PreviewScore::State::Unavailable);
+    CHECK(build_score_box(b, 600.0).score == "Score unavailable");
+}
+
+TEST_CASE("score box: the analyzed chart ends on the path's total") {
+    const AnalysisResult& r = analyzed();
+    const Path& best = r.record.best_path();
+    PreviewScene scene = build_preview_scene(r.song, &best);
+    REQUIRE(scene.score.state == PreviewScore::State::Ready);
+    REQUIRE(scene.score.steps.size() == r.song.sequence.size());
+    CHECK(scene.score.steps.back().total == best.totalscore());
+    for (size_t i = 1; i < scene.score.steps.size(); ++i) {
+        CHECK(scene.score.steps[i].ms >= scene.score.steps[i - 1].ms);
+        CHECK(scene.score.steps[i].combo > scene.score.steps[i - 1].combo);
+    }
+    PreviewScoreBox end = build_score_box(scene, scene.song_length_ms);
+    CHECK(end.score == group_thousands(best.totalscore()));
 }

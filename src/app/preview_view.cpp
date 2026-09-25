@@ -6,10 +6,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <exception>
 #include <limits>
 #include <optional>
 
 #include "core/squeeze_rating.h"
+#include "core/replay.h"
 
 namespace hydra::app {
 
@@ -197,9 +199,33 @@ SpMeterCurve build_sp_meter_curve(const PreviewScene& scene, const SongTiming& t
     return curve;
 }
 
+// The running score, from the same replay hydra_replay uses. Trusted only
+// when the replay provably stands for the path: every activation became a
+// window, and all six category totals equal the stored ones.
+PreviewScore build_score(const Song& song, const Path* path, const core::Rules& rules) {
+    PreviewScore score;
+    if (path == nullptr) return score;  // None
+    score.state = PreviewScore::State::Unavailable;
+    try {
+        std::vector<ReplayWindow> windows = windows_for_path(*path, song);
+        if (windows.size() != path->all_activations().size()) return score;
+        const ReplayResult r = replay_path(song, std::move(windows), rules);
+        if (!(r.final == score_of(*path))) return score;
+        score.steps.reserve(r.chords.size());
+        for (const ReplayChord& c : r.chords)
+            score.steps.push_back({c.ms, c.cum_onscreen_total, c.multiplier_after, c.combo_after});
+    } catch (const std::exception&) {
+        score.steps.clear();
+        return score;  // Unavailable
+    }
+    score.state = PreviewScore::State::Ready;
+    return score;
+}
+
 }  // namespace
 
-PreviewScene build_preview_scene(const Song& song, const Path* path, int sp_cap) {
+PreviewScene build_preview_scene(const Song& song, const Path* path, int sp_cap,
+                                 const core::Rules& rules) {
     PreviewScene scene;
     if (song.is_empty()) return scene;
 
@@ -328,6 +354,7 @@ PreviewScene build_preview_scene(const Song& song, const Path* path, int sp_cap)
 
     // The SP meter, built last: it reads the phrases, activations, tempos and
     // meters gathered above.
+    scene.score = build_score(song, path, rules);
     scene.sp_meter = build_sp_meter_curve(scene, timing, sp_cap);
     return scene;
 }
@@ -452,6 +479,39 @@ PreviewTimeBox build_time_box(const PreviewScene& scene, double now_ms,
         if (s.tick > now_tick) break;
         box.section = s.name;
     }
+    return box;
+}
+
+PreviewScoreBox build_score_box(const PreviewScene& scene, double now_ms) {
+    PreviewScoreBox box;
+    if (scene.score.state == PreviewScore::State::None) return box;
+    box.shown = true;
+    if (scene.score.state == PreviewScore::State::Unavailable) {
+        box.score = "Score unavailable";
+        return box;
+    }
+    box.available = true;
+
+    // The last chord at or before the playhead. Before the first chord
+    // nothing is hit yet: 0, x1, combo 0.
+    const std::vector<PreviewScoreStep>& steps = scene.score.steps;
+    auto it = std::upper_bound(steps.begin(), steps.end(), now_ms,
+                               [](double v, const PreviewScoreStep& s) { return v < s.ms; });
+    PreviewScoreStep at;
+    if (it != steps.begin()) at = *(it - 1);
+
+    // Star Power doubles the multiplier across the window the highway tints.
+    int multiplier = at.multiplier;
+    for (const PreviewActivation& a : scene.activations)
+        if (a.has_sp_end && now_ms >= a.ms && now_ms <= a.sp_end_ms) {
+            multiplier *= 2;
+            break;
+        }
+
+    box.score = group_thousands(at.total);
+    char buf[64];
+    std::snprintf(buf, sizeof buf, "x%d \xC2\xB7 combo %d", multiplier, at.combo);
+    box.detail = buf;
     return box;
 }
 
