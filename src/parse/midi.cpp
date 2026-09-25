@@ -70,15 +70,32 @@ std::string decode_latin1(const uint8_t* p, size_t len) {
     return out;
 }
 
-// A variable-length quantity, 7 bits per byte. Advances pos.
-uint32_t read_varlen(const uint8_t* data, size_t& pos, size_t end) {
-    uint32_t value = 0;
+// A variable-length quantity, 7 bits per byte. Advances pos. Accumulates in
+// 64 bits so a malformed 5+-byte quantity reads as mido reads it (Python
+// integers do not wrap) instead of wrapping at 32 bits.
+uint64_t read_varlen(const uint8_t* data, size_t& pos, size_t end) {
+    uint64_t value = 0;
     while (pos < end) {
         uint8_t b = data[pos++];
         value = (value << 7) | (b & 0x7F);
         if (!(b & 0x80)) break;
     }
     return value;
+}
+
+// mido's MAX_MESSAGE_LENGTH. mido's read_bytes raises for any meta or sysex
+// message longer than this, and nothing catches it, so mido refuses the whole
+// file. Hydra follows mido on broken files (user decision 27, 2026-09-24).
+// The cap also keeps `pos += length` from wrapping the read position.
+constexpr uint64_t kMaxMessageLength = 1000000;
+
+// A meta or sysex length. Throws MidiError, with mido's wording, past the cap.
+uint64_t read_message_length(const uint8_t* data, size_t& pos, size_t end) {
+    const uint64_t length = read_varlen(data, pos, end);
+    if (length > kMaxMessageLength)
+        throw MidiError("Message length " + std::to_string(length) +
+                        " exceeds maximum length " + std::to_string(kMaxMessageLength));
+    return length;
 }
 
 // Build the meta events hysong can act on; returns false to skip the rest.
@@ -194,14 +211,7 @@ MidiTrack MidiFile::parse_track(const uint8_t* data, size_t pos, size_t end) {
     bool named = false;
 
     while (pos < end) {
-        // Delta time.
-        int64_t delta = 0;
-        while (pos < end) {
-            uint8_t b = data[pos++];
-            delta = (delta << 7) | (b & 0x7F);
-            if (!(b & 0x80)) break;
-        }
-        pending += delta;
+        pending += static_cast<int64_t>(read_varlen(data, pos, end));  // delta time
 
         if (pos >= end) break;
 
@@ -224,7 +234,7 @@ MidiTrack MidiFile::parse_track(const uint8_t* data, size_t pos, size_t end) {
         if (status == 0xFF) {
             if (pos >= end) break;
             int meta_type = data[pos++];
-            uint32_t length = read_varlen(data, pos, end);
+            const uint64_t length = read_message_length(data, pos, end);
             const uint8_t* payload = data + pos;
             size_t avail = end - pos;
             size_t plen = std::min<size_t>(length, avail);
@@ -246,7 +256,7 @@ MidiTrack MidiFile::parse_track(const uint8_t* data, size_t pos, size_t end) {
         }
 
         if (status == 0xF0 || status == 0xF7) {
-            uint32_t length = read_varlen(data, pos, end);
+            const uint64_t length = read_message_length(data, pos, end);
             pos += length;
             continue;
         }
