@@ -22,6 +22,7 @@
 #include "app/analysis.h"
 #include "core/winstr.h"
 #include "corpus_util.h"
+#include "midi_util.h"
 #include "parse/song.h"
 #include "store/record_store.h"
 
@@ -271,4 +272,43 @@ TEST_CASE("rescan cache: an old placeholder or blank title reads (unknown)") {
     auto [items2, errors2] = discover_charts({input}, ScanCallbacks{}, &cache);
     REQUIRE(items2.size() == items.size());
     for (const ScanItem& it : items2) CHECK(it.title == hydra::kUnknownTitle);
+}
+
+namespace {
+
+// A fresh folder under %TEMP% for one scan fixture.
+std::string scan_fixture_dir(const char* name) {
+    wchar_t tmp[MAX_PATH];
+    GetTempPathW(MAX_PATH, tmp);
+    std::string dir = hydra::wide_to_utf8(tmp) + "hydra_scan_case_" +
+                      std::to_string(GetCurrentProcessId()) + "_" + name;
+    CreateDirectoryW(hydra::utf8_to_wide(dir).c_str(), nullptr);
+    return dir;
+}
+
+void write_fixture(const std::string& path, const std::vector<uint8_t>& bytes) {
+    FILE* f = hydra::fopen_utf8(path, L"wb");
+    REQUIRE_MESSAGE(f != nullptr, "cannot write " << path);
+    if (!bytes.empty()) std::fwrite(bytes.data(), 1, bytes.size(), f);
+    std::fclose(f);
+}
+
+}  // namespace
+
+TEST_CASE("discover_charts finds a folder whose notes and ini names are capitalized") {
+    const std::string dir = scan_fixture_dir("caps");
+    write_fixture(dir + "\\Notes.mid",
+                  testmidi::smf(testmidi::concat({testmidi::track_name("PART DRUMS"),
+                                                  testmidi::set_tempo(),
+                                                  testmidi::note_on(96, 100),
+                                                  testmidi::end_of_track()})));
+    const std::string ini = "[song]\r\nname = Capital Case\r\nartist = Someone\r\n"
+                            "charter = Someone Else\r\n";
+    write_fixture(dir + "\\Song.ini", std::vector<uint8_t>(ini.begin(), ini.end()));
+
+    auto [items, errors] = discover_charts({dir});
+    REQUIRE(errors.empty());
+    REQUIRE(items.size() == 1);
+    CHECK(items[0].title == "Capital Case");
+    CHECK(items[0].notespath == dir + "\\Notes.mid");
 }

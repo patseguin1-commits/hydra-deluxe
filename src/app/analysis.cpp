@@ -19,6 +19,8 @@
 #include "app/dynamics_breakdown.h"
 #include "core/winstr.h"
 #include "parse/srb.h"
+#include "parse/chart_files.h"
+#include "parse/sng.h"
 #include "search/pather.h"
 
 namespace hydra::app {
@@ -247,44 +249,13 @@ constexpr size_t kSngHeadCapture = 1 << 20;
 
 std::tuple<std::string, std::string, std::string> parse_sng_metadata(
     const std::vector<uint8_t>& buf) {
-    auto u64_at = [&buf](size_t pos) {
-        uint64_t v = 0;
-        for (int i = 0; i < 8; ++i) v |= static_cast<uint64_t>(buf[pos + i]) << (8 * i);
-        return v;
-    };
-    auto u32_at = [&buf](size_t pos) {
-        uint32_t v = 0;
-        for (int i = 0; i < 4; ++i) v |= static_cast<uint32_t>(buf[pos + i]) << (8 * i);
-        return v;
-    };
-
     // Empty = no usable name; discover_charts applies the one fallback.
     std::string title;
     std::string artist = "<unknown artist>";
     std::string charter = "<unknown charter>";
 
-    const size_t kMetadataCountOffset = 34;
-    if (buf.size() < kMetadataCountOffset + 8) return {title, artist, charter};
-
-    size_t pos = kMetadataCountOffset;
-    uint64_t count = u64_at(pos);
-    pos += 8;
-
-    for (uint64_t i = 0; i < count; ++i) {
-        if (pos + 4 > buf.size()) break;
-        uint32_t key_len = u32_at(pos);
-        pos += 4;
-        if (pos + key_len > buf.size()) break;
-        std::string key = lower(std::string(reinterpret_cast<const char*>(&buf[pos]), key_len));
-        pos += key_len;
-
-        if (pos + 4 > buf.size()) break;
-        uint32_t value_len = u32_at(pos);
-        pos += 4;
-        if (pos + value_len > buf.size()) break;
-        std::string value(reinterpret_cast<const char*>(&buf[pos]), value_len);
-        pos += value_len;
-
+    for (const auto& [raw_key, value] : sng_read_metadata(buf)) {
+        const std::string key = lower(raw_key);
         if (key == "name") title = value;
         else if (key == "artist") artist = value;
         else if (key == "charter") charter = value;
@@ -397,12 +368,12 @@ std::pair<std::vector<ScanItem>, std::vector<std::string>> discover_charts(
             std::vector<const DirEntry*> subdirs;
             for (const DirEntry& e : entries) {
                 if (e.is_dir) subdirs.push_back(&e);
-                else if (e.name == "notes.mid") found_mid = &e;
-                else if (e.name == "notes.chart") found_chart = &e;
-                else if (e.name == "song.ini") found_ini = &e;
-                else if (ends_with_ci(e.name, ".sng"))
+                else if (notes_file_format(e.name) == ChartFormat::Mid) found_mid = &e;
+                else if (notes_file_format(e.name) == ChartFormat::Chart) found_chart = &e;
+                else if (is_song_ini(e.name)) found_ini = &e;
+                else if (chart_format_of(e.name) == ChartFormat::Sng)
                     found_archives.push_back({&e, ChartKind::Sng});
-                else if (ends_with_ci(e.name, ".srb"))
+                else if (chart_format_of(e.name) == ChartFormat::Srb)
                     found_archives.push_back({&e, ChartKind::Srb});
             }
 

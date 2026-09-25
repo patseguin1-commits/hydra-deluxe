@@ -37,6 +37,11 @@ constexpr size_t kSrbHeaderSize = 16;
 // beyond any legitimate block and bounds hostile input.
 constexpr size_t kSrbMaxMetadata = 1 << 20;
 
+// The cap on any stream after the metadata (the notes file, and the audio or
+// art streams that follow it). A notes file inflates to well under a hundred
+// MB even for mega-charts; 1 GB exists only to bound hostile input.
+constexpr size_t kSrbMaxStream = size_t{1} << 30;
+
 // Inflate the raw-deflate stream starting at data[offset]. Returns the
 // decompressed bytes; if end_offset is non-null it receives the offset of the
 // first byte past the stream's compressed data (i.e. where the next stream

@@ -188,3 +188,41 @@ TEST_CASE("midi: SMPTE division is rejected") {
     };
     CHECK_THROWS_AS((hydra::MidiFile(d)), hydra::MidiError);
 }
+
+TEST_CASE("midi: a five-byte delta accumulates past 32 bits, as mido does") {
+    std::vector<uint8_t> track = {
+        0x90, 0x80, 0x80, 0x80, 0x00,  // delta 2^32 (malformed: five bytes)
+        0x90, 0x60, 0x64,              // note_on note 96 vel 100
+        0x00, 0xFF, 0x2F, 0x00,        // end of track
+    };
+    hydra::MidiFile mid(smf(track));
+    json expected = json::array({ json::array({
+        json::array({int64_t{1} << 32, "note_on", 96, 100}),
+    }) });
+    CHECK(event_view(mid) == expected);
+}
+
+TEST_CASE("midi: a message longer than mido's 1,000,000-byte cap refuses the file, as mido does") {
+    // A text meta whose length is 2^32. Today it wraps to 0 and the note_on
+    // after it is read as a real event.
+    std::vector<uint8_t> meta = {
+        0x00, 0xFF, 0x01, 0x90, 0x80, 0x80, 0x80, 0x00,  // text meta, length 2^32
+        0x00, 0x90, 0x60, 0x64,                          // note_on note 96 vel 100
+        0x00, 0xFF, 0x2F, 0x00,                          // end of track
+    };
+    CHECK_THROWS_AS((hydra::MidiFile(smf(meta))), hydra::MidiError);
+
+    // A sysex one byte over the cap: 1,000,001 = 0xBD 0x84 0x41.
+    std::vector<uint8_t> sysex = {
+        0x00, 0xF0, 0xBD, 0x84, 0x41,
+        0x00, 0xFF, 0x2F, 0x00,
+    };
+    CHECK_THROWS_AS((hydra::MidiFile(smf(sysex))), hydra::MidiError);
+
+    // Exactly at the cap (1,000,000 = 0xBD 0x84 0x40) is not refused. The
+    // track is shorter than that, so the payload is clamped as today.
+    std::vector<uint8_t> at_cap = {
+        0x00, 0xFF, 0x01, 0xBD, 0x84, 0x40, 'a', 'b',
+    };
+    CHECK_NOTHROW((hydra::MidiFile(smf(at_cap))));
+}

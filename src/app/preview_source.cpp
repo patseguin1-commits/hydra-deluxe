@@ -15,6 +15,7 @@
 
 #include "core/winstr.h"
 #include "parse/srb.h"
+#include "parse/sng.h"
 
 namespace hydra::app {
 
@@ -172,46 +173,13 @@ std::vector<PreviewAudioStem> find_loose_audio(const std::string& folder) {
 std::vector<PreviewAudioStem> extract_sng_audio(const std::string& path) {
     std::vector<PreviewAudioStem> stems;
     std::vector<uint8_t> buf = read_file_bytes(path);
-
-    const size_t XORMASK_OFFSET = 10;
-    if (buf.size() < XORMASK_OFFSET + 16 + 8) return stems;
-    uint8_t xormask[16];
-    std::memcpy(xormask, buf.data() + XORMASK_OFFSET, 16);
-
-    size_t pos = XORMASK_OFFSET + 16;
-    if (pos + 8 > buf.size()) return stems;
-    uint64_t metadata_len = read_u64(buf, pos);
-    pos += 8 + static_cast<size_t>(metadata_len);
-    pos += 8;  // section length
-    if (pos + 8 > buf.size()) return stems;
-    uint64_t file_count = read_u64(buf, pos);
-    pos += 8;
-
-    for (uint64_t i = 0; i < file_count; ++i) {
-        if (pos + 1 > buf.size()) break;
-        uint8_t filename_len = buf[pos];
-        pos += 1;
-        if (pos + filename_len > buf.size()) break;
-        std::string filename(reinterpret_cast<const char*>(buf.data() + pos),
-                             filename_len);
-        pos += filename_len;
-        if (pos + 16 > buf.size()) break;
-        uint64_t contents_len = read_u64(buf, pos);
-        pos += 8;
-        uint64_t contents_index = read_u64(buf, pos);
-        pos += 8;
-
-        if (!is_audio_filename(filename)) continue;
-        if (contents_index + contents_len > buf.size()) continue;  // corrupt entry
-
+    for (const SngFileEntry& e : sng_read_file_table(buf)) {
+        if (!is_audio_filename(e.name)) continue;
+        std::optional<std::vector<uint8_t>> bytes = sng_decode_file(buf, e);
+        if (!bytes) continue;  // corrupt entry
         PreviewAudioStem s;
-        s.label = stem_of(filename);
-        s.bytes.resize(static_cast<size_t>(contents_len));
-        for (uint64_t j = 0; j < contents_len; ++j) {
-            uint8_t xorkey = xormask[j % 16] ^ static_cast<uint8_t>(j & 0xff);
-            s.bytes[static_cast<size_t>(j)] =
-                buf[static_cast<size_t>(contents_index + j)] ^ xorkey;
-        }
+        s.label = stem_of(e.name);
+        s.bytes = std::move(*bytes);
         stems.push_back(std::move(s));
     }
     return stems;
@@ -230,13 +198,13 @@ std::vector<PreviewAudioStem> extract_srb_audio(const std::string& path) {
         srb_inflate_stream(buf.data(), buf.size(), kSrbHeaderSize,
                            kSrbMaxMetadata, &offset);  // stream 1: metadata
         srb_inflate_stream(buf.data(), buf.size(), offset,
-                           size_t{1} << 30, &offset);  // stream 2: notes
+                           kSrbMaxStream, &offset);  // stream 2: notes
 
         int index = 3;
         while (offset < buf.size()) {
             size_t next = 0;
             std::vector<uint8_t> stream = srb_inflate_stream(
-                buf.data(), buf.size(), offset, size_t{1} << 30, &next);
+                buf.data(), buf.size(), offset, kSrbMaxStream, &next);
             if (next <= offset) break;
             offset = next;
             if (looks_like_audio(stream)) {

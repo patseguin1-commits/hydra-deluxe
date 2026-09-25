@@ -11,6 +11,8 @@
 
 #include "core/winstr.h"  // read_file_bytes
 #include "parse/midi.h"
+#include "parse/sng.h"
+#include "parse/chart_files.h"
 #include "parse/srb.h"
 
 namespace hydra {
@@ -121,6 +123,35 @@ bool fill_lands_on_chord(const Song& song, int64_t fill_end_tick, int64_t tick,
     int64_t nextchord_dist = tick - fill_end_tick;
     return nextchord_dist <= static_cast<int64_t>(song.tick_resolution() * slop_beats) &&
            (!prevchord_dist.has_value() || nextchord_dist <= *prevchord_dist);
+}
+
+// The parser handlers MIDI and .chart share. Each parser decides when to
+// call them (its own event phases); what they do to the Song lives here once.
+
+// A time signature: ticks per measure = resolution * 4 * num / den.
+void apply_timesig(Song& song, int64_t tick, int numerator, int denominator) {
+    song.tpm_changes[tick] = song.tick_resolution() * static_cast<int64_t>(numerator) * 4 /
+                             static_cast<int64_t>(denominator);
+}
+
+// A fill ending: the last chord becomes an activation chord whose fill began
+// at `starttick`.
+void apply_fill_end(Song& song, int64_t starttick) {
+    if (song.sequence.empty()) return;
+    SongTimestamp& last = song.sequence.back();
+    if (last.timecode.ticks() >= starttick)
+        last.activation_length = last.timecode.ticks() - starttick;
+}
+
+// An SP phrase ending: the last chord closes the phrase that began at
+// `starttick`, if it lies inside it.
+void mark_sp_phrase_end(Song& song, int64_t starttick) {
+    if (song.sequence.empty()) return;
+    SongTimestamp& last = song.sequence.back();
+    if (last.timecode.ticks() >= starttick) {
+        last.flag_sp = true;
+        last.sp_phrase_start = starttick;
+    }
 }
 
 // Emit the buffered chord as a sequence timestamp, shared by both parsers.
@@ -327,31 +358,18 @@ private:
         song_->bpm_changes[tick] = 60000000.0 / static_cast<double>(miditempo);
     }
     void op_timesig(int64_t tick, int numerator, int denominator) {
-        song_->tpm_changes[tick] = song_->tick_resolution() *
-                                   static_cast<int64_t>(numerator) * 4 /
-                                   static_cast<int64_t>(denominator);
+        apply_timesig(*song_, tick, numerator, denominator);
     }
     void op_fillstart(int64_t tick) {
         fill_start_tick_ = tick;
         fill_end_tick_.reset();
     }
     void op_store_fillend(int64_t tick) { fill_end_tick_ = tick; }
-    void op_apply_fill(int64_t starttick) {
-        if (song_->sequence.empty()) return;
-        SongTimestamp& last = song_->sequence.back();
-        if (last.timecode.ticks() >= starttick)
-            last.activation_length = last.timecode.ticks() - starttick;
-    }
+    void op_apply_fill(int64_t starttick) { apply_fill_end(*song_, starttick); }
     void op_sp_start(int64_t tick) { sp_start_tick_ = tick; }
     void op_sp_end() {
-        if (song_->sequence.empty()) {
-            sp_start_tick_.reset();
-            return;
-        }
-        if (song_->sequence.back().timecode.ticks() >= *sp_start_tick_) {
-            song_->sequence.back().flag_sp = true;
-            song_->sequence.back().sp_phrase_start = *sp_start_tick_;
-        }
+        // A note-off with no phrase open (a stray 116 off) closes nothing.
+        if (sp_start_tick_) mark_sp_phrase_end(*song_, *sp_start_tick_);
         sp_start_tick_.reset();
     }
     void op_tom(NoteColor color, NoteCymbalType cymbal) {
@@ -764,33 +782,19 @@ private:
     void op_disco(bool on) { flag_disco_ = on; }
     void op_tempo(int64_t tick, double bpm) { song_->bpm_changes[tick] = bpm; }
     void op_timesig(int64_t tick, int numerator, int denominator) {
-        song_->tpm_changes[tick] = song_->tick_resolution() *
-                                   static_cast<int64_t>(numerator) * 4 /
-                                   static_cast<int64_t>(denominator);
+        apply_timesig(*song_, tick, numerator, denominator);
     }
     void op_fillstart(int64_t start, int64_t end) {
         fill_start_tick_ = start;
         fill_end_tick_ = end;
     }
-    void op_fillend(int64_t starttick) {
-        if (song_->sequence.empty()) return;
-        SongTimestamp& last = song_->sequence.back();
-        if (last.timecode.ticks() >= starttick)
-            last.activation_length = last.timecode.ticks() - starttick;
-    }
+    void op_fillend(int64_t starttick) { apply_fill_end(*song_, starttick); }
     void op_sp_start(int64_t start, int64_t end) {
         sp_start_tick_ = start;
         sp_end_tick_ = end;
     }
     void op_sp_end(int64_t starttick) {
-        if (song_->sequence.empty()) {
-            sp_end_tick_.reset();
-            return;
-        }
-        if (song_->sequence.back().timecode.ticks() >= starttick) {
-            song_->sequence.back().flag_sp = true;
-            song_->sequence.back().sp_phrase_start = starttick;
-        }
+        mark_sp_phrase_end(*song_, starttick);
         sp_end_tick_.reset();
     }
     void op_solo(bool on) { flag_solo_ = on; }
@@ -1074,67 +1078,30 @@ Song load_songpath_sng(const std::string& path, bool pro, bool bass2x,
                        Difficulty difficulty, const core::Rules& rules) {
     std::vector<uint8_t> buf = read_file_bytes(path);
 
-    auto read_u64 = [&buf](size_t pos) {
-        uint64_t v = 0;
-        for (int i = 0; i < 8; ++i)
-            v |= static_cast<uint64_t>(buf[pos + i]) << (8 * i);
-        return v;
-    };
-
-    const size_t XORMASK_OFFSET = 10;
-    uint8_t xormask[16];
-    std::memcpy(xormask, buf.data() + XORMASK_OFFSET, 16);
-
-    size_t pos = XORMASK_OFFSET + 16;
-    uint64_t metadata_len = read_u64(pos);
-    pos += 8;
-    pos += static_cast<size_t>(metadata_len);
-
-    pos += 8;  // skip section length
-    uint64_t file_count = read_u64(pos);
-    pos += 8;
-
-    enum class Loader { None, Mid, Chart } loader = Loader::None;
-    uint64_t chart_len = 0, chart_off = 0;
-
-    for (uint64_t i = 0; i < file_count; ++i) {
-        uint8_t filename_len = buf[pos];
-        pos += 1;
-        std::string filename(reinterpret_cast<const char*>(buf.data() + pos),
-                             filename_len);
-        pos += filename_len;
-        std::string fn = ascii_casefold(filename);
-        uint64_t contents_len = read_u64(pos);
-        pos += 8;
-        uint64_t contents_index = read_u64(pos);
-        pos += 8;
-
-        if (fn == "notes.mid") {
-            loader = Loader::Mid;
-            chart_len = contents_len;
-            chart_off = contents_index;
+    // A notes.mid wins over a notes.chart; among .chart entries the last one
+    // listed wins (the order this loader has always used).
+    const std::vector<SngFileEntry> entries = sng_read_file_table(buf);
+    const SngFileEntry* notes = nullptr;
+    ChartFormat format = ChartFormat::None;
+    for (const SngFileEntry& e : entries) {
+        const ChartFormat f = notes_file_format(e.name);
+        if (f == ChartFormat::Mid) {
+            notes = &e;
+            format = f;
             break;
-        } else if (fn == "notes.chart") {
-            loader = Loader::Chart;
-            chart_len = contents_len;
-            chart_off = contents_index;
+        }
+        if (f == ChartFormat::Chart) {
+            notes = &e;
+            format = f;
         }
     }
+    if (!notes) throw std::runtime_error("No chart files found in SNG file.");
 
-    if (loader == Loader::None)
-        throw std::runtime_error("No chart files found in SNG file.");
-
-    std::vector<uint8_t> notebytes(static_cast<size_t>(chart_len));
-    for (uint64_t i = 0; i < chart_len; ++i) {
-        uint8_t xorkey =
-            xormask[i % 16] ^ static_cast<uint8_t>(i & 0xff);
-        notebytes[static_cast<size_t>(i)] =
-            buf[static_cast<size_t>(chart_off + i)] ^ xorkey;
-    }
-
-    if (loader == Loader::Mid)
-        return load_songbytes_mid(notebytes, pro, bass2x, difficulty, rules);
-    return load_songbytes_chart(notebytes, pro, bass2x, difficulty, rules);
+    std::optional<std::vector<uint8_t>> notebytes = sng_decode_file(buf, *notes);
+    if (!notebytes) throw std::runtime_error("Truncated SNG file.");
+    if (format == ChartFormat::Mid)
+        return load_songbytes_mid(*notebytes, pro, bass2x, difficulty, rules);
+    return load_songbytes_chart(*notebytes, pro, bass2x, difficulty, rules);
 }
 
 Song load_songpath_srb(const std::string& path, bool pro, bool bass2x,
@@ -1150,20 +1117,14 @@ Song load_songpath_srb(const std::string& path, bool pro, bool bass2x,
     SrbMetadata md;
     srb_parse_metadata(meta, md);
 
-    // The notes file inflates to well under a hundred MB even for mega-charts;
-    // a 1 GB ceiling only exists to bound hostile input.
     std::vector<uint8_t> notebytes = srb_inflate_stream(
-        buf.data(), buf.size(), notes_offset, size_t{1} << 30, nullptr);
+        buf.data(), buf.size(), notes_offset, kSrbMaxStream, nullptr);
 
-    std::string fn = ascii_casefold(md.notes_filename);
-    auto fn_ends_with = [&fn](const char* suf) {
-        size_t n = std::strlen(suf);
-        return fn.size() >= n && fn.compare(fn.size() - n, n, suf) == 0;
-    };
+    const ChartFormat named = chart_format_of(md.notes_filename);
     bool is_mid;
-    if (fn_ends_with(".mid"))
+    if (named == ChartFormat::Mid)
         is_mid = true;
-    else if (fn_ends_with(".chart"))
+    else if (named == ChartFormat::Chart)
         is_mid = false;
     else  // Unexpected filename: sniff the payload instead.
         is_mid = notebytes.size() >= 4 && std::memcmp(notebytes.data(), "MThd", 4) == 0;
@@ -1174,15 +1135,13 @@ Song load_songpath_srb(const std::string& path, bool pro, bool bass2x,
 
 Song load_songpath(const std::string& path, bool pro, bool bass2x,
                    Difficulty difficulty, const core::Rules& rules) {
-    std::string low = ascii_casefold(path);
-    auto ends_with = [&low](const char* suf) {
-        size_t n = std::strlen(suf);
-        return low.size() >= n && low.compare(low.size() - n, n, suf) == 0;
-    };
-    if (ends_with(".mid")) return load_songpath_mid(path, pro, bass2x, difficulty, rules);
-    if (ends_with(".chart")) return load_songpath_chart(path, pro, bass2x, difficulty, rules);
-    if (ends_with(".sng")) return load_songpath_sng(path, pro, bass2x, difficulty, rules);
-    if (ends_with(".srb")) return load_songpath_srb(path, pro, bass2x, difficulty, rules);
+    switch (chart_format_of(path)) {
+        case ChartFormat::Mid: return load_songpath_mid(path, pro, bass2x, difficulty, rules);
+        case ChartFormat::Chart: return load_songpath_chart(path, pro, bass2x, difficulty, rules);
+        case ChartFormat::Sng: return load_songpath_sng(path, pro, bass2x, difficulty, rules);
+        case ChartFormat::Srb: return load_songpath_srb(path, pro, bass2x, difficulty, rules);
+        case ChartFormat::None: break;
+    }
     throw std::runtime_error("unexpected chart type: " + path);
 }
 

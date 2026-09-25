@@ -136,6 +136,8 @@ add_library(hydra_core STATIC
     src/parse/midi.cpp
     src/parse/song.cpp
     src/parse/srb.cpp
+    src/parse/chart_files.cpp
+    src/parse/sng.cpp
     src/search/graph.cpp
     src/search/engine.cpp
     src/search/pather.cpp
@@ -325,6 +327,7 @@ add_executable(hydra_tests
     tests/test_dynamics_breakdown.cpp
     tests/test_dynamics_store.cpp
     tests/test_song.cpp
+    tests/test_sng.cpp
     tests/test_srb.cpp
     tests/test_search.cpp
     tests/test_replay.cpp
