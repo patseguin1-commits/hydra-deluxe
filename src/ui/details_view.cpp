@@ -22,6 +22,7 @@
 #include <cfloat>
 #include <cstdint>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 namespace hydra::ui {
@@ -194,8 +195,9 @@ void render_controls(AppState& app) {
             app.settings.sp_cap = spcap_auto ? std::nullopt : std::optional<int>(last_cap);
             app.commit_settings();
         }
-        hint("4 bars is Clone Hero's rule. Higher caps are what-ifs; Auto raises the "
-             "cap until the score stops improving.");
+        hint((std::to_string(kCloneHeroSpCap) +
+              " bars is Clone Hero's rule. Higher caps are what-ifs; Auto raises the "
+              "cap until the score stops improving.").c_str());
     }
 
     ImGui::Spacing();

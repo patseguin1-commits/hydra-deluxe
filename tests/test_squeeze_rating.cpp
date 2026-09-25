@@ -799,3 +799,9 @@ TEST_CASE("rate_activation: a plain row inside the leeway is not a frontend sque
     CHECK(r.cap_clamped);
     CHECK(act.backends[0].summarystr(85.0, narrow) == "Hard (uncounted)");
 }
+
+TEST_CASE("squeeze_budget_ms: identity scale is twice the hit window") {
+    // The backend tooltip's "not %.0fms" figure is this call, not 2.0 * W.
+    CHECK(squeeze_budget_ms(1.0, 85.0) == 170.0);
+    CHECK(squeeze_budget_ms(1.0, 40.0) == 80.0);
+}

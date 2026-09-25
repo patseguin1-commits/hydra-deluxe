@@ -222,12 +222,15 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
             row.timing = tbuf;
             if (br.effective_ms) {
                 char tip[256];
+                // The budget at identity scale (x1.00): what the combined
+                // budget would be with no frontend-timing scale.
+                const double normal_budget = squeeze_budget_ms(1.0, W);
                 std::snprintf(tip, sizeof(tip),
                               "Effectively %.1fms on the normal %.0fms scale:\n"
                               "frontend timing scales x%.2f here, so the combined\n"
                               "squeeze budget is %.0fms, not %.0fms.",
-                              *br.effective_ms, 2.0 * W, br.scale,
-                              br.budget_ms, 2.0 * W);
+                              *br.effective_ms, normal_budget, br.scale,
+                              br.budget_ms, normal_budget);
                 row.tooltip = tip;
             }
             row.chord = bsq.chord.notationstr();
@@ -340,7 +343,7 @@ PathRowView build_path_row(const Path& path) {
         char buf[32];
         std::snprintf(buf, sizeof(buf), "%9.1f ms", *diff);
         row.ms = buf;
-        row.warn = *diff > kDifficultMs;
+        row.warn = path.is_difficult();
     }
     return row;
 }

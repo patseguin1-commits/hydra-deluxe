@@ -158,6 +158,21 @@ private:
 
 enum class SqueezeKind { SqIn, SqOut };
 
+// How hard a squeeze is, in ms: a SqIn's offset, or a SqOut's offset negated.
+// "-x + 0.0" turns -0.0 into +0.0 so a dead-on SqOut prints "0.0". The engine's
+// act_difficulty and SPSqueeze::difficulty both call this.
+inline double squeeze_difficulty(bool is_sqin, double offset_ms) {
+    return is_sqin ? offset_ms : (-offset_ms + 0.0);
+}
+
+// E0: the calibration fill lands inside its window and nothing was skipped.
+inline bool is_e0(double e_offset, int skips) {
+    return e_offset < kCalibrationFillWindowMs && skips == 0;
+}
+
+// How hard an E0 activation's calibration fill is, in ms.
+inline double calibration_fill_difficulty(double e_offset) { return -e_offset + 0.0; }
+
 // A SqIn (+) or SqOut (-), mirroring hydata.SqIn/SqOut. Equality compares the
 // offset only, exactly like SPSqueeze.__eq__.
 struct SPSqueeze {
@@ -166,9 +181,7 @@ struct SPSqueeze {
 
     double offset() const { return offset_ms; }
     double timing() const { return -offset_ms + 0.0; }
-    double difficulty() const {
-        return kind == SqueezeKind::SqIn ? offset_ms : (-offset_ms + 0.0);
-    }
+    double difficulty() const { return squeeze_difficulty(kind == SqueezeKind::SqIn, offset_ms); }
     const char* symbol() const {
         return kind == SqueezeKind::SqIn ? "+" : "-";
     }
@@ -358,6 +371,9 @@ struct Path {
     void prepare_variants();
 
     std::optional<double> difficulty() const;
+    // True when the hardest squeeze or E0 fill is past kDifficultMs: the
+    // warning color's rule, asked of the path instead of re-derived by callers.
+    bool is_difficult() const;
 
     // An "all-0" path: it has activations and every one of them records
     // skips == 0. False for a path with no activations, and for a stale record

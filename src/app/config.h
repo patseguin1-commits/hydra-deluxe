@@ -90,7 +90,7 @@ struct Settings {
     // default). nullopt is "Auto": raise the ceiling until the score settles
     // (search/pather.h analyze_auto_cap). INI line: sp_cap=4 / sp_cap=auto.
     // The pre-1.6 keys sp_cap_enabled/sp_cap_value are ignored on load.
-    std::optional<int> sp_cap = 4;
+    std::optional<int> sp_cap = kCloneHeroSpCap;
 
     // Open the HTML path report in the browser as soon as a batch run builds
     // it; off by default (the finished modal offers an "Open report" button).

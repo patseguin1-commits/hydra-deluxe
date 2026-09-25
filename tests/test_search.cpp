@@ -760,3 +760,9 @@ TEST_CASE("path codec: encode/decode a path node keeps clamp_tick") {
     REQUIRE(decoded.activations.front().clamp_tick.has_value());
     CHECK(*decoded.activations.front().clamp_tick == 3072);
 }
+
+TEST_CASE("graph_build_cap: never taller than the song's phrases, never below one") {
+    CHECK(graph_build_cap(4, 10) == 4);   // the cap binds
+    CHECK(graph_build_cap(32, 3) == 3);   // the song's phrases bind
+    CHECK(graph_build_cap(8, 0) == 1);    // a phraseless song still builds one level
+}

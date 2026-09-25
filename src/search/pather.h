@@ -26,7 +26,7 @@ struct SearchSettings {
     std::optional<double> ms_filter;
     // The SP meter ceiling in bars (4 = Clone Hero's rule). nullopt is Auto:
     // the ladder that raises the ceiling until the score settles.
-    std::optional<int> sp_cap = 4;
+    std::optional<int> sp_cap = kCloneHeroSpCap;
     // Auto only: seconds before a too-slow ladder rung is abandoned
     // (hymisc.SP_CAP_TIME_BUDGET). nullopt runs every rung to completion.
     std::optional<double> time_budget_s;
@@ -37,6 +37,10 @@ struct SearchSettings {
     // The user's rule choices (hydra_rules.ini). Defaults are today's rules.
     core::Rules rules = core::default_rules();
 };
+
+// How tall to build the search graph: the SP cap, but never more levels than
+// the song has phrases to bank, and never fewer than one.
+int graph_build_cap(int sp_cap, int sp_phrase_count);
 
 // The best all-0 path over an already-built graph: the highest-scoring path
 // whose activations all record skips == 0, under a fixed 0 ms timing limit,

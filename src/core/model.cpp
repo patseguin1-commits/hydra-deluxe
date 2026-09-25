@@ -398,10 +398,10 @@ bool Activation::is_e_critical() const {
     return *e_offset < kCalibrationFillWindowMs;
 }
 
-bool Activation::is_E0() const { return is_e_critical() && *skips == 0; }
+bool Activation::is_E0() const { return is_e0(*e_offset, *skips); }
 
 std::optional<double> Activation::e_difficulty(bool verbose) const {
-    if (is_E0() || verbose) return -*e_offset + 0.0;
+    if (is_E0() || verbose) return calibration_fill_difficulty(*e_offset);
     return std::nullopt;
 }
 
@@ -546,6 +546,11 @@ std::optional<double> Path::difficulty() const {
         }
     }
     return best;
+}
+
+bool Path::is_difficult() const {
+    const std::optional<double> d = difficulty();
+    return d && *d > kDifficultMs;
 }
 
 // The engine stamps the squeezed-out chord's tick at copy-out (record v6).

@@ -688,13 +688,11 @@ double Engine::act_difficulty(int32_t act) const {
 
     double best = NO_DOUBLE;
     for (int32_t s = a.sq_tail; s >= 0; s = sqs_[(size_t)s].prev) {
-        const double d = sqs_[(size_t)s].kind == SQ_IN
-                             ? sqs_[(size_t)s].offset
-                             : -sqs_[(size_t)s].offset + 0.0;
+        const double d = squeeze_difficulty(sqs_[(size_t)s].kind == SQ_IN, sqs_[(size_t)s].offset);
         if (!has_value(best) || d > best) best = d;
     }
-    if (a.e_offset < kCalibrationFillWindowMs && a.skips == 0) {
-        const double d = -a.e_offset + 0.0;
+    if (is_e0(a.e_offset, a.skips)) {
+        const double d = calibration_fill_difficulty(a.e_offset);
         if (!has_value(best) || d > best) best = d;
     }
     return best;
