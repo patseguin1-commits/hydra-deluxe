@@ -31,6 +31,8 @@ import statistics
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from tools.ch_probe import constants as C
+
 
 # A single active-probe sample: the delta the engine measured (ms) and whether
 # the note counted as a hit.
@@ -151,7 +153,7 @@ class ClampResult:
 def clamp_verdict(
     rows: Sequence[SpacingRawStoredRow],
     *,
-    cap_ms: float = 85.0,
+    cap_ms: float,
     tolerance_ms: float = 1.0,
     decisive_fraction: float = 0.8,
 ) -> ClampResult:
@@ -214,7 +216,7 @@ def predicted_window_normal(
     c3: float,
     c4: float,
     divisor: float,
-    exponent: float = 2.0,
+    exponent: float,
 ) -> float:
     """Reproduce the game's normal-mode window formula for one spacing.
 
@@ -241,7 +243,7 @@ def predicted_window_precision(
     c3: float,
     c0: float,
     divisor: float,
-    exponent: float = 2.0,
+    exponent: float,
 ) -> float:
     """Reproduce the game's precision-mode window formula.
 
@@ -284,6 +286,23 @@ class SpacingEdge:
     errors: int
 
 
+def normal_formula_constants(decoded: Optional[dict]) -> Optional[dict]:
+    """Map EngineModel.constants() output onto predicted_window_normal's
+    inputs (c1..c4, divisor, exponent). Returns None when any of them is
+    missing -- the exponent included, because the game's exponent is read
+    live and never assumed."""
+    if not decoded:
+        return None
+    needed = [C.CONST_KEY_PREFIX_NORMAL + n for n in C.RVA_FORMULA_NORMAL]
+    needed += [C.CONST_KEY_DIVISOR, C.CONST_KEY_EXPONENT]
+    if any(k not in decoded for k in needed):
+        return None
+    out = {n: float(decoded[C.CONST_KEY_PREFIX_NORMAL + n]) for n in C.RVA_FORMULA_NORMAL}
+    out["divisor"] = float(decoded[C.CONST_KEY_DIVISOR])
+    out["exponent"] = float(decoded[C.CONST_KEY_EXPONENT])
+    return out
+
+
 def summarize_active(
     rows: Sequence[Tuple[float, float, bool]],
     *,
@@ -293,7 +312,7 @@ def summarize_active(
 
     For each spacing, detect the measured edge, and -- when the normal-mode
     formula constants are supplied -- also compute the predicted edge. The
-    constants dict must carry the keys `c1, c2, c3, c4, divisor` and optionally
+    constants dict must carry the keys `c1, c2, c3, c4, divisor` and
     `exponent`; anything else is ignored. Rows come back sorted by spacing so a
     plot can walk them left to right.
     """
@@ -309,7 +328,7 @@ def summarize_active(
                 c3=formula_constants["c3"],
                 c4=formula_constants["c4"],
                 divisor=formula_constants["divisor"],
-                exponent=formula_constants.get("exponent", 2.0),
+                exponent=formula_constants["exponent"],
             )
         out.append(
             SpacingEdge(

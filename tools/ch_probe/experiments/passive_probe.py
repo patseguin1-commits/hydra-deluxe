@@ -137,7 +137,11 @@ def run_passive_probe(
     rows = collector.rows
     _write_rows(rows, out_stub)
 
-    verdict = analysis.clamp_verdict(rows)
+    # Judge against the edge of the mode actually being probed: precision
+    # mode's back window is 40 ms, not normal mode's 85.
+    cap_ms = (constants.EXPECT_PRECISION_BACK_MS if engine.precision_mode()
+              else constants.EXPECT_NORMAL_BACK_MS)
+    verdict = analysis.clamp_verdict(rows, cap_ms=cap_ms)
     _print_verdict(verdict, len(rows))
     return verdict
 

@@ -164,55 +164,6 @@ void emit(const json& j, const std::string& out, bool pretty) {
     std::printf("wrote %s (%zu bytes)\n", out.c_str(), text.size());
 }
 
-json score_json(const ReplayScore& s) {
-    json j = json::object();
-    for (const ReplayScoreField& f : kReplayScoreFields) j[f.name] = s.*(f.member);
-    return j;
-}
-
-// The path list `dump` and `target` both print. One shape, so anything that
-// reads dump's JSON reads target's too.
-json paths_json(const std::vector<const Path*>& all, const SongTiming& timing) {
-    json paths = json::array();
-    int index = 0;
-    for (const Path* p : all) {
-        json acts = json::array();
-        for (const Activation& act : p->all_activations()) {
-            json sq = json::array();
-            for (const SPSqueeze& s2 : act.sqinouts)
-                sq.push_back(json{{"kind", s2.type_name()},
-                                  {"offset_ms", s2.offset()}});
-
-            const int64_t act_tick = act.timecode ? act.timecode->ticks() : -1;
-            const std::optional<int64_t>& d = act.deact_tick;
-            int64_t nominal = -1;
-            if (act.timecode && act.sp_meter)
-                nominal = timing
-                              .plusmeasure(*act.timecode, sp_bars_to_measures(*act.sp_meter))
-                              .ticks();
-
-            acts.push_back(json{
-                {"act_tick", act_tick},
-                {"deact_tick", d ? *d : -1},
-                {"sqout_tick", act.sqout_tick ? *act.sqout_tick : -1},
-                {"nominal_deact_tick", nominal},
-                {"sp_meter", act.sp_meter ? *act.sp_meter : -1},
-                {"skips", act.skips ? *act.skips : -1},
-                {"chord_code", act.chord ? act.chord->code() : std::string()},
-                {"sqinouts", sq},
-            });
-        }
-        paths.push_back(json{
-            {"index", index++},
-            {"pathstring", p->pathstring()},
-            {"total", p->totalscore()},
-            {"score", score_json(score_of(*p))},
-            {"activations", acts},
-        });
-    }
-    return paths;
-}
-
 // ---- score ---------------------------------------------------------------
 
 std::string trimmed(const std::string& s) {

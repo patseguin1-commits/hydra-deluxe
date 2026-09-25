@@ -42,7 +42,7 @@ import json
 import os
 import sys
 import time
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 # Make `tools.ch_probe...` importable when run directly. experiments/ is three
 # levels below the repo root.
@@ -67,13 +67,11 @@ RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
 
 # The default probe-chart spacings from the spec: dense near the 180-220 ms
 # region where the clamp decision happens, sparse elsewhere for shape.
-DEFAULT_SPACINGS_MS: Tuple[float, ...] = (
-    30, 50, 100, 150, 180, 185, 190, 195, 205, 211, 220, 240, 300,
-)
+DEFAULT_SPACINGS_MS = constants.PROBE_SPACINGS_MS
 
 # The drum lane the probe chart writes its notes on. Kept in one place so the
 # input driver and the chart generator agree.
-PROBE_LANE = 0
+PROBE_LANE = constants.PROBE_LANE_KICK
 
 # One collected input: which spacing it belonged to, the delta the engine
 # measured (ms), and whether the note counted as a hit.
@@ -167,7 +165,7 @@ def run_active_probe(
     rows = collector.rows
     _write_rows(rows, out_stub)
 
-    formula_constants = _decode_formula_constants(engine)
+    formula_constants = analysis.normal_formula_constants(engine.constants())
     summary = analysis.summarize_active(rows, formula_constants=formula_constants)
     _print_summary(summary)
     return summary
@@ -216,22 +214,6 @@ def _read_lane_binding(driver: InputDriver, lane: int) -> int:
         "question in the spec. Wire InputDriver.read_config_binding, or pass a "
         "known binding, before running the active probe."
     )
-
-
-def _decode_formula_constants(engine: EngineModel) -> Optional[Dict[str, float]]:
-    """Pull the normal-branch formula constants from the engine, if available.
-
-    LIVE-ONLY seam. Returns a dict with c1, c2, c3, c4, divisor, exponent so the
-    analysis can draw the predicted parabola. Returns None if the engine did not
-    surface them, in which case the summary simply omits the predicted column.
-    """
-    decoded = engine.constants()
-    keys = ("c1", "c2", "c3", "c4", "divisor")
-    if not all(key in decoded for key in keys):
-        return None
-    out = {key: float(decoded[key]) for key in keys}
-    out["exponent"] = float(decoded.get("exponent", 2.0))
-    return out
 
 
 def _write_rows(rows: List[ActiveRow], stub: str) -> Tuple[str, str]:

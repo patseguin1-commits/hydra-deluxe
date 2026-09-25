@@ -146,3 +146,19 @@ CONST_MATCH_TOLERANCE_MS = 0.5
 # Name of the target module and process.
 MODULE_NAME = "GameAssembly.dll"
 PROCESS_NAME = "Clone Hero.exe"
+
+# ---- keys of EngineModel.constants() ------------------------------------
+# engine.py writes these and experiments/analysis.py reads them, so both
+# sides spell each key from here.
+CONST_KEY_DIVISOR = "divisor"
+CONST_KEY_EXPONENT = "exponent"
+CONST_KEY_PREFIX_NORMAL = "normal_"
+CONST_KEY_PREFIX_PRECISION = "precision_"
+
+# ---- probe chart layout -------------------------------------------------
+# Note-pair spacings the probe chart lays out, and the lane it uses (the kick,
+# lane 0). probe_chart.py and experiments/active_probe.py both read these.
+PROBE_SPACINGS_MS: tuple[float, ...] = (
+    30, 50, 100, 150, 180, 185, 190, 195, 205, 211, 220, 240, 300,
+)
+PROBE_LANE_KICK = 0

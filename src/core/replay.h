@@ -207,6 +207,16 @@ std::vector<ReplayWindow> windows_for_path(const Path& path, const Song& song);
 // the path cannot be replayed faithfully.
 std::vector<ReplayWindow> windows_from_json(const nlohmann::json& path);
 
+// One score split as JSON, one key per kReplayScoreFields entry. The dump's
+// per-path "score" object and the `score` command's totals both use it.
+nlohmann::json score_json(const ReplayScore& s);
+
+// The "paths" array of a hydra_replay dump: one object per path in `all`, in
+// order, with the score split and every activation's ticks, SP meter, skips,
+// chord and squeezes. windows_from_json reads one element of it back, and
+// fcvideo reads the rest.
+nlohmann::json paths_json(const std::vector<const Path*>& all, const SongTiming& timing);
+
 // The windows a hand-typed window list may have priced too high, one
 // plain-English line each.
 //
