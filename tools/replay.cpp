@@ -191,8 +191,7 @@ json paths_json(const std::vector<const Path*>& all, const SongTiming& timing) {
             int64_t nominal = -1;
             if (act.timecode && act.sp_meter)
                 nominal = timing
-                              .plusmeasure(*act.timecode,
-                                           2 * static_cast<int64_t>(*act.sp_meter))
+                              .plusmeasure(*act.timecode, sp_bars_to_measures(*act.sp_meter))
                               .ticks();
 
             acts.push_back(json{
@@ -825,8 +824,7 @@ void check_chart(const std::string& path, const core::Rules& rules, Tally* tally
                     if (act.timecode && act.sp_meter)
                         nominal = timing
                                       .plusmeasure(*act.timecode,
-                                                   2 * static_cast<int64_t>(
-                                                           *act.sp_meter))
+                                                   sp_bars_to_measures(*act.sp_meter))
                                       .ticks();
                     std::printf(
                         "       act %zu: tick %lld  deact %lld  nominal %lld  "

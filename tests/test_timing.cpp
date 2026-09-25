@@ -169,3 +169,17 @@ TEST_CASE("timing: continuous helpers are exact, inverse, and monotone") {
     CHECK(flat.sp_end_ms(tc.ms(), 4) ==
           doctest::Approx(flat.plusmeasure(tc, 4).ms()).epsilon(1e-12));
 }
+
+TEST_CASE("timing: one SP bar is two measures") {
+    CHECK(hydra::kMeasuresPerSpBar == 2);
+    CHECK(hydra::sp_bars_to_measures(1) == 2);
+    CHECK(hydra::sp_bars_to_measures(4) == 8);
+    CHECK(hydra::sp_bars_to_measures(-1) == -2);  // one phrase back, as squeeze_rating uses it
+
+    // 4/4 at 480 ticks per beat: a measure is 1920 ticks, so two bars of SP
+    // run four measures, 7680 ticks.
+    std::map<int64_t, int64_t> tpm{{0, 1920}};
+    std::map<int64_t, double> bpm{{0, 120.0}};
+    hydra::SongTiming st(480, tpm, bpm);
+    CHECK(st.plusmeasure(st.timecode(0), hydra::sp_bars_to_measures(2)).ticks() == 7680);
+}

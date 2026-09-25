@@ -150,7 +150,7 @@ SpMeterCurve build_sp_meter_curve(const PreviewScene& scene, const SongTiming& t
 
         // SP burns two measures per bar, so track the drain in measures and
         // halve it only when writing a segment's endpoints.
-        double remaining = 2.0 * static_cast<double>(act.sp_meter);
+        double remaining = static_cast<double>(sp_bars_to_measures(act.sp_meter));
         int64_t prev_tick = act.tick;
         double prev_ms = act.ms;
         double prev_measures = timing.measures_at_tick_f(static_cast<double>(prev_tick));
@@ -158,9 +158,13 @@ SpMeterCurve build_sp_meter_curve(const PreviewScene& scene, const SongTiming& t
             const double measures = timing.measures_at_tick_f(static_cast<double>(s.tick));
             const double elapsed = measures - prev_measures;
             const double left = std::max(0.0, remaining - elapsed);
-            push_segment(curve, prev_ms, s.ms, remaining / 2.0, left / 2.0);
+            push_segment(curve, prev_ms, s.ms,
+                         remaining / static_cast<double>(kMeasuresPerSpBar),
+                         left / static_cast<double>(kMeasuresPerSpBar));
             remaining = left;
-            if (s.collection) remaining = std::min(remaining + 2.0, 2.0 * cap);
+            if (s.collection)
+                remaining = std::min(remaining + static_cast<double>(kMeasuresPerSpBar),
+                                     static_cast<double>(sp_bars_to_measures(curve.cap)));
             prev_tick = s.tick;
             prev_ms = s.ms;
             prev_measures = measures;
@@ -168,7 +172,8 @@ SpMeterCurve build_sp_meter_curve(const PreviewScene& scene, const SongTiming& t
         // The deact node is engine truth: the meter is empty exactly there, so
         // the last stretch is forced to zero and absorbs any residue left in
         // `remaining`.
-        push_segment(curve, prev_ms, act.sp_end_ms, remaining / 2.0, 0.0);
+        push_segment(curve, prev_ms, act.sp_end_ms,
+                     remaining / static_cast<double>(kMeasuresPerSpBar), 0.0);
         // The window phrases SP did not collect are the squeezed-out ones: the
         // player hits them just past the deact node, so they are banked as the
         // window closes. The next segment starts at that value, which is what

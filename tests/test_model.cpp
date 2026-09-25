@@ -10,6 +10,8 @@
 #include <vector>
 
 #include "core/model.h"
+#include "core/scoring.h"
+#include "core/timing.h"
 #include "core/backend_value.h"
 #include "core/rules.h"
 
@@ -36,6 +38,52 @@ TEST_CASE("basescore matches ChordNote.basescore") {
     CHECK(ChordNote{NoteColor::Yellow, NoteDynamicType::Ghost,
                     NoteCymbalType::Cymbal, false}
               .basescore() == 130);
+}
+
+TEST_CASE("note value: one owner for base, cymbal and dynamic points") {
+    CHECK(kNoteBasePoints == 50);
+    CHECK(kCymbalBonusPoints == 15);
+    CHECK(kSoloBonusPerNote == 100);
+    const ChordNote accent_cymbal{NoteColor::Yellow, NoteDynamicType::Accent,
+                                  NoteCymbalType::Cymbal, false};
+    CHECK(accent_cymbal.basescore() == (kNoteBasePoints + kCymbalBonusPoints) * 2);
+    CHECK(ChordNote{NoteColor::Red}.basescore() == kNoteBasePoints);
+}
+
+TEST_CASE("category_scores: the squeeze-out cut is basescore at each note's multiplier") {
+    Chord c;
+    c.at(NoteColor::Red) = ChordNote{NoteColor::Red};
+    c.at(NoteColor::Yellow) = ChordNote{NoteColor::Yellow, NoteDynamicType::Accent,
+                                        NoteCymbalType::Cymbal, false};
+    const std::vector<ChordNote> notes = c.notes(true);
+    REQUIRE(notes.size() == 2);
+    for (int combo : {0, 8, 9, 29, 45}) {
+        CAPTURE(combo);
+        // first_note (the default): only note 0 loses its SP doubling.
+        std::vector<CategoryScores> per_note;
+        const CategoryScores cs = category_scores(c, combo, &per_note);
+        const int first_cut = notes[0].basescore() * to_multiplier(combo + 1);
+        CHECK(cs.sqout_reduction == first_cut);
+        REQUIRE(per_note.size() == 2);
+        CHECK(per_note[0].sqout_reduction == first_cut);
+        CHECK(per_note[1].sqout_reduction == 0);
+        CHECK(cs.sqout_sp() == cs.sp - cs.sqout_reduction);
+
+        // whole_chord: every note loses it, each at its own multiplier.
+        std::vector<CategoryScores> whole_per_note;
+        const CategoryScores whole =
+            category_scores(c, combo, &whole_per_note, core::SqOutRule::WholeChord);
+        int whole_cut = 0;
+        for (size_t i = 0; i < notes.size(); ++i) {
+            const int note_cut =
+                notes[i].basescore() * to_multiplier(combo + 1 + static_cast<int>(i));
+            REQUIRE(whole_per_note.size() == 2);
+            CHECK(whole_per_note[i].sqout_reduction == note_cut);
+            whole_cut += note_cut;
+        }
+        CHECK(whole.sqout_reduction == whole_cut);
+        CHECK(whole.sqout_sp() == whole.sp - whole.sqout_reduction);
+    }
 }
 
 TEST_CASE("group_thousands matches Python {:,}") {

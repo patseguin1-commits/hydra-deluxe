@@ -115,6 +115,11 @@ private:
     double ms_ = 0.0;
 };
 
+// One bar of Star Power lasts two measures. Every "how long does this much SP
+// run" call to plusmeasure goes through this, so the rule has one home.
+inline constexpr int64_t kMeasuresPerSpBar = 2;
+constexpr int64_t sp_bars_to_measures(int64_t bars) { return kMeasuresPerSpBar * bars; }
+
 // A song's timing context: resolution plus the two indexes, built once and
 // reused to make Timecodes. The maps must contain a tick-0 entry (as every
 // real chart does), or construction throws std::out_of_range — matching the

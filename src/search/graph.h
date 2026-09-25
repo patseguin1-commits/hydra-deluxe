@@ -21,10 +21,6 @@
 
 namespace hydra {
 
-// Reachable-squeeze horizon in ms. Exposed so the batch CLI can print it in
-// its settings header.
-constexpr double kSqueezeWindowMs = 500.0;
-
 // Which game version's rule decides whether a drum fill spawns at all.
 //
 // A fill only appears in-game if the player's SP meter was already full by

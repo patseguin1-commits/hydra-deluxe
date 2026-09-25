@@ -9,10 +9,7 @@
 #include "core/scoring.h"
 #include "core/squeeze_rating.h"
 #include "core/timing.h"
-// kSqueezeWindowMs: how far from the Star Power end the engine will even look
-// for a reachable squeeze. The warning below uses the engine's own horizon
-// rather than a number picked here.
-#include "search/graph.h"
+#include "core/model.h"  // kSqueezeWindowMs, the engine's squeeze horizon
 
 namespace hydra {
 
@@ -131,7 +128,7 @@ ReplayResult replay_path(const Song& song, std::vector<ReplayWindow> windows,
                 continue;
             ++sp_claims;
             sp_points += core::backend_row_value(
-                offset, sg.sp, sg.sp - sg.sqout_reduction, pos,
+                offset, sg.sp, sg.sqout_sp(), pos,
                 rules.backend_leeway_ms);
         }
         row.in_sp = sp_claims > 0;
@@ -139,7 +136,8 @@ ReplayResult replay_path(const Song& song, std::vector<ReplayWindow> windows,
         row.points.base = sg.base;
         row.points.combo = sg.combo;
         row.points.sp = sp_points;
-        row.points.solo = ts.flag_solo ? 100LL * ts.chord.count() : 0;
+        row.points.solo =
+            ts.flag_solo ? static_cast<int64_t>(kSoloBonusPerNote) * ts.chord.count() : 0;
         row.points.accent = sg.accent;
         row.points.ghost = sg.ghost;
 
