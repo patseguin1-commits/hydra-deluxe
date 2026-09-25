@@ -23,6 +23,18 @@ struct CategoryScores {
     int accent = 0;
     int ghost = 0;
     int sqout_reduction = 0;
+    // The combo multiplier applied to the chord's first note (base-sorted),
+    // the same note the SqOut calculation reads. Per note, that note's own.
+    int multiplier = 1;
+    // The multiplier applied to the chord's last note: what the game's disc
+    // shows once the whole chord is hit. Per note, the same as `multiplier`.
+    int multiplier_after = 1;
+    // Per note only (left 0 on the chord total): the points this note's
+    // ghost or accent earns, multiplier included -- the pad's 50 plus the
+    // cymbal's 15 when the note is a dynamic cymbal. A mis-hit dynamic note
+    // loses exactly this, twice over inside Star Power. `accent` and `ghost`
+    // above hold only the pad's 50, before the multiplier.
+    int dynamics_bonus = 0;
 };
 
 // Notes are read base-sorted (Chord::notes(true)); the tie order is

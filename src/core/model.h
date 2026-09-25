@@ -47,6 +47,7 @@ enum class NoteCymbalType { Normal = 1, Cymbal = 2 };
 bool allows_cymbals(NoteColor c);
 bool allows_dynamics(NoteColor c);
 std::string color_str(NoteColor c);         // "Kick"/"Red"/...
+std::string dynamic_str(NoteDynamicType t); // "none"/"ghost"/"accent"
 std::string color_notationstr(NoteColor c); // "K"/"R"/"Y"/"B"/"G"
 NoteCymbalType cymbal_flip(NoteCymbalType t);
 

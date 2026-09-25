@@ -418,7 +418,10 @@ int cmd_score(const Args& a) {
         for (const ReplayNote& n : c.notes)
             notes.push_back(json{{"color", color_str(n.color)},
                                  {"cymbal", n.cymbal},
-                                 {"sp_points", n.sp_points}});
+                                 {"sp_points", n.sp_points},
+                                 {"multiplier", n.multiplier},
+                                 {"dynamics_bonus", n.dynamics_bonus},
+                                 {"dynamic", dynamic_str(n.dynamic)}});
         json cum = score_json(c.cum);
         cum["total"] = c.cum.total();
         chords.push_back(json{
@@ -436,6 +439,7 @@ int cmd_score(const Args& a) {
             {"is_sp_phrase_end", c.is_sp_phrase_end},
             {"combo_before", c.combo_before},
             {"multiplier", c.multiplier},
+            {"multiplier_after", c.multiplier_after},
             {"in_sp", c.in_sp},
             {"points", score_json(c.points)},
             {"cum", cum},

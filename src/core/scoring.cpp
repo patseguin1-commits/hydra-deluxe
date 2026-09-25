@@ -22,6 +22,8 @@ CategoryScores category_scores(const Chord& chord, int combo,
     int combospdynamic_note = 0, combospdynamic_cymbal = 0;
 
     int sqout_reduction = 0;
+    int first_multiplier = to_multiplier(combo);
+    int last_multiplier = first_multiplier;
 
     const std::vector<ChordNote> ordering = chord.notes(true);
     if (per_note) {
@@ -39,6 +41,8 @@ CategoryScores category_scores(const Chord& chord, int combo,
         combo += 1;
         const int combo_multiplier = to_multiplier(combo);
         const int extra = combo_multiplier - 1;
+        if (i == 0) first_multiplier = combo_multiplier;
+        last_multiplier = combo_multiplier;
 
         const int basevalue = 50;
         const int cymbvalue = 15;
@@ -83,6 +87,14 @@ CategoryScores category_scores(const Chord& chord, int combo,
                               dyn_cymb * extra;
             note_scores.accent = is_accent ? basevalue : 0;
             note_scores.ghost = is_ghost ? basevalue : 0;
+            note_scores.multiplier = combo_multiplier;
+            note_scores.multiplier_after = combo_multiplier;
+            // The dynamics terms the totals above add for this note:
+            // dynamic_note_* and combodynamic_note (the pad's basevalue) plus
+            // dynamic_cymbal and combodynamic_cymbal (dyn_cymb), each paid
+            // once at 1x and once more per extra.
+            note_scores.dynamics_bonus =
+                ((is_dynamic ? basevalue : 0) + dyn_cymb) * combo_multiplier;
             note_scores.sqout_reduction = note_sqout;
             per_note->push_back(note_scores);
         }
@@ -98,6 +110,8 @@ CategoryScores category_scores(const Chord& chord, int combo,
     out.accent = dynamic_note_accent;
     out.ghost = dynamic_note_ghost;
     out.sqout_reduction = sqout_reduction;
+    out.multiplier = first_multiplier;
+    out.multiplier_after = last_multiplier;
     return out;
 }
 

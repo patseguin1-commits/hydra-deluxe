@@ -93,7 +93,8 @@ ReplayResult replay_path(const Song& song, std::vector<ReplayWindow> windows,
         row.is_solo = ts.flag_solo;
         row.is_sp_phrase_end = ts.flag_sp;
         row.combo_before = combo;
-        row.multiplier = to_multiplier(combo);
+        row.multiplier = sg.multiplier;  // what category_scores applied
+        row.multiplier_after = sg.multiplier_after;
 
         const std::vector<ChordNote> ordering = ts.chord.notes(true);
         row.notes.reserve(ordering.size());
@@ -102,6 +103,10 @@ ReplayResult replay_path(const Song& song, std::vector<ReplayWindow> windows,
             note.color = ordering[k].colortype;
             note.cymbal = ordering[k].is_cymbal();
             note.sp_points = k < per_note.size() ? per_note[k].sp : 0;
+            note.multiplier = k < per_note.size() ? per_note[k].multiplier : 1;
+            note.dynamics_bonus =
+                k < per_note.size() ? per_note[k].dynamics_bonus : 0;
+            note.dynamic = ordering[k].dynamictype;
             row.notes.push_back(note);
         }
 
