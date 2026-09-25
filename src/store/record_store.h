@@ -1,5 +1,5 @@
-// SQLite-backed storage for analysis records — the C++ port of hydra/hystore.py,
-// on a redesigned binary format (see docs/CPP_PORT_PLAN.md Phase 4). Old
+// SQLite-backed storage for analysis records, in the binary blob format of
+// store/serialize.h. Old
 // Python-era .db files are not read; a fresh scan populates a new one.
 //
 // Three tables carry an analysis (schema user_version 2):
@@ -47,8 +47,8 @@ struct sqlite3_stmt;
 
 namespace hydra::store {
 
-// The summary columns computed from a record's best path, matching
-// hystore._SUMMARY_COLUMNS / summarize_path. All fields are unset when the
+// The summary columns computed from a record's best path. All fields are
+// unset when the
 // record has no paths (an empty/incompatible result).
 struct PathSummary {
     std::optional<int64_t> score;
@@ -142,7 +142,7 @@ struct RecordKey {
 
 // A result's row, fully computed and ready to insert — the expensive half of
 // a save (summarizing + flattening), kept free of any db connection so a
-// worker thread can build it off the main store. Mirrors hystore.prepare_row.
+// worker thread can build it off the main store.
 struct PreparedRow {
     std::string hyhash;
     std::string chartmode;
@@ -165,7 +165,7 @@ struct PreparedRow {
 // record carries.
 PreparedRow prepare_row(const RecordKey& key, const HydraRecord& record);
 
-// hymisc.RECORD_VERSION equivalent: the app version that produced a row. For
+// The app version that produced a row. For
 // the store and its own tests only -- production callers must not compare
 // version stamps themselves; ask a lookup for its RecordStatus instead.
 std::string current_record_version();
@@ -211,10 +211,8 @@ enum class SortColumn {
     SqInCount, SqOutCount, PathCount, RefName, RefArtist, RefCharter,
 };
 
-// One scanned chart file, as browsed in the library table. Mirrors the
-// `charts` table hydra_app.py's scan_library()/hyutil.ScanItem builds — that
-// table lives in the GUI layer in Python (not hystore.py), so it wasn't part
-// of the Phase 4 port; it's added here since it belongs in the same db file.
+// One scanned chart file, as browsed in the library table. It lives in the
+// same db file as the records.
 // `sig` is the chart files' size+mtime fingerprint that powers the rescan
 // cache (see chart_library_cache); the UI ignores it.
 struct ChartLibraryEntry {
@@ -265,7 +263,7 @@ public:
     // ---- writing ----------------------------------------------------------
 
     // Registers a song so records can be stored against it. Idempotent (INSERT
-    // OR IGNORE), matching hystore.add_song.
+    // OR IGNORE).
     void add_song(const std::string& hyhash, const std::string& ref_name,
                  const std::string& ref_artist, const std::string& ref_charter,
                  const Song& song);
@@ -305,8 +303,8 @@ public:
     // different settings.
     bool has_record(const RecordKey& key);
 
-    // One record's song identity, as yielded by for_each_blob. Mirrors the
-    // songmeta dict hystore.iter_blobs builds per row, plus the row's
+    // One record's song identity, as yielded by for_each_blob: the song's
+    // metadata row, plus the row's
     // hyversion and the status it implies (the C++ HydraRecord doesn't carry
     // a version).
     struct BlobRow {
@@ -323,8 +321,8 @@ public:
     // Calls fn once per stored record (optionally filtered to one chartmode,
     // always filtered to the wanted cap), in insertion order. Every row is
     // yielded, stale ones included; the record pointer is null unless
-    // meta.status is Ready, so a stale row's blob is never decoded. Mirrors
-    // hystore.iter_blobs: timecodes are NOT restored (the report only needs
+    // meta.status is Ready, so a stale row's blob is never decoded. Timecodes
+    // are NOT restored (the report only needs
     // pathstrings and summaries, which never read them).
     //
     // The lock is taken and released once per record, never held across fn --
@@ -388,8 +386,8 @@ public:
 
     // ---- chart library (scan results) ----------------------------------
 
-    // Replaces the whole library with `items`, matching hydra_app.py's
-    // scan_library(): a scan always fully supersedes the previous one.
+    // Replaces the whole library with `items`: a scan always fully
+    // supersedes the previous one.
     void rebuild_chart_library(const std::vector<ChartLibraryEntry>& items);
 
     // The previous scan's rows as a rescan cache (empty on a fresh db, or a

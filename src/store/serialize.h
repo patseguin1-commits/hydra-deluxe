@@ -1,9 +1,7 @@
-// Binary record serialization — replaces hystore.py's json+zlib blob with a
-// versioned, hand-rolled binary format (see docs/CPP_PORT_PLAN.md Phase 4).
+// Binary record serialization: a versioned, hand-rolled binary format.
 //
 // A record's blob is written by write_record() and read back by
-// read_record(); both walk the same Path tree shape as hydata.json_save /
-// json_load (multsqueezes, activations with trimmed display backends,
+// read_record(); both walk the Path tree (multsqueezes, activations with trimmed display backends,
 // sqinouts, recursive variants), but as flat binary rather than JSON. The
 // format starts with a version tag so a future layout change can be detected
 // instead of misread.
@@ -11,7 +9,7 @@
 // A deserialized record's Activation/BackendSqueeze timecodes carry only raw
 // ticks (Timecode::raw) — the blob has no tempo map of its own. Call
 // restore_timecodes() with the song's SongTiming (from songmeta) to resolve
-// them into full Timecodes, mirroring hystore._restore_timecodes.
+// them into full Timecodes.
 
 #ifndef HYDRA_STORE_SERIALIZE_H
 #define HYDRA_STORE_SERIALIZE_H

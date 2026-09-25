@@ -203,6 +203,52 @@ TEST_CASE(".chart: [Events] section markers become practice sections") {
     CHECK(plain.practice_sections.empty());
 }
 
+// In a .chart the `E soloend` event sits on the solo's last note, so that note
+// is in the solo. The parser runs solo end after the notes at its tick.
+TEST_CASE(".chart: the note on the solo end tick is in the solo") {
+    const std::string text =
+        "[Song]\n{\n  Resolution = 192\n}\n"
+        "[SyncTrack]\n{\n  0 = TS 4\n  0 = B 120000\n}\n"
+        "[ExpertDrums]\n{\n"
+        "  0 = E solo\n  0 = N 1 0\n"
+        "  192 = N 2 0\n"
+        "  384 = N 3 0\n  384 = E soloend\n"
+        "  576 = N 4 0\n"
+        "}\n";
+    const std::vector<uint8_t> data(text.begin(), text.end());
+    Song song = load_songbytes_chart(data, true, true);
+    REQUIRE(song.sequence.size() == 4);
+    CHECK(song.sequence[2].flag_solo);
+    CHECK_FALSE(song.sequence[3].flag_solo);
+}
+
+// In a .mid the solo is a held marker note (103); its note-off tick is where
+// the marker stops covering, so a note on that tick is outside the solo.
+TEST_CASE(".mid: the note on the solo marker's note-off tick is outside the solo") {
+    using namespace testmidi;
+    // Delta 480 (one beat at 480 tpqn) as a two-byte variable-length number.
+    const std::vector<uint8_t> beat = {0x83, 0x60};
+    auto at_beat = [&](std::vector<uint8_t> ev) {  // replace the leading 0 delta
+        ev.erase(ev.begin());
+        std::vector<uint8_t> out = beat;
+        out.insert(out.end(), ev.begin(), ev.end());
+        return out;
+    };
+    const std::vector<uint8_t> track = concat({
+        track_name("PART DRUMS"), set_tempo(),
+        note_on(103, 100), note_on(97, 100),   // tick 0: solo on, Red
+        at_beat(note_on(98, 100)),             // tick 480: Yellow
+        at_beat(note_on(103, 0)),              // tick 960: solo marker off
+        note_on(99, 100),                      // tick 960: Blue
+        end_of_track(),
+    });
+    Song song = load_songbytes_mid(smf(track), true, true);
+    REQUIRE(song.sequence.size() == 3);
+    CHECK(song.sequence[0].flag_solo);
+    CHECK(song.sequence[1].flag_solo);
+    CHECK_FALSE(song.sequence[2].flag_solo);
+}
+
 namespace {
 
 void put_varlen(std::vector<uint8_t>& out, uint32_t v) {

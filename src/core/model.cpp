@@ -346,6 +346,15 @@ MultSqueeze::MultSqueeze(Chord chord, int combo)
     validate();
 }
 
+// A multiplier squeeze is a chord whose notes straddle a to_multiplier step
+// (combos 10, 20, 30): combo_ is the combo before the chord, and note i scores
+// at to_multiplier(combo_ + i). For 2- and 3-note chords, the combo set below
+// plus the mod-10 rule (the last note lands on the step or one past it)
+// accept exactly the straddling chords; the test "MultSqueeze accepts exactly
+// the 2- and 3-note chords that straddle a multiplier step" checks this
+// against to_multiplier. For 4-note chords only combos 7, 17 and 27 are
+// accepted, and 5-note chords never are, although both also straddle from
+// other combos. Why the set stops there is not recorded; it is kept fixed.
 void MultSqueeze::validate() const {
     switch (combo_) {
         case 7: case 8: case 17: case 18: case 27: case 28: break;
@@ -606,8 +615,8 @@ double Path::avg_mult() const {
 
 namespace {
 
-// Depth-first walk over a root list and its nested variants, mirroring
-// hydata.HydraRecord.all_paths(). Shared by all_paths() and all_allzero_paths()
+// Depth-first walk over a root list and its nested variants, each path
+// before its variants. Shared by all_paths() and all_allzero_paths()
 // so both traversals stay identical.
 std::vector<const Path*> flatten_paths(const std::vector<Path>& roots) {
     std::vector<const Path*> out;

@@ -3,6 +3,7 @@
 // hydra_rules.ini (app/rules_file.h). The defaults are the values Hydra always
 // used, so an absent file changes nothing. A stored record carries
 // fingerprint() of the rules it ran under (docs/adr/0014).
+// In hydra_rules.ini each field is set by its own name, e.g. `max_tied_paths = 4`.
 
 #ifndef HYDRA_CORE_RULES_H
 #define HYDRA_CORE_RULES_H

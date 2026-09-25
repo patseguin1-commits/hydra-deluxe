@@ -28,7 +28,7 @@ struct SearchSettings {
     // the ladder that raises the ceiling until the score settles.
     std::optional<int> sp_cap = kCloneHeroSpCap;
     // Auto only: seconds before a too-slow ladder rung is abandoned
-    // (hymisc.SP_CAP_TIME_BUDGET). nullopt runs every rung to completion.
+    // (auto_budget_s in hydra_rules.ini). nullopt runs every rung to completion.
     std::optional<double> time_budget_s;
     // Score fills by Clone Hero 1.0's spawn deadline instead of 1.1's flat 4
     // beats (FillDeadlineRule in search/graph.h). CLI-only: it is not part of
@@ -68,7 +68,7 @@ std::vector<Path> search_target(const Song& song, const SearchSettings& settings
 // bars: 4 is Clone Hero's rule and runs exactly the classic single pass; any
 // other number runs a single pass at that ceiling; nullopt is Auto, the
 // self-settling ladder (settings.time_budget_s applies only there). Throws
-// hydra::ChartFileError when the song has no notes, matching hyutil._analyze.
+// hydra::ChartFileError when the song has no notes.
 HydraRecord analyze_chart(const Song& song, const SearchSettings& settings,
                           const std::function<void(float)>& on_progress = {});
 

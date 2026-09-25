@@ -120,7 +120,7 @@ struct EdgeView {
     int64_t sqinout_time, sqout_time, sqin_time;
 };
 
-// ---- engine data structures (verbatim from native/hydra_search.cpp) ------
+// ---- engine data structures ---------------------------------------------
 
 struct Act {
     int32_t parent;
@@ -189,7 +189,7 @@ struct Path {
     double diff_prefix;
 };
 
-// The decision-log output (was hy_out_*), rebuilt into hydata Paths locally.
+// The decision-log output (was hy_out_*), rebuilt into core Paths (core/model.h) locally.
 struct OutPath {
     int32_t score_base, score_combo, score_sp, score_solo, score_accents,
         score_ghosts;
@@ -894,6 +894,12 @@ void Engine::reduce_iteration_paths() {
 
         if (p.buffered != 0) continue;
 
+        // Group by what decides the path's future: its SP meter, or its SP end
+        // while active. sp_ready_ms is left out, although branch_activate reads
+        // it for the calibration-fill window. Measured 2026-09 over the corpus
+        // with sp_ready_ms added to the key: 0 score changes and 0
+        // variant-list changes across 96 charts (the corpus's 97, less one
+        // that hydra_replay could not open, skipped on both sides).
         const bool is_sp = !is_complete && node(p.node).is_sp;
         const int64_t sp_value =
             is_complete ? 0 : (is_sp ? p.sp_end_time : (int64_t)p.sp);
@@ -1078,6 +1084,8 @@ bool Engine::run() {
         // finishing lead path can't make the bar step backward.
         if (progress_cb_ && !en_.nodes.empty()) {
             float f = static_cast<float>(furthest) / static_cast<float>(en_.nodes.size());
+            // Report every half percent: fine enough for a smooth bar, and it
+            // bounds the callback (which may throw to cancel) to 200 calls.
             if (f >= progress_reported_ + 0.005f) {
                 progress_reported_ = f;
                 progress_cb_(f);
@@ -1156,7 +1164,7 @@ bool Engine::run() {
     return true;
 }
 
-// ---- rebuild the decision log into hydata Paths -------------------------
+// ---- rebuild the decision log into core Paths (core/model.h) -------------
 // Inflates the engine's flat decision log back into hydra::Path objects,
 // reading the graph objects straight off the enumeration.
 

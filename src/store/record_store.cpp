@@ -893,7 +893,7 @@ int RecordStore::import_legacy_uncapped(const std::string& uncapped_db_path) {
 
 void RecordStore::add_missing_columns() {
     // Bring an older on-disk copy of this schema up to the current summary
-    // column set, the same way hystore._add_missing_columns does.
+    // column set by adding the columns it lacks.
     std::vector<std::string> existing;
     Stmt info = prepare(db_, "PRAGMA table_info(records)");
     while (sqlite3_step(info) == SQLITE_ROW) existing.push_back(column_text(info, 1));
@@ -1146,8 +1146,7 @@ RecordLookup RecordStore::get_record(const RecordKey& key) {
         out.hyversion = best->hyversion;
         // Stamped by a different version, migrated in with unknown settings,
         // or holding a path tree in an older layout: nothing stored is
-        // decoded at all, matching hydata.json_load's short-circuit on
-        // hyversion mismatch. Callers see Stale and prompt a re-analyze.
+        // decoded at all. Callers see Stale and prompt a re-analyze.
         if (!row_is_ready(best->hyversion, best->ms_enabled, best->structure,
                           rules_fingerprint_)) {
             out.status = RecordStatus::Stale;

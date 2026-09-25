@@ -1,4 +1,4 @@
-// Domain model — the C++ port of hydra/hydata.py.
+// Domain model: charts, chords, squeezes, activations and paths.
 //
 // The note/chord/path/record types the parser fills and the search produces.
 // The *string* forms here (Chord::code, Path::pathstring/pathstring_verbose,
@@ -6,9 +6,8 @@
 // match Python byte-for-byte: comma-grouped scores, int() truncation on ms, the
 // exact +/- squeeze symbols and [KRYBG] slot layout.
 //
-// The JSON save/load path from hydata.py is intentionally not ported — Phase 4
-// replaces it with a binary format — but Chord::code / Chord::from_code (which
-// that path used) survive because the parser and the chord tables need them.
+// Records are stored in the binary format of store/serialize.h. Chord::code
+// and Chord::from_code stay because the parser and the chord tables need them.
 
 #ifndef HYDRA_CORE_MODEL_H
 #define HYDRA_CORE_MODEL_H
@@ -30,7 +29,7 @@ namespace hydra {
 // whose scores are not achievable in game.
 inline constexpr int kCloneHeroSpCap = 4;
 
-// A chart file that does not work, mirroring hymisc.ChartFileError. Chord and
+// A chart file that does not work. Chord and
 // the parsers raise it; the parsers swallow it per-op exactly as Python does.
 class ChartFileError : public std::runtime_error {
 public:
@@ -183,8 +182,8 @@ inline bool is_e0(double e_offset, int skips) {
 // How hard an E0 activation's calibration fill is, in ms.
 inline double calibration_fill_difficulty(double e_offset) { return -e_offset + 0.0; }
 
-// A SqIn (+) or SqOut (-), mirroring hydata.SqIn/SqOut. Equality compares the
-// offset only, exactly like SPSqueeze.__eq__.
+// A SqIn (+) or SqOut (-): which way the note is squeezed across the SP end,
+// and by how many ms.
 struct SPSqueeze {
     SqueezeKind kind;
     double offset_ms = 0.0;
@@ -200,9 +199,6 @@ struct SPSqueeze {
         return kind == SqueezeKind::SqIn ? "SqIn" : "SqOut";
     }
     std::string description() const;
-
-    bool operator==(const SPSqueeze& o) const { return offset_ms == o.offset_ms; }
-    bool operator!=(const SPSqueeze& o) const { return !(*this == o); }
 };
 
 struct FrontendSqueeze {
@@ -330,13 +326,14 @@ struct Activation {
     std::optional<double> difficulty() const;
     bool is_difficult() const;
 
-    // True for the row sitting on sqout_tick, the chord this activation squeezed out.
+    // Is this backend the note squeezed out of SP? Compares against the
+    // sqout_tick the engine stored (record format v6), so no display re-derives it.
     bool is_sqout_backend(const BackendSqueeze& bsq) const;
 
     // Backends worth keeping: those near the deactivation, plus whatever note
-    // is being squeezed out of SP however far out it lands. Mirrors
-    // hydata.Activation.display_backends; used both by the details view and to
-    // trim a record's backends before storing it.
+    // is being squeezed out of SP however far out it lands. The details view
+    // shows exactly these, and path_binary stores only these, so a stored
+    // record shows the same rows as a fresh one.
     std::vector<BackendSqueeze> display_backends() const;
 };
 
@@ -350,7 +347,7 @@ struct Activation {
 
 struct Path {
     std::vector<MultSqueeze> multsqueezes;
-    std::vector<Activation> activations;   // hydata's _activations
+    std::vector<Activation> activations;
     int notecount = 0;
     int leftover_sp = 0;
     int skipped_ghosts = 0;
@@ -390,8 +387,8 @@ struct Path {
     // whose activations carry no skip count.
     bool is_allzero() const;
 
-    // Points-per-note-scored average, matching hydata.Path.avg_mult. 0.0 for a
-    // path with no scoring notes (avoids the ZeroDivisionError guard).
+    // Points per scored note, on average. 0.0 for a path with no scoring
+    // notes, instead of dividing by zero.
     double avg_mult() const;
 };
 
@@ -422,7 +419,7 @@ struct HydraRecord {
     Path& best_path() { return paths.at(0); }
 
     // Depth-first traversal of the path tree (root paths + their nested
-    // variants), mirroring hydata.HydraRecord.all_paths(). Pointers into
+    // variants), each path before its variants. Pointers into
     // `paths`; valid until the record is modified or moved.
     std::vector<const Path*> all_paths() const;
 
