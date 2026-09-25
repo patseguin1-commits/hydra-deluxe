@@ -13,6 +13,7 @@
 #include "corpus_util.h"
 #include "midi_util.h"
 #include "multidiff_chart.h"
+#include "parse/chart_files.h"
 #include "parse/song.h"
 
 #ifndef HYDRA_TESTDATA_DIR
@@ -363,4 +364,24 @@ TEST_CASE("mid: Won't Get Fooled Again (O) has 36 ghost kicks") {
     }
     CHECK(codes_ok);
     CHECK(ticks_ok);
+}
+
+TEST_CASE("chart_files: loose-folder notes names match in any case") {
+    CHECK(notes_file_format("notes.mid") == ChartFormat::Mid);
+    CHECK(notes_file_format("NOTES.MID") == ChartFormat::Mid);
+    CHECK(notes_file_format("Notes.Chart") == ChartFormat::Chart);
+    CHECK(notes_file_format("notes.sng") == ChartFormat::None);
+    CHECK(notes_file_format("mynotes.mid") == ChartFormat::None);
+    CHECK(is_song_ini("song.ini"));
+    CHECK(is_song_ini("Song.INI"));
+    CHECK_FALSE(is_song_ini("song.ini.bak"));
+}
+
+TEST_CASE("chart_files: a path's format comes from its extension in any case") {
+    CHECK(chart_format_of("C:\\songs\\a\\notes.mid") == ChartFormat::Mid);
+    CHECK(chart_format_of("x.CHART") == ChartFormat::Chart);
+    CHECK(chart_format_of("C:\\songs\\bundle.SNG") == ChartFormat::Sng);
+    CHECK(chart_format_of("pack.Srb") == ChartFormat::Srb);
+    CHECK(chart_format_of("notes.txt") == ChartFormat::None);
+    CHECK(chart_format_of("mid") == ChartFormat::None);
 }

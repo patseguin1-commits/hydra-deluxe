@@ -19,6 +19,7 @@
 #include "app/dynamics_breakdown.h"
 #include "core/winstr.h"
 #include "parse/srb.h"
+#include "parse/chart_files.h"
 #include "search/pather.h"
 
 namespace hydra::app {
@@ -397,12 +398,12 @@ std::pair<std::vector<ScanItem>, std::vector<std::string>> discover_charts(
             std::vector<const DirEntry*> subdirs;
             for (const DirEntry& e : entries) {
                 if (e.is_dir) subdirs.push_back(&e);
-                else if (e.name == "notes.mid") found_mid = &e;
-                else if (e.name == "notes.chart") found_chart = &e;
-                else if (e.name == "song.ini") found_ini = &e;
-                else if (ends_with_ci(e.name, ".sng"))
+                else if (notes_file_format(e.name) == ChartFormat::Mid) found_mid = &e;
+                else if (notes_file_format(e.name) == ChartFormat::Chart) found_chart = &e;
+                else if (is_song_ini(e.name)) found_ini = &e;
+                else if (chart_format_of(e.name) == ChartFormat::Sng)
                     found_archives.push_back({&e, ChartKind::Sng});
-                else if (ends_with_ci(e.name, ".srb"))
+                else if (chart_format_of(e.name) == ChartFormat::Srb)
                     found_archives.push_back({&e, ChartKind::Srb});
             }
 

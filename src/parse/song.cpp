@@ -11,6 +11,7 @@
 
 #include "core/winstr.h"  // read_file_bytes
 #include "parse/midi.h"
+#include "parse/chart_files.h"
 #include "parse/srb.h"
 
 namespace hydra {
@@ -1153,15 +1154,11 @@ Song load_songpath_srb(const std::string& path, bool pro, bool bass2x,
     std::vector<uint8_t> notebytes = srb_inflate_stream(
         buf.data(), buf.size(), notes_offset, kSrbMaxStream, nullptr);
 
-    std::string fn = ascii_casefold(md.notes_filename);
-    auto fn_ends_with = [&fn](const char* suf) {
-        size_t n = std::strlen(suf);
-        return fn.size() >= n && fn.compare(fn.size() - n, n, suf) == 0;
-    };
+    const ChartFormat named = chart_format_of(md.notes_filename);
     bool is_mid;
-    if (fn_ends_with(".mid"))
+    if (named == ChartFormat::Mid)
         is_mid = true;
-    else if (fn_ends_with(".chart"))
+    else if (named == ChartFormat::Chart)
         is_mid = false;
     else  // Unexpected filename: sniff the payload instead.
         is_mid = notebytes.size() >= 4 && std::memcmp(notebytes.data(), "MThd", 4) == 0;
@@ -1172,15 +1169,13 @@ Song load_songpath_srb(const std::string& path, bool pro, bool bass2x,
 
 Song load_songpath(const std::string& path, bool pro, bool bass2x,
                    Difficulty difficulty, const core::Rules& rules) {
-    std::string low = ascii_casefold(path);
-    auto ends_with = [&low](const char* suf) {
-        size_t n = std::strlen(suf);
-        return low.size() >= n && low.compare(low.size() - n, n, suf) == 0;
-    };
-    if (ends_with(".mid")) return load_songpath_mid(path, pro, bass2x, difficulty, rules);
-    if (ends_with(".chart")) return load_songpath_chart(path, pro, bass2x, difficulty, rules);
-    if (ends_with(".sng")) return load_songpath_sng(path, pro, bass2x, difficulty, rules);
-    if (ends_with(".srb")) return load_songpath_srb(path, pro, bass2x, difficulty, rules);
+    switch (chart_format_of(path)) {
+        case ChartFormat::Mid: return load_songpath_mid(path, pro, bass2x, difficulty, rules);
+        case ChartFormat::Chart: return load_songpath_chart(path, pro, bass2x, difficulty, rules);
+        case ChartFormat::Sng: return load_songpath_sng(path, pro, bass2x, difficulty, rules);
+        case ChartFormat::Srb: return load_songpath_srb(path, pro, bass2x, difficulty, rules);
+        case ChartFormat::None: break;
+    }
     throw std::runtime_error("unexpected chart type: " + path);
 }
 

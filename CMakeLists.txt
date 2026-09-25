@@ -136,6 +136,7 @@ add_library(hydra_core STATIC
     src/parse/midi.cpp
     src/parse/song.cpp
     src/parse/srb.cpp
+    src/parse/chart_files.cpp
     src/search/graph.cpp
     src/search/engine.cpp
     src/search/pather.cpp
