@@ -33,6 +33,7 @@ void PreviewController::open(const store::ChartLibraryEntry& entry, bool pro,
                              bool bass2x, Difficulty difficulty,
                              const Path* path, int sp_cap,
                              const core::Rules& rules) {
+    rules_ = rules;
     if (active_ && open_key_ == entry.md5) {
         std::string key = overlay_key(path, sp_cap);
         if (key == path_key_) return;  // same chart, same overlay: nothing to do
@@ -43,7 +44,7 @@ void PreviewController::open(const store::ChartLibraryEntry& entry, bool pro,
         // the song is here the overlay is rebuilt on the spot, which leaves the
         // audio and the playhead alone.
         if (!job_ && song_ && !song_->is_empty()) {
-            scene_ = hydra::app::build_preview_scene(*song_, path, sp_cap_);
+            scene_ = hydra::app::build_preview_scene(*song_, path, sp_cap_, rules_);
             scene_path_key_ = path_key_;
             scene_dirty_ = true;
         }
@@ -128,7 +129,8 @@ void PreviewController::poll() {
     // The Paths tab can change the selection while the load runs, and the job
     // built its scene from the path it was started with.
     if (ok && scene_path_key_ != path_key_) {
-        scene_ = hydra::app::build_preview_scene(*song_, path_ ? &*path_ : nullptr, sp_cap_);
+        scene_ = hydra::app::build_preview_scene(*song_, path_ ? &*path_ : nullptr, sp_cap_,
+                                                 rules_);
         scene_path_key_ = path_key_;
         scene_dirty_ = true;
     }
@@ -189,6 +191,17 @@ double PreviewController::length_ms() const { return transport_.length_ms(); }
 
 void PreviewController::seek_ms(double ms) { transport_.seek_ms(ms); }
 
+void PreviewController::jump_ms(double delta_ms) {
+    if (!active_ || job_) return;  // nothing loaded yet
+    transport_.seek_ms(transport_.now_ms() + delta_ms);
+}
+
+void PreviewController::step_ticks(int delta_ticks) {
+    if (!active_ || job_) return;
+    transport_.pause();
+    transport_.seek_ms(hydra::app::step_tick_ms(scene_, transport_.now_ms(), delta_ticks));
+}
+
 void PreviewController::set_scrubbing(bool held) {
     if (held == scrubbing_) return;
     scrubbing_ = held;
@@ -213,6 +226,10 @@ void PreviewController::set_volume(int percent) {
 hydra::app::PreviewTimeBox PreviewController::time_box() const {
     return hydra::app::build_time_box(scene_, transport_.now_ms(),
                                       transport_.length_ms());
+}
+
+hydra::app::PreviewScoreBox PreviewController::score_box() const {
+    return hydra::app::build_score_box(scene_, transport_.now_ms());
 }
 
 const render::PreviewConfig& PreviewController::preview_config() const {

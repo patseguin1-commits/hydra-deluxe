@@ -50,7 +50,7 @@ void PreviewLoadJob::run() {
         }
         step_.store(Step::Building);
         const Path* path = path_ ? &*path_ : nullptr;
-        app::PreviewScene scene = app::build_preview_scene(source.song, path, sp_cap_);
+        app::PreviewScene scene = app::build_preview_scene(source.song, path, sp_cap_, rules_);
         result_ = Result{std::move(scene), std::move(mixed), offset_ms, std::move(source.song)};
         return true;
     });

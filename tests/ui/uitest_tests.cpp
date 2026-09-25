@@ -13,6 +13,7 @@
 #include "app/dynamics_breakdown.h"
 #include "app/preview_view.h"
 #include "app/report_files.h"
+#include "core/model.h"
 #include "ui/app_state.h"
 #include "ui/dynamics_load_job.h"
 #include "ui/preview_controller.h"
@@ -310,6 +311,69 @@ void test_preview_path_overlay(ImGuiTestContext* ctx) {
     ctx->Yield(2);
     IM_CHECK(!h.app->preview->loading());
     IM_CHECK_STR_EQ(h.app->preview->overlay_path_key().c_str(), first_overlay.c_str());
+}
+
+// The Preview's finer time controls and running score, driven through the
+// controller inside the real app. preview-buttons-keys drives the same
+// through the panel's buttons and keys.
+void test_preview_controls(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_preview(ctx)) return;  // chart 0, not analyzed yet
+    auto& pc = *h.app->preview;
+
+    // No analyzed path: no score box.
+    IM_CHECK(!pc.score_box().shown);
+
+    // Analyze from the Preview tab, then visit Paths and come back so the
+    // overlay (and with it the score) is rebuilt from the new record's path.
+    ctx->ItemClick("**/Analyze paths!");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
+    IM_CHECK(h.app->viewed.record.has_value());
+    ctx->ItemClick("##DetailsTabs/Paths");
+    ctx->Yield(2);
+    ctx->ItemClick("##DetailsTabs/Preview");
+    // Wait for the reload to finish and the score box to appear, rather than
+    // assume a fixed number of frames is enough.
+    IM_CHECK(wait_until(ctx, [&] { return !pc.loading() && pc.score_box().shown; }, 60));
+
+    // At the song's end the box reads the selected path's total.
+    IM_CHECK(pc.length_ms() > 12000.0);
+    pc.seek_ms(pc.length_ms());
+    hydra::app::PreviewScoreBox end = pc.score_box();
+    IM_CHECK(end.shown);
+    IM_CHECK(end.available);
+    const hydra::Path* shown = h.app->viewed.record->all_paths().front();
+    IM_CHECK_STR_EQ(end.score.c_str(), hydra::group_thousands(shown->totalscore()).c_str());
+
+    // 5 s jumps, clamped to the song's ends.
+    pc.seek_ms(10000.0);
+    pc.jump_ms(5000.0);
+    IM_CHECK_FLOAT_NEAR_EQ(pc.position_ms(), 15000.0, 0.5);
+    pc.jump_ms(-5000.0);
+    IM_CHECK_FLOAT_NEAR_EQ(pc.position_ms(), 10000.0, 0.5);
+    pc.jump_ms(-60000.0);
+    IM_CHECK_FLOAT_NEAR_EQ(pc.position_ms(), 0.0, 0.5);
+    pc.jump_ms(pc.length_ms() + 60000.0);
+    IM_CHECK_FLOAT_NEAR_EQ(pc.position_ms(), pc.length_ms(), 0.5);
+
+    // A jump while playing keeps playing.
+    pc.seek_ms(10000.0);
+    pc.play();
+    IM_CHECK(pc.playing());
+    pc.jump_ms(5000.0);
+    IM_CHECK(pc.playing());
+
+    // A tick step pauses, and one step each way returns to the same tick.
+    pc.step_ticks(0);  // pause and snap onto the displayed tick
+    IM_CHECK(!pc.playing());
+    const double t0 = pc.position_ms();
+    const std::string mb0 = pc.time_box().measure_beat;
+    pc.step_ticks(1);
+    IM_CHECK(pc.position_ms() > t0);
+    IM_CHECK(pc.position_ms() - t0 < 20.0);  // one tick, at any real tempo
+    IM_CHECK(pc.time_box().measure_beat != mb0);
+    pc.step_ticks(-1);
+    IM_CHECK_STR_EQ(pc.time_box().measure_beat.c_str(), mb0.c_str());
 }
 
 // Click-and-hold on the time bar while playing. Onyx pauses playback for the
@@ -764,6 +828,7 @@ void register_tests(Harness& h) {
         {"difficulty", test_difficulty},
         {"analyze-on-preview", test_analyze_on_preview},
         {"preview-path-overlay", test_preview_path_overlay},
+        {"preview-controls", test_preview_controls},
         {"scrub-hold", test_scrub_hold},
         {"layout-drift", test_layout_drift},
         {"batch-modal-drift", test_batch_modal_drift},

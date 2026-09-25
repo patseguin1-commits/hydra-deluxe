@@ -102,6 +102,13 @@ public:
     double position_ms() const;
     double length_ms() const;
     void seek_ms(double ms);
+    // Move the playhead by `delta_ms` (the -5s/+5s buttons, Left/Right).
+    // Playing stays playing; the transport stops it at the song's ends.
+    void jump_ms(double delta_ms);
+    // Pause, then move the playhead `delta_ticks` chart ticks from the tick
+    // the time box shows (the < Tick / Tick > buttons, comma and period).
+    // A step of 0 snaps onto the displayed tick.
+    void step_ticks(int delta_ticks);
     bool has_audio() const;
 
     // The scrubber is being held (mouse down on it). As in Onyx, playback
@@ -120,6 +127,9 @@ public:
 
     // The time box the panel draws over the highway (Onyx's top-left text).
     hydra::app::PreviewTimeBox time_box() const;
+
+    // The score box the panel draws under the time box.
+    hydra::app::PreviewScoreBox score_box() const;
 
     // The Preview's look, as read from 3d-config.json by the renderer. Before
     // the first render (no renderer yet) this is the struct's defaults, which
@@ -141,6 +151,9 @@ private:
     bool scene_dirty_ = true;  // scene_ changed since the renderer last saw it
     bool pro_ = true;          // the pro-drums view setting the chart was opened with
     int sp_cap_ = kCloneHeroSpCap;  // the SP meter's ceiling the scene was built with
+    // The rules the running score is priced under: the user's
+    // hydra_rules.ini, as the panel passes it to every open().
+    core::Rules rules_ = core::default_rules();
 
     // The path overlay, kept swappable without touching the audio: the parsed
     // song the load produced, the overlay the panel last asked for, and the one
