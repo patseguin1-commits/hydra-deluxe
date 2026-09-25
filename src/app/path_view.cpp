@@ -85,7 +85,7 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
     for (const Activation& act : path.all_activations()) {
         ActivationDetailsView av;
 
-        // Mirrors hydra_app.py:951-953 exactly, including the literal tabs:
+        // The row layout, including the literal tabs:
         // f"{notationstr:6}({sp_meter} SP)\t{measurestr:>9}" and (when
         // difficult) f"\t{ms:7.1f}ms". ImGui's '\t' is a fixed 4-space
         // advance (IM_TABSIZE) shared with DearPyGui, so the columns line up
@@ -128,6 +128,7 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
         std::vector<ScaleClaim> claims;
         auto claim = [&claims](double r, bool late, bool note) {
             if (std::abs(r - 1.0) < 0.005) return;  // renders as x1.00
+            // 0.005 is half the last digit of %.2f: two scales that print the same are one claim.
             for (const ScaleClaim& c : claims)
                 if (c.late == late && std::abs(c.r - r) <= 0.005) return;
             claims.push_back({r, late, note});
@@ -140,6 +141,7 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
         // A note claim needs its end named only when the post end disagrees.
         auto ends_agree = [&rate](const ScaleClaim& c) {
             double post = c.late ? rate.scales.post.late : rate.scales.post.early;
+            // Same %.2f rounding rule as the claim dedupe above.
             return std::abs(c.r - post) <= 0.005;
         };
 
@@ -147,6 +149,8 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
         if (claims.size() == 1) {
             const ScaleClaim& c = claims[0];
             if (!c.note || ends_agree(c)) {
+                // 10 ms is an example step, not a rule: the SP-end shift is
+                // linear in the frontend shift, so any amount gives the same scale.
                 std::snprintf(buf, sizeof(buf),
                               "Frontend timing scales x%.2f to the SP end: "
                               "%s at the frontend moves the SP end %s%s%.1fms.",
@@ -167,6 +171,7 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
                    ends_agree(claims[0]) && ends_agree(claims[1])) {
             const ScaleClaim& lc = claims[0].late ? claims[0] : claims[1];
             const ScaleClaim& ec = claims[0].late ? claims[1] : claims[0];
+            // Same %.2f rounding rule as the claim dedupe above.
             if (std::abs(lc.r - ec.r) > 0.005) {
                 std::snprintf(buf, sizeof(buf),
                               "Frontend timing scales x%.2f (late) / x%.2f "
@@ -281,8 +286,8 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
     view.footer.push_back(
         {"Leftover SP: " + std::to_string(path.leftover_sp) + ".", false});
 
-    // Which SP ceiling this result was found under. Mirrors
-    // hydra_app.py:1017-1031 (warning-colored when an Auto run ran out of
+    // Which SP ceiling this result was found under
+    // (warning-colored when an Auto run ran out of
     // time before the score settled).
     if (record.sp_cap) {
         std::string bars = std::to_string(*record.sp_cap);
@@ -317,8 +322,8 @@ std::vector<std::string> build_score_breakdown(const Path& path) {
     // Rounded, not truncated, so it matches the report's mult column.
     lines.push_back("Avg. Multiplier:      " + format_avg_mult(path.avg_mult()) + "x");
 
-    // Leading '\n' on Notes and Total Score reproduces the blank lines
-    // hydra_app.py:1046,1058 add; Python uses no separator between them.
+    // Leading '\n' on Notes and Total Score puts a blank line above
+    // each; there is no other separator.
     auto right10 = [](int64_t v) {
         char buf[64];
         std::snprintf(buf, sizeof(buf), "%10s", group_thousands(v).c_str());
@@ -349,8 +354,8 @@ PathListView build_path_list(const HydraRecord& record) {
     PathListView view;
     std::vector<const Path*> flat = record.all_paths();
 
-    // Every unique score along the traversal gets its own group, mirroring
-    // hydra_app.py's dpg.add_tree_node(label=f"{current_score:,}") grouping.
+    // Every unique score along the traversal gets its own group, labelled
+    // with the score in thousands-separated digits.
     int64_t current_score = INT64_MIN;
     for (const Path* p : flat) {
         if (p->totalscore() != current_score) {

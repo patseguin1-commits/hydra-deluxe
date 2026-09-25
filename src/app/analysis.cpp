@@ -574,6 +574,9 @@ AnalysisResult analyze_chart_file(const std::string& filepath,
 
 // ---- batch runner -----------------------------------------------------
 
+// 8 = a memory/throughput choice: enough threads to keep a modern CPU busy
+// while capping peak memory (a discography chart can reach hundreds of MB per
+// worker). Kept fixed; batch_worker_count in analysis.h leaves one core free.
 constexpr int kBatchMaxWorkers = 8;
 
 int batch_worker_count() {

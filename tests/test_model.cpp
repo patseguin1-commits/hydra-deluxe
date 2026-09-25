@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -364,4 +365,36 @@ TEST_CASE("title_or_unknown: one fallback for a song with no usable name") {
     // What the metadata readers wrote before this fallback existed.
     CHECK(title_or_unknown("<unknown title>") == "(unknown)");
     CHECK(title_or_unknown("Some Song") == "Some Song");
+}
+
+// A multiplier squeeze is a chord whose notes straddle a to_multiplier step.
+// For 2- and 3-note chords, MultSqueeze accepts exactly the straddling
+// combos. For 4-note chords it accepts only 7, 17 and 27; this pins that
+// as-is (see the comment on MultSqueeze::validate).
+TEST_CASE("MultSqueeze accepts exactly the 2- and 3-note chords that straddle a multiplier step") {
+    const NoteColor order[] = {NoteColor::Red, NoteColor::Yellow, NoteColor::Kick,
+                               NoteColor::Blue, NoteColor::Green};
+    auto chord_of = [&](int n) {
+        Chord c;
+        for (int i = 0; i < n; ++i) c.add_note(order[i]);
+        c.apply_cymbal(NoteColor::Yellow);  // a cymbal among pads: something to squeeze
+        return c;
+    };
+    auto accepted = [](const Chord& c, int combo) {
+        try {
+            MultSqueeze ms(c, combo);
+            return true;
+        } catch (const std::invalid_argument&) {
+            return false;
+        }
+    };
+    for (int n = 2; n <= 3; ++n)
+        for (int combo = 0; combo < 40; ++combo) {
+            const bool straddles = to_multiplier(combo + 1) < to_multiplier(combo + n);
+            CHECK_MESSAGE(accepted(chord_of(n), combo) == straddles,
+                          "n=" << n << " combo=" << combo);
+        }
+    for (int combo = 0; combo < 40; ++combo)
+        CHECK_MESSAGE(accepted(chord_of(4), combo) == (combo == 7 || combo == 17 || combo == 27),
+                      "n=4 combo=" << combo);
 }

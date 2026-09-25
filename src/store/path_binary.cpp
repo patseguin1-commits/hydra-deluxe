@@ -12,8 +12,8 @@ void write_activation(BinaryWriter& w, const Activation& act, uint32_t version) 
     w.opt_i32(act.sp_meter);
     w.opt_i32(act.frontend_points);
 
-    // Trim to what's worth keeping, exactly as hystore._pack does before
-    // storing (backends are ~40% of a stock record and display-only).
+    // Store only the rows the details view shows (display_backends). Backends
+    // are ~40% of a record and display-only, so the rest are dropped.
     std::vector<BackendSqueeze> backends = act.display_backends();
     w.u32(static_cast<uint32_t>(backends.size()));
     for (const BackendSqueeze& b : backends) {

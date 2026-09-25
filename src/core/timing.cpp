@@ -26,7 +26,8 @@ MsIndex::MsIndex(const std::map<int64_t, double>& bpm_map, int64_t tick_r) {
     tps_.reserve(bpm_map.size());
     for (const auto& kv : bpm_map) {
         keys_.push_back(kv.first);
-        // tps = bpm * tick_r / 60, same order as hymisc.
+        // tps = bpm * tick_r / 60, in this order: reordering the float operations
+        // changes the last bit, and stored results were made with this order.
         tps_.push_back(kv.second * static_cast<double>(tick_r) / 60.0);
     }
 
@@ -160,7 +161,7 @@ int bisect_left_lo(const MeasureIndex& idx, int64_t x, int lo) {
 }  // namespace
 
 Timecode SongTiming::plusmeasure(const Timecode& tc, int64_t add_measures) const {
-    // Work in measures, exactly as hymisc does. int() truncates toward zero
+    // Work in measures. int() truncates toward zero
     // (C++ double->int64 does the same); Python's `% 1` is the fractional part
     // measured from the floor, so use x - floor(x).
     double m_decimal =

@@ -1,12 +1,9 @@
-// Analysis orchestration — the C++ port of hydra/hyutil.py's discovery half
-// and hydra/hybatch.py's unit of work. Phase 3's search/pather.{h,cpp} already
-// ports hyutil's _analyze/_analyze_at_cap/_analyze_uncapped (analyze_auto_cap) (one chart's
-// pathing); this is the rest: finding charts on disk, hashing/reading their
+// Analysis orchestration: search/pather.h paths one chart, and this
+// file does the rest: finding charts on disk, hashing/reading their
 // metadata, and running many of them across a thread pool into a RecordStore.
 //
-// Unlike hybatch.py, this doesn't need to avoid the GIL by spawning
-// processes — a native std::thread pool genuinely runs charts in parallel,
-// sharing memory instead of pickling rows across a pipe.
+// A std::thread pool runs charts in parallel and shares memory, so no worker
+// processes or row copying across a pipe are needed.
 
 #ifndef HYDRA_APP_ANALYSIS_H
 #define HYDRA_APP_ANALYSIS_H
@@ -27,7 +24,7 @@
 namespace hydra::app {
 
 // One chart file found on disk, with enough metadata to register it in the
-// store. Mirrors hyutil.ScanItem. `sig` fingerprints the source files
+// store. `sig` fingerprints the source files
 // (sizes + mtimes) so a later rescan can skip re-hashing unchanged charts;
 // it never leaves the charts table and is not part of record identity.
 struct ScanItem {
@@ -55,7 +52,7 @@ struct ScanCallbacks {
 
 // Recursively searches rootfolders for chart-bearing folders: notes.mid (or
 // notes.chart, if no .mid) alongside a song.ini, plus every .sng and .srb file.
-// Re-encountered folders are skipped. Mirrors hyutil.discover_charts.
+// Re-encountered folders are skipped.
 //
 // The walk itself is a serial single pass; hashing/metadata reads run on a
 // batch_worker_count() thread pool. Results keep the serial walk's order.
@@ -91,8 +88,7 @@ std::string hash_chart_file(const std::string& path);
 // read song.ini through here.
 std::map<std::string, std::string> read_song_ini_keys(const std::string& path);
 
-// The settings a batch run applies uniformly, mirroring the `settings` tuple
-// hybatch.analyze_for_store's job carries. Everything the search itself reads
+// The settings a batch run applies uniformly. Everything the search itself reads
 // lives on the SearchSettings base; the two flags here are parse-time only.
 struct AnalysisSettings : SearchSettings {
     bool prodrums = true;
@@ -103,8 +99,7 @@ struct AnalysisSettings : SearchSettings {
 };
 
 // Loads and analyzes one chart file (.mid/.chart/.sng/.srb), producing a record and
-// the song's timing (for the store's songmeta row). Mirrors
-// hyutil.analyze_chart_file + hybatch.analyze_for_store's non-store half.
+// the song's timing (for the store's songmeta row).
 struct AnalysisResult {
     HydraRecord record;
     Song song;  // carries tick_resolution/tpm_changes/bpm_changes for add_song
@@ -125,15 +120,13 @@ struct BatchProgress {
 
 // The default batch pool size: one core is left for the UI (or shell) and for
 // whatever else the machine is doing; capped so peak memory (a discography
-// chart can reach hundreds of MB) stays bounded. Mirrors hydra_app.py's
-// BATCH_MAX_WORKERS/batch_workercount.
+// chart can reach hundreds of MB) stays bounded.
 int batch_worker_count();
 
 // Runs analyze_chart_file + store::prepare_row for every item across a
 // std::thread pool, writing results into `store` from the calling thread (a
 // RecordStore is safe to call from any one thread at a time, but SQLite
-// writes are serialized here to keep the store simple). Mirrors the
-// concurrency hybatch/BatchJob got from multiprocessing, without the pickling.
+// writes are serialized here to keep the store simple).
 //
 // on_progress, on_error and on_result, if set, are invoked from the calling
 // thread only (never from a worker) as each result comes back — safe to touch

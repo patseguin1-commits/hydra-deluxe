@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 
 namespace hydra {
 
@@ -197,60 +196,6 @@ double beyond_edge_ms(double hit_window_ms) {
     for (const TimingTier& t : timing_tiers(hit_window_ms))
         if (t.cutoff) edge = std::max(edge, *t.cutoff);
     return edge;
-}
-
-namespace {
-
-// Bisection ceiling: displacements past this are far outside anything a
-// player can execute, so a target unreachable within it reports +infinity.
-constexpr double kSolverMaxMs = 8000.0;
-constexpr double kSolverToleranceMs = 1e-3;
-
-// Solves f(d) >= target for the smallest d in [0, kSolverMaxMs], where f is
-// monotone non-decreasing with f(0) == 0.
-template <typename F>
-double bisect_min(F f, double target) {
-    if (target <= 0.0) return 0.0;
-    double lo = 0.0, hi = kSolverMaxMs;
-    if (f(hi) < target) return std::numeric_limits<double>::infinity();
-    while (hi - lo > kSolverToleranceMs) {
-        double mid = (lo + hi) / 2.0;
-        if (f(mid) < target)
-            lo = mid;
-        else
-            hi = mid;
-    }
-    return hi;
-}
-
-}  // namespace
-
-// Prices the plain 2*B-measure SP end only: it does not model the +2-measure
-// extension per SP phrase collected mid-activation the way
-// frontend_transfer_scales does (no production caller needs that yet).
-double sp_end_shift_ms(double displaced_ms, SqueezeKind kind,
-                       const Activation& act, const SongTiming& timing) {
-    if (!act.timecode || !act.sp_meter) return 0.0;
-    const double h = act.timecode->ms();
-    const int64_t end_measures = sp_bars_to_measures(*act.sp_meter);
-    const double base = timing.sp_end_ms(h, end_measures);
-    if (kind == SqueezeKind::SqOut)
-        return base - timing.sp_end_ms(h - displaced_ms, end_measures);
-    return timing.sp_end_ms(h + displaced_ms, end_measures) - base;
-}
-
-double required_frontend_ms(double gap_ms, double backend_ms, SqueezeKind kind,
-                            const Activation& act, const SongTiming& timing) {
-    return bisect_min(
-        [&](double d) { return sp_end_shift_ms(d, kind, act, timing); },
-        gap_ms - backend_ms);
-}
-
-double exact_even_split_ms(double gap_ms, SqueezeKind kind,
-                           const Activation& act, const SongTiming& timing) {
-    return bisect_min(
-        [&](double d) { return d + sp_end_shift_ms(d, kind, act, timing); },
-        gap_ms);
 }
 
 }  // namespace hydra

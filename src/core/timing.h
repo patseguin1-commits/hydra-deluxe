@@ -1,4 +1,4 @@
-// Timing math — the C++ port of hydra/hymisc.py's tick/ms/measure machinery.
+// Timing math: converting between ticks, milliseconds and measures.
 //
 // A song measures time in ticks; the app also needs milliseconds (from the
 // tempo map) and measure/beat/tick and decimal-measure positions (from the
@@ -19,11 +19,11 @@
 
 namespace hydra {
 
-// combo -> score multiplier, matching hymisc.to_multiplier.
+// combo -> score multiplier: x1 below 10, x2 below 20, x3 below 30, else x4.
 int to_multiplier(int combo);
 
-// Where each tempo section starts and the time elapsed by then. Mirrors
-// hymisc.MsIndex. Built from a bpm map (tick -> BPM) and the tick resolution.
+// Where each tempo section starts and the time elapsed by then.
+// Built from a bpm map (tick -> BPM) and the tick resolution.
 class MsIndex {
 public:
     MsIndex(const std::map<int64_t, double>& bpm_map, int64_t tick_r);
@@ -52,8 +52,8 @@ private:
     std::vector<double> elapsed_;
 };
 
-// Where each meter section starts, in ticks and in whole measures. Mirrors
-// hymisc.MeasureIndex. Built from a tpm map (tick -> ticks-per-measure).
+// Where each meter section starts, in ticks and in whole measures.
+// Built from a tpm map (tick -> ticks-per-measure).
 class MeasureIndex {
 public:
     MeasureIndex(const std::map<int64_t, int64_t>& tpm_map, int64_t tick_r);
@@ -76,7 +76,7 @@ private:
 };
 
 // A point in time in a song, in multiple representations. Compares/hashes on
-// ticks alone, like hymisc.Timecode.
+// ticks alone.
 class Timecode {
 public:
     Timecode() = default;
@@ -84,9 +84,9 @@ public:
     Timecode(int64_t ticks, int64_t tick_r,
              const MeasureIndex& mbt, const MsIndex& ms);
 
-    // Raw ticks only, mbt/ms left at their defaults. Mirrors the transient
-    // state hystore._unpack leaves an Activation's timecode in before
-    // _restore_timecodes resolves it against the song's tempo map — a stored
+    // Raw ticks only, mbt/ms left at their defaults. This is the state a
+    // decoded Activation's timecode is in until restore_timecodes
+    // (store/serialize.h) resolves it against the song's tempo map — a stored
     // record is deserialized without a SongTiming at hand, so ticks are all
     // that's known until the caller restores them (see restore_timecodes).
     static Timecode raw(int64_t ticks) {
@@ -138,9 +138,8 @@ public:
         return Timecode(ticks, tick_r_, mbt_, ms_);
     }
 
-    // A Timecode offset from `tc` by whole/partial measures, mirroring
-    // hymisc.Timecode._plusmeasure_uncached (partial measures scale by
-    // percentage of the target section's meter). Used by activation
+    // A Timecode offset from `tc` by whole/partial measures (partial
+    // measures scale by percentage of the target section's meter). Used by activation
     // auto-fill placement and, later, the score graph. Not cached here —
     // the caller caches if the call volume warrants it.
     Timecode plusmeasure(const Timecode& tc, int64_t add_measures) const;

@@ -14,7 +14,7 @@ namespace {
 using bench_clock = std::chrono::steady_clock;
 
 // Thrown out of the progress callback to abandon a ladder rung that has blown
-// the time budget, mirroring hyutil._CapBudgetExceeded / _deadline_callback.
+// the time budget (auto_budget_s in hydra_rules.ini).
 struct CapBudgetExceeded {};
 
 HydraRecord read(const ScoreGraph& graph, DepthMode depth_mode, int depth_value,
@@ -153,7 +153,6 @@ namespace {
 // ceiling the graph is actually built at (the record still reports sp_cap).
 // want_allzero also runs search_allzero over the same graph and stores it in
 // the record's allzero_paths.
-// Mirrors hyutil._analyze_at_cap.
 HydraRecord analyze_at_cap(const Song& song, int sp_cap, DepthMode depth_mode,
                            int depth_value, std::optional<double> ms_filter,
                            std::optional<int> build_cap, bool legacy_fills,
@@ -200,8 +199,7 @@ HydraRecord analyze_auto_cap(const Song& song, DepthMode depth_mode, int depth_v
     std::optional<HydraRecord> record;
     std::optional<int64_t> previous_score;
     // The clock only starts once the first rung has finished, so there is always
-    // a result to report -- exactly like hyutil._analyze_uncapped (the
-    // Python-era name for this ladder).
+    // a result to report.
     std::optional<bench_clock::time_point> deadline;
 
     // The ladder re-runs the search per ceiling, so no rung runs the all-0 pass:
@@ -219,7 +217,7 @@ HydraRecord analyze_auto_cap(const Song& song, DepthMode depth_mode, int depth_v
         // ladder reads as one monotonic progress even though it re-runs the
         // search per ceiling. Early convergence just finishes below 100%. The
         // same per-iteration callback is where a rung overrunning the budget is
-        // interrupted (hyutil._deadline_callback), rather than only checking
+        // interrupted, rather than only checking
         // between rungs -- one big-cap rung can dwarf the whole budget.
         auto wrapped = [&](float f) {
             if (deadline && bench_clock::now() > *deadline) throw CapBudgetExceeded{};

@@ -496,6 +496,10 @@ MOp MidiParser::optype(const Message& msg, int64_t tick) {
                 case 109:
                     return {MPhase::Pre, [this] { op_flam(false); }};
                 case 103:
+                    // A MIDI solo marker covers ticks up to its note-off, not
+                    // including it: end the solo before this tick's notes.
+                    // Pinned by ".mid: the note on the solo marker's note-off
+                    // tick is outside the solo".
                     return {MPhase::Pre, [this] { op_solo(false); }};
                 default:
                     return {};
@@ -874,6 +878,9 @@ COp ChartParser::optype(const ChartDataEntry& e, int64_t tick) {
         return {CPhase::Time, [this, tick, n, d] { op_timesig(tick, n, d); }};
     }
     if (e.solo_start) return {CPhase::Pre, [this] { op_solo(true); }};
+    // A .chart `E soloend` sits on the solo's last note: end the solo after
+    // this tick's notes. Pinned by ".chart: the note on the solo end tick is
+    // in the solo".
     if (e.solo_end) return {CPhase::Post, [this] { op_solo(false); }};
 
     if (e.notevalue.has_value()) {
@@ -1058,6 +1065,10 @@ Song ChartParser::parse(const std::vector<uint8_t>& data, bool pro,
                          });
     }
 
+    // .chart ghosts and accents are explicit per-note flags (N 34-37 accent,
+    // N 40-43 ghost), applied unconditionally, so a .chart has no opt-in
+    // marker like MIDI's [ENABLE_CHART_DYNAMICS]. Dynamics are always on; the
+    // Dynamics tab reads this flag.
     song.dynamics_enabled = true;
     song.check_activations(rules_);
     return song;
