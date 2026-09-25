@@ -51,6 +51,14 @@ void write_activation(BinaryWriter& w, const Activation& act, uint32_t version) 
     // Format version 5 and later: the collecting note the SP cap pinned
     // this window to. Older blobs read back unset.
     if (version >= 5) w.opt_i64(act.clamp_tick);
+
+    // Format version 6 and later: the squeezed-out phrase and the phrases
+    // collected while active. Older blobs read back unset and empty.
+    if (version >= 6) {
+        w.opt_i64(act.sqout_tick);
+        w.u32(static_cast<uint32_t>(act.collected_phrase_ticks.size()));
+        for (int64_t t : act.collected_phrase_ticks) w.i64(t);
+    }
 }
 
 Activation read_activation(BinaryReader& r, uint32_t version) {
@@ -99,6 +107,13 @@ Activation read_activation(BinaryReader& r, uint32_t version) {
 
     // Pre-v5 blobs leave clamp_tick unset. Nothing fills it in.
     if (version >= 5) act.clamp_tick = r.opt_i64();
+    // Pre-v6 blobs leave sqout_tick unset and collected_phrase_ticks empty.
+    if (version >= 6) {
+        act.sqout_tick = r.opt_i64();
+        const uint32_t n = r.u32();
+        act.collected_phrase_ticks.reserve(n);
+        for (uint32_t i = 0; i < n; ++i) act.collected_phrase_ticks.push_back(r.i64());
+    }
     return act;
 }
 

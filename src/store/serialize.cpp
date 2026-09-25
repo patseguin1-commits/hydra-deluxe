@@ -138,6 +138,7 @@ std::vector<uint8_t> write_record(const HydraRecord& record, uint32_t version) {
     w.opt_f64(record.ms_limit);
     w.opt_i32(record.sp_cap);
     w.boolean(record.sp_cap_converged);
+    if (version >= 6) w.u64(record.rules_fingerprint);
 
     w.u32(static_cast<uint32_t>(record.paths.size()));
     for (const Path& p : record.paths) write_path(w, p, version);
@@ -173,6 +174,8 @@ HydraRecord read_record(const std::vector<uint8_t>& blob) {
     record.ms_limit = r.opt_f64();
     record.sp_cap = r.opt_i32();
     record.sp_cap_converged = r.boolean();
+    // Pre-v6 blobs never recorded their rules: kNoRulesFingerprint matches none.
+    record.rules_fingerprint = version >= 6 ? r.u64() : core::kNoRulesFingerprint;
 
     uint32_t npaths = r.u32();
     record.paths.reserve(npaths);

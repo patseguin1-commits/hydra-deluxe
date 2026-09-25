@@ -70,8 +70,9 @@ int main(int argc, char** argv) {
     hydra::store::CapQuery cap = settings.cap_query();
     hydra::store::Lens lens = settings.lens();
 
-    std::unique_ptr<hydra::store::RecordStore> old_store = hydra::app::open_store(*old_path);
-    std::unique_ptr<hydra::store::RecordStore> new_store = hydra::app::open_store(*new_path);
+    std::unique_ptr<hydra::store::RecordStore> old_store = hydra::app::open_store(*old_path, settings.rules.fingerprint());
+    std::unique_ptr<hydra::store::RecordStore> new_store =
+        hydra::app::open_store(*new_path, settings.rules.fingerprint());
 
     // Engine-mode sanity check: a stamp that disagrees with the flag it was
     // passed under is a warning, not a fatal error — an unstamped (nullopt)

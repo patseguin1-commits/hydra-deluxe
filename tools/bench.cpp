@@ -62,7 +62,7 @@ static void folder_breakdown(const std::string& folder) {
                 errors.size());
     std::printf("Settings: UNCAPPED, score range 4, 10ms limit (the GUI default).\n\n");
 
-    store::RecordStore store(":memory:");
+    store::RecordStore store(":memory:", g_rules.fingerprint());
 
     for (const app::ScanItem& it : items) {
         std::printf("%s\n", it.notespath.c_str());
@@ -118,7 +118,7 @@ static void scan_mode(const std::string& folder, const std::string& dbpath,
     std::printf("Scanning %s\n", folder.c_str());
 
     std::unique_ptr<store::RecordStore> store;
-    if (!dbpath.empty()) store = std::make_unique<store::RecordStore>(dbpath);
+    if (!dbpath.empty()) store = std::make_unique<store::RecordStore>(dbpath, g_rules.fingerprint());
 
     // With --db, a prior scan's rows become the rescan cache — running the
     // same command twice measures cold full scan then warm rescan.
@@ -228,7 +228,7 @@ static void corpus_bench() {
 // Dump a store's charts table as the same JSON shape --dump writes, so two
 // scans' results can be diffed even when one came from another build.
 static void dump_db(const std::string& dbpath, const std::string& outpath) {
-    store::RecordStore db(dbpath);
+    store::RecordStore db(dbpath, g_rules.fingerprint());
     std::vector<store::ChartLibraryEntry> rows =
         db.list_chart_library(std::nullopt, 0, INT_MAX);
     std::sort(rows.begin(), rows.end(),

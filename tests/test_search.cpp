@@ -629,6 +629,113 @@ TEST_CASE("SP cap overfill: a later unclamped extension keeps the earlier "
     CHECK(*act.clamp_tick == 3072);
 }
 
+TEST_CASE("SP cap overfill: a second clamp in the same window replaces "
+          "clamp_tick") {
+    // Same cap and activation. The phrase at 3072 clamps as in the first
+    // case: the end is pinned to 6144. The phrase at 3840 then clamps again:
+    // the plain step from the current end is 6144 + 1536 = 7680, but the
+    // cap ceiling from 3840 is 3840 + 4*768 = 6912, which is smaller. The
+    // end is now pinned by the later note, so clamp_tick moves to 3840.
+    Song song = build_tail_song({{0, true, false},
+                                 {768, true, false},
+                                 {2304, false, true},
+                                 {3072, true, false},
+                                 {3840, true, false},
+                                 {4608},
+                                 {5376},
+                                 {6000},
+                                 {6768},
+                                 {7500}});
+
+    ScoreGraph graph(song, 2);
+    std::vector<Path> paths =
+        run_search(graph, DepthMode::Scores, 0, std::nullopt);
+
+    const Activation& act = last_act(paths);
+    REQUIRE(act.timecode.has_value());
+    CHECK(act.timecode->ticks() == 2304);
+
+    auto deact = activation_deact_tick(act);
+    REQUIRE(deact.has_value());
+    CHECK(*deact == 6912);
+
+    REQUIRE(act.clamp_tick.has_value());
+    CHECK(*act.clamp_tick == 3840);
+}
+
+TEST_CASE("collected phrases: none when no phrase lands during the activation") {
+    Song song = build_tail_song({{0, true, false}, {768, true, false}, {1536},
+                                 {2304, false, true}, {3072}, {3840}, {4608},
+                                 {5136}, {5280}});
+    ScoreGraph graph(song, 4);
+    // The paths are held in a named vector: last_act returns a reference into
+    // it, so it has to outlive the checks below.
+    const std::vector<Path> paths = run_search(graph, DepthMode::Scores, 0, std::nullopt);
+    const Activation& act = last_act(paths);
+    CHECK(act.collected_phrase_ticks.empty());
+    CHECK_FALSE(act.sqout_tick.has_value());
+}
+
+TEST_CASE("collected phrases: one phrase mid-activation is recorded") {
+    // The fixture of "SP past the last note: a mid-activation phrase extends
+    // the end": the phrase ending at 3840 is collected while SP is active.
+    Song song = build_tail_song({{0, true, false}, {768, true, false}, {1536},
+                                 {2304, false, true}, {3072}, {3840, true, false},
+                                 {4608}, {5376}, {6144}, {6720}, {6816}});
+    ScoreGraph graph(song, 4);
+    const std::vector<Path> paths = run_search(graph, DepthMode::Scores, 0, std::nullopt);
+    const Activation& act = last_act(paths);
+    CHECK(act.collected_phrase_ticks == std::vector<int64_t>{3840});
+}
+
+TEST_CASE("collected phrases: two phrases under a full meter are both recorded, in order") {
+    // The cap-2 clamp fixture: both phrases are collected while active, and
+    // the second is the note the cap pinned the end to. A clamped phrase
+    // counts as collected.
+    Song song = build_tail_song({{0, true, false}, {768, true, false},
+                                 {2304, false, true}, {3072, true, false},
+                                 {3840, true, false}, {4608}, {5376}, {6000},
+                                 {6768}, {7500}});
+    ScoreGraph graph(song, 2);
+    std::vector<Path> paths = run_search(graph, DepthMode::Scores, 0, std::nullopt);
+    REQUIRE(!paths.empty());
+    const Activation& act = paths.front().activations.front();
+    CHECK(act.collected_phrase_ticks == std::vector<int64_t>{3072, 3840});
+    REQUIRE(act.clamp_tick.has_value());
+    CHECK(act.collected_phrase_ticks.back() == *act.clamp_tick);
+}
+
+TEST_CASE("collected phrases: the corpus agrees with the squeezes and the SP end") {
+    int sqouts_seen = 0;
+    for (const std::string& path : corpus::chart_paths()) {
+        Song song = load_songpath(path, true, true);
+        if (song.is_empty()) continue;
+        ScoreGraph graph(song, 4);
+        for (const Path& p : run_search(graph, DepthMode::Scores, 1, std::nullopt)) {
+            for (const Activation& act : p.all_activations()) {
+                REQUIRE(act.timecode.has_value());
+                bool took_sqout = false;
+                for (const SPSqueeze& sq : act.sqinouts)
+                    if (sq.kind == SqueezeKind::SqOut) took_sqout = true;
+                // sqout_tick is set exactly when the activation squeezed out.
+                CHECK(act.sqout_tick.has_value() == took_sqout);
+                if (act.sqout_tick) ++sqouts_seen;
+
+                int64_t prev = -1;
+                for (int64_t t : act.collected_phrase_ticks) {
+                    CHECK(t > prev);  // strictly ascending
+                    CHECK(t >= act.timecode->ticks());
+                    // A squeezed-out phrase, and anything after it, was
+                    // never collected.
+                    if (act.sqout_tick) CHECK(t < *act.sqout_tick);
+                    prev = t;
+                }
+            }
+        }
+    }
+    CHECK(sqouts_seen > 0);
+}
+
 TEST_CASE("path codec: encode/decode a path node keeps clamp_tick") {
     // clamp_tick is the newest field on Activation (blob v5 / node v3): a
     // plain node round trip has to carry it, the same way the deact_tick

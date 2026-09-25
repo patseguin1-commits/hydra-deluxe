@@ -552,7 +552,7 @@ int cmd_dump(const Args& a) {
         }
     } snapshot_guard{snapshot_path};
 
-    store::RecordStore store(snapshot_path);
+    store::RecordStore store(snapshot_path, s.rules.fingerprint());
     const store::RecordKey key = s.record_key(hyhash);
     store::RecordLookup lookup = store.get_record(key);
 
@@ -575,12 +575,20 @@ int cmd_dump(const Args& a) {
                          a.ms.c_str(), a.depth_mode.c_str(), a.depth,
                          a.no_analyze ? "" : " Analyzing the chart fresh instead.");
         } else {
-            std::fprintf(stderr,
-                         "Stale: the stored row was written by Hydra %s, not "
-                         "this build; its paths cannot be read.%s\n",
-                         lookup.hyversion.c_str(),
-                         a.no_analyze ? " Re-analyze the chart."
-                                      : " Analyzing the chart fresh instead.");
+            // One line per reason. The follow-up ("Re-analyze" or "Analyzing
+            // fresh") goes on the last line printed.
+            const char* next_step = a.no_analyze ? " Re-analyze the chart."
+                                                 : " Analyzing the chart fresh instead.";
+            if (lookup.stale_build)
+                std::fprintf(stderr,
+                             "Stale: the stored row was written by Hydra %s, not "
+                             "this build; its paths cannot be read.%s\n",
+                             lookup.hyversion.c_str(), lookup.stale_rules ? "" : next_step);
+            if (lookup.stale_rules)
+                std::fprintf(stderr,
+                             "Stale: the stored row was analyzed with different rules "
+                             "(hydra_rules.ini changed).%s\n",
+                             next_step);
         }
         if (a.no_analyze) return 1;
 

@@ -131,7 +131,7 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    std::unique_ptr<hydra::store::RecordStore> store_ptr = hydra::app::open_store(db);
+    std::unique_ptr<hydra::store::RecordStore> store_ptr = hydra::app::open_store(db, settings.rules.fingerprint());
     hydra::store::RecordStore& store = *store_ptr;
 
     // Stamp the file with the rule this run used, every run, so hydra_fillcompare

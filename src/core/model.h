@@ -272,6 +272,20 @@ struct Activation {
     // an older record. Nothing re-derives it.
     std::optional<int64_t> clamp_tick;
 
+    // The chart tick of the SP phrase chord this activation squeezed out:
+    // the deact edge's sqinout_time when the path took the SqOut branch.
+    // Stamped by the search at copy-out (blob v6). Unset when the activation
+    // did not squeeze out, or on an older record. Nothing re-derives it.
+    std::optional<int64_t> sqout_tick;
+
+    // The ticks of the SP phrase-end chords this activation collected while
+    // active, in chart order: every phrase the gauge received, a late-SqIn
+    // phrase and a cap-clamped phrase included. A squeezed-out phrase is not
+    // among them. The search records each one as its path crosses the phrase
+    // (blob v6). Empty when none was collected, or on an older record.
+    // Nothing re-derives it.
+    std::vector<int64_t> collected_phrase_ticks;
+
     // Frontend transfer scales, computed by the search and stored with the
     // record (blob v3; older blobs default to 1.0 = the flat-tempo identity)
     // so the details display keeps its ratios when no SongTiming is at hand.
@@ -362,6 +376,12 @@ struct HydraRecord {
     std::optional<double> ms_limit;
     std::optional<int> sp_cap;
     bool sp_cap_converged = true;
+    // core::Rules::fingerprint() of the rules the search ran under (blob v6,
+    // path structure v4). A record built in memory starts with the default
+    // rules' fingerprint; analyze_chart stamps the real one. An older blob
+    // reads back core::kNoRulesFingerprint, which matches no rules, so it can
+    // never pass as current.
+    uint64_t rules_fingerprint = core::default_rules().fingerprint();
     std::vector<Path> paths;
 
     // The best all-0 path: the highest-scoring path whose activations all

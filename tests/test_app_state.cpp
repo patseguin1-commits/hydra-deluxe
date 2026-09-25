@@ -259,3 +259,28 @@ TEST_CASE("no hydra_rules.ini leaves analysis on") {
     CHECK(app.rules_error.empty());
     CHECK_FALSE(app.analysis_blocked());
 }
+
+TEST_CASE("under a bad hydra_rules.ini no stored record reads Ready") {
+    ScratchPaths paths("appstate_badrules_stale");
+    seeded_store(paths.db).reset();
+    const RecordKey seeded{library_entry(0).md5, kChartMode, CapQuery::at(kSeededCap),
+                           Settings{}.lens()};
+
+    // Good (absent) rules file: the seeded record, written under the
+    // default rules, is Ready.
+    {
+        AppState good;
+        CHECK(good.store->get_summary(seeded).status == RecordStatus::Ready);
+    }
+
+    // Bad file: the store is gated on kNoRulesFingerprint, so the same
+    // record reads Stale. Nothing is shown as Ready under rules the user
+    // did not choose.
+    {
+        std::ofstream f(paths.rules);
+        f << "max_tied_paths = 0\n";
+    }
+    AppState bad;
+    REQUIRE(bad.analysis_blocked());
+    CHECK(bad.store->get_summary(seeded).status == RecordStatus::Stale);
+}

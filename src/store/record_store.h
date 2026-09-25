@@ -37,6 +37,7 @@
 #include <vector>
 
 #include "core/model.h"
+#include "core/rules.h"
 #include "core/timing.h"
 #include "parse/song.h"
 #include "store/path_codec.h"
@@ -180,6 +181,9 @@ enum class RecordStatus { NotAnalyzed, Stale, Ready };
 struct RecordLookup {
     RecordStatus status = RecordStatus::NotAnalyzed;
     std::string hyversion;              // the row's stamp; empty when NotAnalyzed
+    // Why a Stale row is Stale; both can be true, neither is when not Stale.
+    bool stale_build = false;  // another Hydra build, an older path layout, or a migrated row
+    bool stale_rules = false;  // this path layout, analyzed under other rules
     std::optional<HydraRecord> record;  // set only when Ready
     std::optional<SongTiming> timing;   // set when Ready and the song is registered
 };
@@ -246,7 +250,11 @@ public:
     // dbpath may be ":memory:" for an ephemeral store (used by tests). A db
     // from before 1.6 (records keyed without sp_cap) is migrated in place on
     // open, in one transaction; a failure rolls back and rethrows.
-    explicit RecordStore(const std::string& dbpath);
+    // rules_fingerprint: core::Rules::fingerprint() of the rules this process
+    // runs under. A row stamped with any other fingerprint reads Stale.
+    // core::kNoRulesFingerprint (a bad hydra_rules.ini) makes every row Stale.
+    explicit RecordStore(const std::string& dbpath,
+                         uint64_t rules_fingerprint = core::default_rules().fingerprint());
     ~RecordStore();
 
     RecordStore(const RecordStore&) = delete;
@@ -394,6 +402,9 @@ public:
 
 private:
     sqlite3* db_ = nullptr;
+    // The fingerprint of the rules this process runs under; a row stamped
+    // with any other reads Stale.
+    uint64_t rules_fingerprint_;
     // The rule: this lock covers sqlite calls and nothing else -- decoding a
     // blob and calling a caller's callback happen outside it. A prepared
     // statement is compiled, stepped, reset and finalized with the lock held,

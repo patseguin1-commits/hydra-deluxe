@@ -44,7 +44,8 @@ namespace hydra::store {
 // also checks the stored path-structure format against
 // kPathStructureFormatVersion (path_codec.h), so a library analyzed under an
 // older path layout reads Stale until it is re-analyzed.
-constexpr uint32_t kBlobFormatVersion = 5;
+// v6: Activation.sqout_tick and collected_phrase_ticks; HydraRecord.rules_fingerprint (docs/adr/0014).
+constexpr uint32_t kBlobFormatVersion = 6;
 
 class SerializeError : public std::runtime_error {
 public:

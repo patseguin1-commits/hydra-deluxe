@@ -200,6 +200,9 @@ FlatRecord flatten_record(const HydraRecord& record) {
 
     BinaryWriter w;
     w.u32(kPathStructureFormatVersion);
+    // Right after the version, so the store can compare version and rules
+    // as one fixed 12-byte head in SQL (record_store.cpp kRowReadySql).
+    w.u64(record.rules_fingerprint);
     w.opt_f64(record.ms_limit);
     w.opt_i32(record.sp_cap);
     w.boolean(record.sp_cap_converged);
@@ -222,6 +225,7 @@ HydraRecord rebuild_record(const std::vector<uint8_t>& structure,
         throw SerializeError("unsupported path structure format version");
 
     HydraRecord record;
+    record.rules_fingerprint = r.u64();
     record.ms_limit = r.opt_f64();
     record.sp_cap = r.opt_i32();
     record.sp_cap_converged = r.boolean();

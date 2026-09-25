@@ -272,28 +272,28 @@ int bind_lens(sqlite3_stmt* s, int idx, const Lens& lens) {
     return idx + 4;
 }
 
-// Is this row's stored path tree in the layout this build reads? The answer
-// is the structure blob's leading u32. This takes whatever the caller has:
-// the whole blob, or just the substr(structure,1,4) a query selected.
-bool structure_is_current(const std::vector<uint8_t>& structure_head) {
-    if (structure_head.size() < 4) return false;
-    uint32_t version = 0;
+// The first 12 bytes a structure blob starts with: the u32 structure format,
+// then the u64 rules fingerprint (path_codec.cpp flatten_record).
+constexpr int kStructureHeadBytes = 12;
+
+std::vector<uint8_t> structure_head_for(uint64_t rules_fingerprint) {
+    std::vector<uint8_t> b(kStructureHeadBytes);
     for (int i = 0; i < 4; ++i)
-        version |= static_cast<uint32_t>(structure_head[static_cast<size_t>(i)]) << (8 * i);
-    return version == kPathStructureFormatVersion;
+        b[static_cast<size_t>(i)] =
+            static_cast<uint8_t>(kPathStructureFormatVersion >> (8 * i));
+    for (int i = 0; i < 8; ++i)
+        b[static_cast<size_t>(4 + i)] = static_cast<uint8_t>(rules_fingerprint >> (8 * i));
+    return b;
 }
 
-// The same fact as a bindable value: the four bytes a current structure blob
-// starts with, to compare against substr(structure,1,4) in SQL.
-const std::vector<uint8_t>& current_structure_head() {
-    static const std::vector<uint8_t> head = [] {
-        std::vector<uint8_t> b(4);
-        for (int i = 0; i < 4; ++i)
-            b[static_cast<size_t>(i)] =
-                static_cast<uint8_t>(kPathStructureFormatVersion >> (8 * i));
-        return b;
-    }();
-    return head;
+// Is this row's stored path tree in the layout this build reads, analyzed
+// under the rules this process runs? Takes the whole blob or just the
+// substr(structure,1,12) a query selected.
+bool structure_is_current(const std::vector<uint8_t>& structure_head,
+                          uint64_t rules_fingerprint) {
+    if (structure_head.size() < kStructureHeadBytes) return false;
+    const std::vector<uint8_t> want = structure_head_for(rules_fingerprint);
+    return std::equal(want.begin(), want.end(), structure_head.begin());
 }
 
 // The four facts that decide how a row places among the candidates for one
@@ -302,14 +302,16 @@ const std::vector<uint8_t>& current_structure_head() {
 struct Candidate {
     bool real = false;     // not a sentinel: it says which settings it ran under
     bool current = false;  // stamped by this build
-    bool format = false;   // its paths are in this build's path-structure format
+    bool format = false;   // its paths are in this build's path-structure format,
+                           // analyzed under the rules this process runs
     int64_t result_id = 0;
 };
 
 Candidate rank_row(const std::string& hyversion, int ms_enabled,
-                   const std::vector<uint8_t>& structure_head, int64_t result_id) {
+                   const std::vector<uint8_t>& structure_head, int64_t result_id,
+                   uint64_t rules_fingerprint) {
     return Candidate{ms_enabled != -1, hyversion == current_record_version(),
-                     structure_is_current(structure_head), result_id};
+                     structure_is_current(structure_head, rules_fingerprint), result_id};
 }
 
 // Is this row's content trustworthy? Only when this build wrote it, it says
@@ -320,9 +322,32 @@ Candidate rank_row(const std::string& hyversion, int ms_enabled,
 // classifies a row asks here -- the SQL sites below are the exception, and
 // spell the same rule out for the database.
 bool row_is_ready(const std::string& hyversion, int ms_enabled,
-                  const std::vector<uint8_t>& structure_head) {
-    const Candidate c = rank_row(hyversion, ms_enabled, structure_head, 0);
+                  const std::vector<uint8_t>& structure_head, uint64_t rules_fingerprint) {
+    const Candidate c = rank_row(hyversion, ms_enabled, structure_head, 0, rules_fingerprint);
     return c.real && c.current && c.format;
+}
+
+// Why a row that is not Ready is Stale, for callers that explain it
+// (hydra_replay dump). `build`: another Hydra build, an older path layout, or
+// a migrated row. `rules`: this layout, analyzed under other rules. An older
+// layout has no fingerprint to compare, so it is only ever `build`.
+struct StaleReasons {
+    bool build = false;
+    bool rules = false;
+};
+
+StaleReasons stale_reasons(const std::string& hyversion, int ms_enabled,
+                           const std::vector<uint8_t>& structure_head,
+                           uint64_t rules_fingerprint) {
+    const std::vector<uint8_t> want = structure_head_for(rules_fingerprint);
+    const bool layout_current =
+        structure_head.size() >= kStructureHeadBytes &&
+        std::equal(want.begin(), want.begin() + 4, structure_head.begin());
+    StaleReasons why;
+    why.build = hyversion != current_record_version() || ms_enabled == -1 || !layout_current;
+    why.rules = layout_current &&
+                !std::equal(want.begin() + 4, want.end(), structure_head.begin() + 4);
+    return why;
 }
 
 // row_is_ready spelled in SQL, positive and negated. Some sites have to pick
@@ -332,16 +357,16 @@ bool row_is_ready(const std::string& hyversion, int ms_enabled,
 // must be changed together.
 //
 // Both take two bound parameters, in this order: the current version text and
-// the current structure format's four leading bytes. bind_ready_params binds
-// them and returns the next free index.
+// the current structure format and rules fingerprint, 12 bytes.
+// bind_ready_params binds them and returns the next free index.
 constexpr const char* kRowReadySql =
-    "(hyversion = ? AND ms_enabled != -1 AND substr(structure,1,4) = ?)";
+    "(hyversion = ? AND ms_enabled != -1 AND substr(structure,1,12) = ?)";
 constexpr const char* kRowNotReadySql =
-    "(hyversion != ? OR ms_enabled = -1 OR substr(structure,1,4) != ?)";
+    "(hyversion != ? OR ms_enabled = -1 OR substr(structure,1,12) != ?)";
 
-int bind_ready_params(sqlite3_stmt* s, int idx) {
+int bind_ready_params(sqlite3_stmt* s, int idx, uint64_t rules_fingerprint) {
     bind_text(s, idx, current_record_version());
-    bind_blob(s, idx + 1, current_structure_head());
+    bind_blob(s, idx + 1, structure_head_for(rules_fingerprint));
     return idx + 2;
 }
 
@@ -464,7 +489,8 @@ PreparedRow prepare_row(const RecordKey& key, const HydraRecord& record) {
 
 // ---- RecordStore ------------------------------------------------------
 
-RecordStore::RecordStore(const std::string& dbpath) {
+RecordStore::RecordStore(const std::string& dbpath, uint64_t rules_fingerprint)
+    : rules_fingerprint_(rules_fingerprint) {
     if (sqlite3_open(dbpath.c_str(), &db_) != SQLITE_OK) {
         std::string msg = db_ ? sqlite3_errmsg(db_) : "unknown error";
         if (db_) sqlite3_close(db_);
@@ -925,7 +951,8 @@ void RecordStore::add_row(const PreparedRow& row) {
     try {
         // (1) Anything this chart+mode holds that this build cannot read --
         //     another Hydra version's stamp, a sentinel, an older path
-        //     layout -- is superseded by a write here. The test is against
+        //     layout, a result analyzed under other rules -- is superseded by
+        //     a write here. The test is against
         //     what is current, not against this row: a test writing a
         //     deliberately old-stamped row must not take the real rows with
         //     it, and this runs before the insert so the new row is untouched.
@@ -933,7 +960,7 @@ void RecordStore::add_row(const PreparedRow& row) {
               [&](sqlite3_stmt* s) {
                   bind_text(s, 1, row.hyhash);
                   bind_text(s, 2, row.chartmode);
-                  bind_ready_params(s, 3);
+                  bind_ready_params(s, 3, rules_fingerprint_);
               },
               "unreadable purge");
 
@@ -1024,7 +1051,7 @@ void RecordStore::add_row(const PreparedRow& row) {
 SummaryLookup RecordStore::get_summary(const RecordKey& key) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     std::string sql =
-        "SELECT hyversion, ms_enabled, bestpath, result_id, substr(structure,1,4)"
+        "SELECT hyversion, ms_enabled, bestpath, result_id, substr(structure,1,12)"
         " FROM results WHERE hyhash=? AND chartmode=?";
     append_candidate_filter(sql, "", key.cap);
     Stmt s = prepare(db_, sql.c_str());
@@ -1047,7 +1074,7 @@ SummaryLookup RecordStore::get_summary(const RecordKey& key) {
         w.bestpath = column_text(s, 2);
         w.structure_head = column_blob(s, 4);
         w.rank = rank_row(w.hyversion, w.ms_enabled, w.structure_head,
-                          sqlite3_column_int64(s, 3));
+                          sqlite3_column_int64(s, 3), rules_fingerprint_);
         if (!best || outranks(w.rank, best->rank)) best = std::move(w);
     }
     if (!best) return SummaryLookup{};
@@ -1056,7 +1083,8 @@ SummaryLookup RecordStore::get_summary(const RecordKey& key) {
     // A stale winner is reported as Stale, not hidden: the library's status
     // column has to tell "analyzed by another build" apart from "never
     // analyzed", and only a lookup can say which this is.
-    if (!row_is_ready(best->hyversion, best->ms_enabled, best->structure_head)) {
+    if (!row_is_ready(best->hyversion, best->ms_enabled, best->structure_head,
+                      rules_fingerprint_)) {
         out.status = RecordStatus::Stale;
         return out;
     }
@@ -1095,9 +1123,10 @@ RecordLookup RecordStore::get_record(const RecordKey& key) {
             w.hyversion = column_text(s, 1);
             w.ms_enabled = sqlite3_column_int(s, 2);
             w.structure = column_blob(s, 3);
-            // The whole blob is here, so its leading four bytes are the
-            // structure head the format check wants.
-            w.rank = rank_row(w.hyversion, w.ms_enabled, w.structure, w.result_id);
+            // The whole blob is here, so its leading twelve bytes are the
+            // structure head the format and rules check wants.
+            w.rank = rank_row(w.hyversion, w.ms_enabled, w.structure, w.result_id,
+                              rules_fingerprint_);
             if (!best || outranks(w.rank, best->rank)) best = std::move(w);
         }
         if (!best) return RecordLookup{};
@@ -1107,8 +1136,13 @@ RecordLookup RecordStore::get_record(const RecordKey& key) {
         // or holding a path tree in an older layout: nothing stored is
         // decoded at all, matching hydata.json_load's short-circuit on
         // hyversion mismatch. Callers see Stale and prompt a re-analyze.
-        if (!row_is_ready(best->hyversion, best->ms_enabled, best->structure)) {
+        if (!row_is_ready(best->hyversion, best->ms_enabled, best->structure,
+                          rules_fingerprint_)) {
             out.status = RecordStatus::Stale;
+            const StaleReasons why = stale_reasons(best->hyversion, best->ms_enabled,
+                                                   best->structure, rules_fingerprint_);
+            out.stale_build = why.build;
+            out.stale_rules = why.rules;
             return out;
         }
         result_id = best->result_id;
@@ -1150,7 +1184,7 @@ bool RecordStore::has_record(const RecordKey& key) {
     Stmt s = prepare(db_, sql.c_str());
     bind_text(s, 1, key.hyhash);
     bind_text(s, 2, key.chartmode);
-    int idx = bind_ready_params(s, 3);
+    int idx = bind_ready_params(s, 3, rules_fingerprint_);
     idx = bind_lens(s, idx, key.lens);
     if (key.cap.exact) sqlite3_bind_int(s, idx, *key.cap.exact);
     return sqlite3_step(s) == SQLITE_ROW;
@@ -1217,14 +1251,15 @@ void RecordStore::for_each_blob(
             row.result_id = sqlite3_column_int64(s, 7);
             row.structure = column_blob(s, 8);
             const int ms_enabled = sqlite3_column_int(s, 9);
-            // Both helpers read only the blob's leading four bytes, and take
+            // Both helpers read only the blob's leading twelve bytes, and take
             // the whole blob or just that head -- see structure_is_current.
-            row.meta.status = row_is_ready(row.meta.hyversion, ms_enabled, row.structure)
-                                  ? RecordStatus::Ready
-                                  : RecordStatus::Stale;
+            row.meta.status =
+                row_is_ready(row.meta.hyversion, ms_enabled, row.structure, rules_fingerprint_)
+                    ? RecordStatus::Ready
+                    : RecordStatus::Stale;
 
-            const Candidate rank =
-                rank_row(row.meta.hyversion, ms_enabled, row.structure, row.result_id);
+            const Candidate rank = rank_row(row.meta.hyversion, ms_enabled, row.structure,
+                                            row.result_id, rules_fingerprint_);
             const GroupKey key{row.meta.hyhash, row.meta.chartmode};
             auto it = winner.find(key);
             if (it == winner.end()) winner.emplace(key, candidates.size());
@@ -1326,9 +1361,10 @@ void RecordStore::for_each_blob(
 
 int RecordStore::drop_stale_records() {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    // Stale is three things now: a stamp from another Hydra version, a
-    // sentinel migrated in from an older database, and a path tree stored in
-    // an older layout. None of them can ever be read. kRowNotReadySql is
+    // Stale is four things now: a stamp from another Hydra version, a
+    // sentinel migrated in from an older database, a path tree stored in
+    // an older layout, and a result analyzed under other rules. None of them
+    // can be read under this build and these rules. kRowNotReadySql is
     // row_is_ready negated, spelled in SQL because a DELETE has to pick its
     // rows in the database; the two must be changed together.
     const char* kWhere = kRowNotReadySql;
@@ -1337,7 +1373,7 @@ int RecordStore::drop_stale_records() {
         Stmt s = prepare(db_,
             (std::string("DELETE FROM path_refs WHERE result_id IN"
                          " (SELECT result_id FROM results WHERE ") + kWhere + ")").c_str());
-        bind_ready_params(s, 1);
+        bind_ready_params(s, 1, rules_fingerprint_);
         if (sqlite3_step(s) != SQLITE_DONE)
             throw std::runtime_error(std::string("drop_stale_records refs failed: ") +
                                      sqlite3_errmsg(db_));
@@ -1347,7 +1383,7 @@ int RecordStore::drop_stale_records() {
     {
         Stmt s = prepare(db_,
             (std::string("DELETE FROM results WHERE ") + kWhere).c_str());
-        bind_ready_params(s, 1);
+        bind_ready_params(s, 1, rules_fingerprint_);
         if (sqlite3_step(s) != SQLITE_DONE)
             throw std::runtime_error(std::string("drop_stale_records failed: ") +
                                      sqlite3_errmsg(db_));
@@ -1383,7 +1419,7 @@ int RecordStore::reindex() {
         // A stale or sentinel row gets empty summaries: its stored bytes are
         // not this build's to read, so there is nothing to recompute from.
         PathSummary summary;
-        if (row_is_ready(row.hyversion, row.ms_enabled, row.structure)) {
+        if (row_is_ready(row.hyversion, row.ms_enabled, row.structure, rules_fingerprint_)) {
             const std::unordered_map<std::string, std::vector<uint8_t>> nodes =
                 load_nodes(row.result_id);
             summary = summarize_record(rebuild_record(
@@ -1415,7 +1451,7 @@ std::vector<RecordListing> RecordStore::list_records(
         "SELECT s.hyhash, s.ref_name, s.ref_artist, s.ref_charter, r.chartmode, r.bestpath, "
         "r.score, r.actcount, r.maxskip, r.hardest_ms, r.avgmult, r.notecount, "
         "r.sqin_count, r.sqout_count, r.pathcount, r.sp_cap, "
-        "r.hyversion, r.ms_enabled, r.result_id, substr(r.structure,1,4) "
+        "r.hyversion, r.ms_enabled, r.result_id, substr(r.structure,1,12) "
         "FROM results r JOIN songmeta s ON s.hyhash = r.hyhash WHERE 1=1";
     if (chartmode) sql += " AND r.chartmode = ?";
     append_candidate_filter(sql, "r.", cap);
@@ -1457,8 +1493,8 @@ std::vector<RecordListing> RecordStore::list_records(
         const int ms_enabled = sqlite3_column_int(s, 17);
         const std::vector<uint8_t> structure_head = column_blob(s, 19);
         row.rank = rank_row(hyversion, ms_enabled, structure_head,
-                            sqlite3_column_int64(s, 18));
-        row.ready = row_is_ready(hyversion, ms_enabled, structure_head);
+                            sqlite3_column_int64(s, 18), rules_fingerprint_);
+        row.ready = row_is_ready(hyversion, ms_enabled, structure_head, rules_fingerprint_);
 
         const GroupKey key{row.listing.hyhash, row.listing.chartmode};
         auto it = winner.find(key);

@@ -50,8 +50,9 @@ std::string ini_path() {
     return exe_dir() + "\\hydra_settings.ini";
 }
 
-std::unique_ptr<store::RecordStore> open_store(const std::string& db) {
-    auto store = std::make_unique<store::RecordStore>(db);
+std::unique_ptr<store::RecordStore> open_store(const std::string& db,
+                                               uint64_t rules_fingerprint) {
+    auto store = std::make_unique<store::RecordStore>(db, rules_fingerprint);
     // The legacy file is looked for beside the db being opened, not beside
     // the exe: a test harness pointing at a scratch db must never swallow a
     // developer's real library.

@@ -73,7 +73,7 @@ int main(int argc, char** argv) {
     options.hit_window_ms = settings.hit_window_ms;
     options.db_path = db;
 
-    std::unique_ptr<hydra::store::RecordStore> store = hydra::app::open_store(db);
+    std::unique_ptr<hydra::store::RecordStore> store = hydra::app::open_store(db, settings.rules.fingerprint());
     hydra::app::report::GeneratedReport report =
         hydra::app::report::generate_report(*store, options);
     store->close();

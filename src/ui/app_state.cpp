@@ -26,8 +26,14 @@ StartupSettings load_startup_settings() {
 
 AppState::AppState() : AppState(load_startup_settings()) {}
 
+// A bad rules file gates the store on kNoRulesFingerprint, so no row reads
+// Ready under the defaults the settings still hold.
 AppState::AppState(StartupSettings start)
-    : AppState(start.settings, app::open_store(app::db_path())) {
+    : AppState(start.settings,
+               app::open_store(app::db_path(),
+                               start.rules_error.empty()
+                                   ? start.settings.rules.fingerprint()
+                                   : core::kNoRulesFingerprint)) {
     rules_error = std::move(start.rules_error);
 }
 

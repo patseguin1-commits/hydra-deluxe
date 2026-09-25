@@ -287,10 +287,14 @@ HydraRecord analyze_chart(const Song& song, const SearchSettings& settings,
 
     // Clone Hero's 4-bar rule is the classic single pass, kept exactly as it
     // always was so a fresh 4-bar record matches every stored one.
-    if (sp_cap == kCloneHeroSpCap)
-        return analyze_at_cap(song, kCloneHeroSpCap, depth_mode, depth_value, ms_filter,
-                              std::nullopt, settings.legacy_fill_deadline, settings.rules,
-                              /*want_allzero=*/true, on_progress);
+    if (sp_cap == kCloneHeroSpCap) {
+        HydraRecord record =
+            analyze_at_cap(song, kCloneHeroSpCap, depth_mode, depth_value, ms_filter,
+                           std::nullopt, settings.legacy_fill_deadline, settings.rules,
+                           /*want_allzero=*/true, on_progress);
+        record.rules_fingerprint = settings.rules.fingerprint();
+        return record;
+    }
     // Any other fixed cap runs a single pass at that ceiling. The graph is
     // still only built as tall as the song has phrases to bank -- no run can
     // exceed that -- so a huge cap on a short song stays cheap and exact. A
@@ -298,14 +302,19 @@ HydraRecord analyze_chart(const Song& song, const SearchSettings& settings,
     // apply to it.
     if (sp_cap.has_value()) {
         int build_cap = std::min(*sp_cap, std::max(song.sp_phrase_count(), 1));
-        return analyze_at_cap(song, *sp_cap, depth_mode, depth_value, ms_filter,
-                              build_cap, settings.legacy_fill_deadline, settings.rules,
-                              /*want_allzero=*/true, on_progress);
+        HydraRecord record =
+            analyze_at_cap(song, *sp_cap, depth_mode, depth_value, ms_filter,
+                           build_cap, settings.legacy_fill_deadline, settings.rules,
+                           /*want_allzero=*/true, on_progress);
+        record.rules_fingerprint = settings.rules.fingerprint();
+        return record;
     }
-    return analyze_auto_cap(song, depth_mode, depth_value, ms_filter,
-                            settings.legacy_fill_deadline, settings.rules,
-                            /*want_allzero=*/true, on_progress,
-                            settings.time_budget_s);
+    HydraRecord record = analyze_auto_cap(song, depth_mode, depth_value, ms_filter,
+                                          settings.legacy_fill_deadline, settings.rules,
+                                          /*want_allzero=*/true, on_progress,
+                                          settings.time_budget_s);
+    record.rules_fingerprint = settings.rules.fingerprint();
+    return record;
 }
 
 }  // namespace hydra

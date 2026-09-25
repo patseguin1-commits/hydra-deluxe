@@ -15,7 +15,9 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <stdexcept>
+#include <system_error>
 #include <optional>
 #include <string>
 #include <thread>
@@ -23,6 +25,7 @@
 #include <vector>
 
 #include "core/model.h"
+#include "core/rules.h"
 #include "core/winstr.h"
 #include "corpus_util.h"
 #include "parse/song.h"
@@ -364,6 +367,41 @@ TEST_CASE("record blob: a v4 write drops clamp_tick, a v5 write keeps it") {
     HydraRecord as_current = read_record(write_record(record));
     REQUIRE(as_current.paths.size() == 1);
     CHECK(as_current.best_path().all_activations().front().clamp_tick == 3072);
+}
+
+TEST_CASE("record blob: a v5 write drops sqout_tick and collected_phrase_ticks, a v6 write keeps them") {
+    Activation act;
+    act.timecode = Timecode::raw(960);
+    act.deact_tick = 7680;
+    act.sqout_tick = 7488;
+    act.collected_phrase_ticks = {1920, 3840};
+    Path path;
+    path.activations.push_back(act);
+    HydraRecord record;
+    record.sp_cap = 4;
+    record.rules_fingerprint = 0x0123456789abcdefull;
+    record.paths.push_back(path);
+
+    HydraRecord v6 = read_record(write_record(record, 6));
+    const Activation& a6 = v6.paths.at(0).activations.at(0);
+    REQUIRE(a6.sqout_tick.has_value());
+    CHECK(*a6.sqout_tick == 7488);
+    CHECK(a6.collected_phrase_ticks == std::vector<int64_t>{1920, 3840});
+    CHECK(v6.rules_fingerprint == 0x0123456789abcdefull);
+
+    // A v5 blob has none of the three. They read back empty, and the
+    // fingerprint reads kNoRulesFingerprint, which no Rules value produces,
+    // so an old record can never pass as analyzed under the current rules.
+    HydraRecord v5 = read_record(write_record(record, 5));
+    const Activation& a5 = v5.paths.at(0).activations.at(0);
+    CHECK_FALSE(a5.sqout_tick.has_value());
+    CHECK(a5.collected_phrase_ticks.empty());
+    CHECK(v5.rules_fingerprint == core::kNoRulesFingerprint);
+    // v5 still keeps what v5 always kept.
+    REQUIRE(a5.deact_tick.has_value());
+    CHECK(*a5.deact_tick == 7680);
+
+    CHECK_THROWS_AS(write_record(record, kBlobFormatVersion + 1), SerializeError);
 }
 
 TEST_CASE("RecordStore maintenance: has_record, list_records, reindex, drop_stale_records") {
@@ -817,6 +855,98 @@ TEST_CASE("a row in an older path format is Stale even when this build stamped i
     CHECK(purge.counts().second == 1);
     purge.add_record(RecordKey{"purge", "mode", CapQuery::at(16)}, at_cap(16));
     CHECK(purge.counts().second == 1);
+}
+
+TEST_CASE("a row analyzed under other rules reads Stale until the rules match again") {
+    core::Rules other = core::default_rules();
+    other.max_tied_paths = 2;
+    const RecordKey key{"h", "mode", CapQuery::at(8)};
+
+    // A store running the default rules sees a row stamped with other rules
+    // as Stale everywhere a lookup can ask.
+    {
+        RecordStore store(":memory:");
+        store.add_song("h", "Song", "Artist", "Charter", fixture().song);
+        HydraRecord foreign = at_cap(8);
+        foreign.rules_fingerprint = other.fingerprint();
+        store.add_row(prepare_row(key, foreign));
+        CHECK_FALSE(store.has_record(key));
+        CHECK(store.get_record(key).status == RecordStatus::Stale);
+        CHECK(store.get_summary(key).status == RecordStatus::Stale);
+        CHECK(store.list_records(std::nullopt, CapQuery::at(8), Lens{}, SortColumn::Score, true)
+                  .empty());
+    }
+
+    // The same row reads Ready again once the store runs those rules.
+    const std::string db = temp_db("rules_fp");
+    {
+        RecordStore store(db);
+        store.add_song("h", "Song", "Artist", "Charter", fixture().song);
+        store.add_record(key, at_cap(8));
+        CHECK(store.get_record(key).status == RecordStatus::Ready);
+    }
+    {
+        RecordStore store(db, other.fingerprint());
+        CHECK(store.get_record(key).status == RecordStatus::Stale);
+        CHECK_FALSE(store.has_record(key));
+    }
+    {
+        // A store gated on "no usable rules" (a bad hydra_rules.ini) reads
+        // nothing as Ready.
+        RecordStore store(db, core::kNoRulesFingerprint);
+        CHECK(store.get_record(key).status == RecordStatus::Stale);
+    }
+    {
+        RecordStore store(db);
+        CHECK(store.get_record(key).status == RecordStatus::Ready);
+    }
+    std::error_code ec;
+    std::filesystem::remove(std::filesystem::u8path(db), ec);
+}
+
+TEST_CASE("a Stale lookup says why: another build, other rules, or both") {
+    core::Rules other = core::default_rules();
+    other.max_tied_paths = 2;
+    RecordStore store(":memory:");
+    store.add_song("h", "Song", "Artist", "Charter", fixture().song);
+
+    // This build, other rules.
+    const RecordKey rules_key{"h", "rules", CapQuery::at(8)};
+    HydraRecord foreign = at_cap(8);
+    foreign.rules_fingerprint = other.fingerprint();
+    store.add_row(prepare_row(rules_key, foreign));
+    RecordLookup by_rules = store.get_record(rules_key);
+    CHECK(by_rules.status == RecordStatus::Stale);
+    CHECK(by_rules.stale_rules);
+    CHECK_FALSE(by_rules.stale_build);
+
+    // Another build, these rules.
+    const RecordKey build_key{"h", "build", CapQuery::at(8)};
+    PreparedRow old_build = prepare_row(build_key, at_cap(8));
+    old_build.hyversion = "0.0.0";
+    store.add_row(old_build);
+    RecordLookup by_build = store.get_record(build_key);
+    CHECK(by_build.status == RecordStatus::Stale);
+    CHECK(by_build.stale_build);
+    CHECK_FALSE(by_build.stale_rules);
+
+    // Another build and other rules: both reasons.
+    const RecordKey both_key{"h", "both", CapQuery::at(8)};
+    PreparedRow both = prepare_row(both_key, foreign);
+    both.hyversion = "0.0.0";
+    store.add_row(both);
+    RecordLookup by_both = store.get_record(both_key);
+    CHECK(by_both.status == RecordStatus::Stale);
+    CHECK(by_both.stale_build);
+    CHECK(by_both.stale_rules);
+
+    // A Ready row carries no reason.
+    const RecordKey ready_key{"h", "ready", CapQuery::at(8)};
+    store.add_record(ready_key, at_cap(8));
+    RecordLookup ready = store.get_record(ready_key);
+    CHECK(ready.status == RecordStatus::Ready);
+    CHECK_FALSE(ready.stale_build);
+    CHECK_FALSE(ready.stale_rules);
 }
 
 TEST_CASE("for_each_blob does not hold the store lock across its callback") {
