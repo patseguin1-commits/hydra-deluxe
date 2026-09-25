@@ -573,8 +573,8 @@ std::map<std::string, int> count_chart_chords(const std::string& filepath) {
 AnalysisResult analyze_chart_file(const std::string& filepath,
                                   const AnalysisSettings& settings,
                                   const std::function<void(float)>& on_progress) {
-    Song song =
-        load_songpath(filepath, settings.prodrums, settings.bass2x, settings.difficulty);
+    Song song = load_songpath(filepath, settings.prodrums, settings.bass2x,
+                              settings.difficulty, settings.rules);
     // Say which difficulty is missing. The search's own backstop can only say
     // "no notes"; here we know what the user asked for, and a chart that
     // simply has no Hard charting is the common case.

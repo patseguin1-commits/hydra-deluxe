@@ -32,7 +32,8 @@ struct Window {
 
 }  // namespace
 
-ReplayResult replay_path(const Song& song, std::vector<ReplayWindow> windows) {
+ReplayResult replay_path(const Song& song, std::vector<ReplayWindow> windows,
+                         const core::Rules& rules) {
     const SongTiming& timing = song.timing();
 
     std::vector<Window> wins;
@@ -64,7 +65,7 @@ ReplayResult replay_path(const Song& song, std::vector<ReplayWindow> windows) {
 
     for (size_t i = 0; i < n; ++i) {
         const SongTimestamp& ts = song.sequence[i];
-        const CategoryScores sg = category_scores(ts.chord, combo, &per_note);
+        const CategoryScores sg = category_scores(ts.chord, combo, &per_note, rules.sqout_rule);
 
         ReplayChord row;
         row.index = static_cast<int>(i);
@@ -102,7 +103,7 @@ ReplayResult replay_path(const Song& song, std::vector<ReplayWindow> windows) {
             if (row.tick < w.act_tick) continue;
             const bool inclusive = row.tick <= w.deact_tick;
             const bool leeway = row.ms > w.deact_ms &&
-                                row.ms < w.deact_ms + kBackendLeewayMs;
+                                row.ms < w.deact_ms + rules.backend_leeway_ms;
             if (!inclusive && !leeway) continue;
 
             if (w.has_sqout) {

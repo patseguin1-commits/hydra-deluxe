@@ -83,6 +83,7 @@ void init_scratch(Harness& h) {
     fs::create_directories(fs::u8path(h.temp_dir));
     h.db_path = h.temp_dir + "\\hydra.db";
     h.ini_path = h.temp_dir + "\\hydra_settings.ini";
+    h.rules_path = h.temp_dir + "\\hydra_rules.ini";
     if (h.shots_dir.empty()) h.shots_dir = h.temp_dir;
 
     // The app's own path lookups now resolve to the scratch files; the real
@@ -90,6 +91,7 @@ void init_scratch(Harness& h) {
     hydra::app::PathOverrides po;
     po.db_path = h.db_path;
     po.ini_path = h.ini_path;
+    po.rules_path = h.rules_path;
     po.asset_dir = HYDRA_ASSET_DIR;
     hydra::app::set_path_overrides(po);
 }
@@ -236,7 +238,7 @@ void Harness::shutdown() {
     }
 }
 
-void reset_app(Harness& h) {
+void reset_app(Harness& h, const std::string& rules_text) {
     if (h.app && h.app->preview) h.app->preview->close();
     h.app.reset();
 
@@ -269,6 +271,12 @@ void reset_app(Harness& h) {
         f << "chartfolder=" << HYDRA_INPUT_DIR << "\n";
         f << "auto_open_report=0\n";
         f << "depth_value=2\n";  // keep analyses short
+    }
+    if (rules_text.empty()) {
+        fs::remove(fs::u8path(h.rules_path), ec);
+    } else {
+        std::ofstream f(fs::u8path(h.rules_path), std::ios::trunc);
+        f << rules_text;
     }
     h.opened_urls.clear();
     h.frame_text.text.clear();

@@ -42,6 +42,7 @@ struct Harness {
     std::string temp_dir;
     std::string db_path;
     std::string ini_path;
+    std::string rules_path;
     std::string shots_dir;  // where `screenshot` files go (default: temp_dir)
     bool keep_temp = false;
 
@@ -84,7 +85,9 @@ struct Harness {
 // paths, and (re)install the headless seams. Call at the start of TestFunc —
 // the GUI thread is parked between frames while TestFunc runs, so swapping
 // the AppState here is safe.
-void reset_app(Harness& h);
+// rules_text: the scratch hydra_rules.ini's contents. Empty (the default)
+// means no rules file, so every other test runs today's rules.
+void reset_app(Harness& h, const std::string& rules_text = "");
 
 // Register every C++ test (uitest_tests.cpp) and, when h.script_path is set,
 // the "script" test (uitest_script.cpp). Each test's UserData is &h.

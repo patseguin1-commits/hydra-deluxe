@@ -6,6 +6,7 @@
 //     hydra_fillcompare --old ch10.db --new ch11.db
 //     hydra_fillcompare --old ch10.db --new ch11.db --out fill_compare.html
 //     hydra_fillcompare --old ch10.db --new ch11.db --no-open
+//     hydra_fillcompare --old ch10.db --new ch11.db --rules hydra_rules.ini
 //
 // The page is self-contained: open it anywhere, click any column to sort. It
 // opens in the default browser unless --no-open is given.
@@ -21,6 +22,7 @@
 #include <string>
 
 #include "app/config.h"
+#include "app/rules_file.h"
 #include "app/fill_report.h"
 #include "app/report_files.h"
 #include "core/model.h"
@@ -34,12 +36,14 @@ int main(int argc, char** argv) {
     std::optional<std::string> new_path;
     std::string out = "fill_compare.html";
     bool open_when_done = true;
+    std::optional<std::string> rulespath;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--old" && i + 1 < argc) old_path = argv[++i];
         else if (arg == "--new" && i + 1 < argc) new_path = argv[++i];
         else if (arg == "--out" && i + 1 < argc) out = argv[++i];
+        else if (arg == "--rules" && i + 1 < argc) rulespath = argv[++i];
         else if (arg == "--no-open") open_when_done = false;
         else {
             std::fprintf(stderr, "Unknown option: %s\n", arg.c_str());
@@ -50,11 +54,18 @@ int main(int argc, char** argv) {
     if (!old_path || !new_path) {
         std::fprintf(stderr,
             "Usage: hydra_fillcompare --old <ch10.db> --new <ch11.db> "
-            "[--out fill_compare.html] [--no-open]\n");
+            "[--out fill_compare.html] [--no-open] [--rules hydra_rules.ini]\n");
         return 2;
     }
 
     hydra::app::Settings settings = hydra::app::Settings::load();
+    try {
+        settings.rules = hydra::app::load_rules_file(
+            rulespath ? std::filesystem::u8path(*rulespath) : hydra::app::default_rules_path());
+    } catch (const hydra::app::RulesFileError& e) {
+        std::fprintf(stderr, "%s\n", e.what());
+        return 2;
+    }
     std::string chartmode = settings.chartmode_key();
     hydra::store::CapQuery cap = settings.cap_query();
     hydra::store::Lens lens = settings.lens();

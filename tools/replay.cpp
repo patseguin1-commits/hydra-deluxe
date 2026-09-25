@@ -45,6 +45,7 @@
 
 #include "app/analysis.h"
 #include "app/config.h"
+#include "app/rules_file.h"
 #include "core/replay.h"
 #include "core/squeeze_rating.h"
 #include "corpus_util.h"
@@ -78,6 +79,8 @@ struct Args {
     bool pretty = false;
     bool no_analyze = false;
     bool legacy_fills = false;
+    std::string rules_path;  // --rules; empty = hydra_rules.ini next to the exe
+    core::Rules rules;       // loaded once in main, before any command runs
 };
 
 bool flag_bool(const std::string& v) { return v == "1" || v == "true" || v == "yes"; }
@@ -122,6 +125,8 @@ void usage() {
         "which is what a 1.0 run was played under. Every stored row is a 1.1\n"
         "result, so dump ignores the database and always analyzes fresh; its\n"
         "\"source\" then reads \"analyzed-ch10\".\n"
+        "Every command takes --rules <file>: the rule choices to price under\n"
+        "(default: hydra_rules.ini next to the exe). A bad file exits with 2.\n"
         "JSON is printed compact by default; --pretty indents it.\n");
 }
 
@@ -146,6 +151,7 @@ app::Settings settings_from(const Args& a) {
 
     s.depth_mode = a.depth_mode == "points" ? 1 : 0;
     s.depth_value = a.depth;
+    s.rules = a.rules;
     return s;
 }
 
@@ -363,7 +369,7 @@ int cmd_score(const Args& a) {
     const app::Settings s = settings_from(a);
 
     Song song = load_songpath(a.chart, s.view_prodrums, s.effective_bass2x(),
-                              s.difficulty());
+                              s.difficulty(), s.rules);
     if (song.is_empty()) {
         std::fprintf(stderr, "chart has no notes: %s\n", a.chart.c_str());
         return 1;
@@ -372,7 +378,7 @@ int cmd_score(const Args& a) {
     const std::vector<ReplayWindow> windows =
         a.path.empty() ? parse_acts(a.acts)
                        : windows_from_file(a.path, a.index);
-    const ReplayResult r = replay_path(song, windows);
+    const ReplayResult r = replay_path(song, windows, s.rules);
 
     // Say so when a window could be hiding a squeeze-out. The score is left
     // exactly as it is: only the player knows whether they squeezed.
@@ -520,7 +526,7 @@ int cmd_dump(const Args& a) {
     // not apply to either of them.
     if (a.legacy_fills) {
         const Song song = load_songpath(a.chart, s.view_prodrums,
-                                        s.effective_bass2x(), s.difficulty());
+                                        s.effective_bass2x(), s.difficulty(), s.rules);
         if (song.is_empty()) {
             std::fprintf(stderr, "chart has no notes: %s\n", a.chart.c_str());
             return 1;
@@ -579,7 +585,7 @@ int cmd_dump(const Args& a) {
         if (a.no_analyze) return 1;
 
         const Song fresh_song = load_songpath(a.chart, s.view_prodrums,
-                                              s.effective_bass2x(), s.difficulty());
+                                              s.effective_bass2x(), s.difficulty(), s.rules);
         if (fresh_song.is_empty()) {
             std::fprintf(stderr, "chart has no notes: %s\n", a.chart.c_str());
             return 1;
@@ -641,7 +647,7 @@ int cmd_target(const Args& a) {
     const std::vector<int64_t> ticks = parse_ticks(a.ticks);
 
     Song song = load_songpath(a.chart, s.view_prodrums, s.effective_bass2x(),
-                              s.difficulty());
+                              s.difficulty(), s.rules);
     if (song.is_empty()) {
         std::fprintf(stderr, "chart has no notes: %s\n", a.chart.c_str());
         return 1;
@@ -703,14 +709,17 @@ bool g_verbose = false;
 
 const char* kFieldNames[6] = {"base", "combo", "sp", "solo", "accent", "ghost"};
 
-void check_chart(const std::string& path, Tally* tally) {
+void check_chart(const std::string& path, const core::Rules& rules, Tally* tally) {
     // The GUI's defaults, straight from app::Settings rather than five
-    // hand-written literals.
-    const app::AnalysisSettings cfg = app::Settings().to_analysis_settings();
+    // hand-written literals, under the rules this run loaded.
+    app::Settings defaults;
+    defaults.rules = rules;
+    const app::AnalysisSettings cfg = defaults.to_analysis_settings();
 
     std::optional<Song> song_opt;
     try {
-        song_opt.emplace(load_songpath(path, cfg.prodrums, cfg.bass2x, cfg.difficulty));
+        song_opt.emplace(
+            load_songpath(path, cfg.prodrums, cfg.bass2x, cfg.difficulty, cfg.rules));
     } catch (const std::exception& e) {
         std::printf("SKIP %s (%s)\n", path.c_str(), e.what());
         ++tally->skipped;
@@ -736,7 +745,7 @@ void check_chart(const std::string& path, Tally* tally) {
         ++tally->paths;
 
         std::vector<ReplayWindow> windows = windows_for_path(*p, song);
-        const ReplayResult r = replay_path(song, windows);
+        const ReplayResult r = replay_path(song, windows, rules);
         const ReplayScore want = score_of(*p);
 
         std::string diffs;
@@ -810,9 +819,9 @@ void check_chart(const std::string& path, Tally* tally) {
 int cmd_selfcheck(const Args& a) {
     Tally tally;
     if (!a.chart.empty()) {
-        check_chart(a.chart, &tally);
+        check_chart(a.chart, a.rules, &tally);
     } else {
-        for (const std::string& p : corpus::chart_paths()) check_chart(p, &tally);
+        for (const std::string& p : corpus::chart_paths()) check_chart(p, a.rules, &tally);
     }
     std::printf(
         "\nselfcheck: %d chart(s), %d path(s) — PASS %d, FAIL %d (%d chart(s) "
@@ -837,6 +846,7 @@ int main(int argc, char** argv) {
         try {
             if (k == "--chart") a.chart = next();
             else if (k == "--db") a.db = next();
+            else if (k == "--rules") a.rules_path = next();
             else if (k == "--out") a.out = next();
             else if (k == "--cap") a.cap = next();
             else if (k == "--ms") a.ms = next();
@@ -860,6 +870,15 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "%s\n", e.what());
             return 2;
         }
+    }
+
+    try {
+        a.rules = app::load_rules_file(a.rules_path.empty()
+                                           ? app::default_rules_path()
+                                           : std::filesystem::u8path(a.rules_path));
+    } catch (const app::RulesFileError& e) {
+        std::fprintf(stderr, "%s\n", e.what());
+        return 2;
     }
 
     try {

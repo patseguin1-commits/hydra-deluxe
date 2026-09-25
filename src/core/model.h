@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 
+#include "core/rules.h"
 #include "core/timing.h"
 
 namespace hydra {
@@ -59,11 +60,8 @@ NoteCymbalType cymbal_flip(NoteCymbalType t);
 // report's timing tiers.
 constexpr double kDifficultMs = 2.0;
 
-// Backend leeway edge: a backend note this close after the SP end still
-// scores under SP without a deliberate squeeze. Shared by the engine's
-// squeeze pricing and the "Standard" edge of BackendSqueeze::summarystr, so
-// the price and the label cannot drift apart.
-constexpr double kBackendLeewayMs = 3.0;
+// The backend leeway edge is a user rule now: core::Rules::backend_leeway_ms
+// (hydra_rules.ini), read by the engine and BackendSqueeze::summarystr.
 
 // The default per-side hit window (the registrable Clone Hero Pro Drums
 // window). The *setting* app::Settings::hit_window_ms starts from this; the
@@ -204,7 +202,10 @@ struct BackendSqueeze {
     // Rating label. The outer +/-W edges come from the hit window; the inner
     // -10/3/10 edges are absolute (they encode leeway/near-deact semantics,
     // not the window).
-    std::string summarystr(double hit_window_ms = kDefaultHitWindowMs) const;
+    // leeway_ms: the backend leeway edge (Rules::backend_leeway_ms); a
+    // non-SP row under it rates "Standard".
+    std::string summarystr(double hit_window_ms = kDefaultHitWindowMs,
+                           double leeway_ms = core::default_rules().backend_leeway_ms) const;
 };
 
 // Multiplier squeeze. Construction validates the chord+combo and throws

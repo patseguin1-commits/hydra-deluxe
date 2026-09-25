@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "app/analysis.h"
+#include "core/rules.h"
 #include "store/record_store.h"
 
 namespace hydra::app {
@@ -42,6 +43,7 @@ struct PathOverrides {
     std::string db_path;
     std::string ini_path;
     std::string asset_dir;
+    std::string rules_path;  // hydra_rules.ini (app/rules_file.h)
 };
 void set_path_overrides(PathOverrides overrides);
 const PathOverrides& path_overrides();
@@ -95,6 +97,11 @@ struct Settings {
     // The dmleaderboards user (Discord ID) last compared against, so the
     // "Compare dmleaderboards user" picker can pre-select it. Empty = none yet.
     std::string dm_last_user;
+
+    // The rules this process runs under, loaded from hydra_rules.ini at
+    // startup. Never written to hydra_settings.ini: the rules file is the
+    // user's to edit, the app only reads it.
+    core::Rules rules = core::default_rules();
 
     static Settings load();
     // False when the INI can't be written (the GUI surfaces this; the CLIs

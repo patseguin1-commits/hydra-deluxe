@@ -12,7 +12,7 @@
 //      term is whether the chord's doubling (CategoryScores::sp) is paid.
 //   2. The Star Power window is inclusive at both ends: the activation chord
 //      earns its doubling, and so does the chord sitting on the deactivation
-//      node. A chord landing within kBackendLeewayMs after the deactivation
+//      node. A chord landing within Rules::backend_leeway_ms after the deactivation
 //      earns it too (search/engine.cpp create_deactivated_path).
 //   3. A solo pays 100 per note on both tracks and is never doubled.
 //
@@ -125,7 +125,8 @@ struct ReplayResult {
 
 // Score `song` under `windows` (any order; they are sorted here). An empty
 // list scores the chart with no Star Power anywhere.
-ReplayResult replay_path(const Song& song, std::vector<ReplayWindow> windows);
+ReplayResult replay_path(const Song& song, std::vector<ReplayWindow> windows,
+                         const core::Rules& rules = core::default_rules());
 
 // The six score categories off a stored Path, in ReplayScore's shape, so a
 // caller can compare it against a ReplayResult::final with operator==

@@ -211,7 +211,12 @@ void render_controls(AppState& app) {
             ImGui::CloseCurrentPopup();
         }
     }
-    bool analyze_disabled = !file_ok || (app.analyze_job && !app.analyze_job->finished());
+    if (app.analysis_blocked())
+        ImGui::TextColored(kWarningColor,
+                           "Analysis is off until hydra_rules.ini is fixed and Hydra is "
+                           "restarted.");
+    bool analyze_disabled = app.analysis_blocked() || !file_ok ||
+                            (app.analyze_job && !app.analyze_job->finished());
     begin_disabled_button(analyze_disabled);
     if (ImGui::Button("Analyze paths!", ImVec2(-1, px(40)))) {
         app.start_analyze();
@@ -595,7 +600,7 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
                            ? app.viewed.record->sp_cap.value_or(kCloneHeroSpCap)
                            : kCloneHeroSpCap;
     pc->open(*app.selected, app.settings.view_prodrums, app.settings.effective_bass2x(),
-             app.settings.difficulty(), selected_path, sp_cap);
+             app.settings.difficulty(), selected_path, sp_cap, app.settings.rules);
     pc->poll();
 
     if (pc->has_error()) {

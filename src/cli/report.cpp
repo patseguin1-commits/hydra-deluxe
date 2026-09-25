@@ -6,6 +6,7 @@
 //     hydra_report --all-paths       # everything stored
 //     hydra_report --out report.html
 //     hydra_report --db <path>       # a specific database
+//     hydra_report --rules <path>    # the rules the records must match (Task 2)
 //     hydra_report --no-open         # don't launch the page when done
 //
 // The page is self-contained: open it anywhere, click any column to sort,
@@ -23,6 +24,7 @@
 #include <string>
 
 #include "app/config.h"
+#include "app/rules_file.h"
 #include "app/report.h"
 #include "app/report_files.h"
 #include "core/model.h"
@@ -34,6 +36,7 @@ int main(int argc, char** argv) {
     int64_t max_paths = 5;
     std::string out = "hydra_paths.html";
     std::optional<std::string> dbpath;
+    std::optional<std::string> rulespath;
     bool open_when_done = true;
 
     for (int i = 1; i < argc; ++i) {
@@ -42,6 +45,7 @@ int main(int argc, char** argv) {
         else if (arg == "--paths" && i + 1 < argc) max_paths = std::atoll(argv[++i]);
         else if (arg == "--out" && i + 1 < argc) out = argv[++i];
         else if (arg == "--db" && i + 1 < argc) dbpath = argv[++i];
+        else if (arg == "--rules" && i + 1 < argc) rulespath = argv[++i];
         else if (arg == "--no-open") open_when_done = false;
         else {
             std::fprintf(stderr, "Unknown option: %s\n", arg.c_str());
@@ -55,6 +59,13 @@ int main(int argc, char** argv) {
     // entry points agree.
     std::string db = dbpath ? *dbpath : hydra::app::db_path();
     hydra::app::Settings settings = hydra::app::Settings::load();
+    try {
+        settings.rules = hydra::app::load_rules_file(
+            rulespath ? std::filesystem::u8path(*rulespath) : hydra::app::default_rules_path());
+    } catch (const hydra::app::RulesFileError& e) {
+        std::fprintf(stderr, "%s\n", e.what());
+        return 2;
+    }
     hydra::app::report::ReportOptions options;
     options.max_paths = max_paths;
     options.cap = settings.cap_query();

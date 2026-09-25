@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "core/model.h"
+#include "core/rules.h"
 
 namespace hydra {
 
@@ -31,8 +32,11 @@ struct CategoryScores {
 // that same order, holding each note's own share of the six totals below.
 // This is only for display/tooling use — it does not change the aggregate
 // that gets returned.
+// sqout_rule decides which notes' SP doubling sqout_reduction takes: only
+// note 0 (FirstNote, Hydra's rule so far) or every note (WholeChord).
 CategoryScores category_scores(const Chord& chord, int combo,
-                                std::vector<CategoryScores>* per_note = nullptr);
+                                std::vector<CategoryScores>* per_note = nullptr,
+                                core::SqOutRule sqout_rule = core::SqOutRule::FirstNote);
 
 }  // namespace hydra
 

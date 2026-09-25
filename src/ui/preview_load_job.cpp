@@ -11,13 +11,15 @@
 namespace hydra::ui {
 
 PreviewLoadJob::PreviewLoadJob(store::ChartLibraryEntry entry, bool pro, bool bass2x,
-                               Difficulty difficulty, std::optional<Path> path, int sp_cap)
+                               Difficulty difficulty, std::optional<Path> path, int sp_cap,
+                               core::Rules rules)
     : entry_(std::move(entry)),
       pro_(pro),
       bass2x_(bass2x),
       difficulty_(difficulty),
       path_(std::move(path)),
-      sp_cap_(sp_cap) {}
+      sp_cap_(sp_cap),
+      rules_(std::move(rules)) {}
 
 void PreviewLoadJob::start() { spawn([this] { run(); }); }
 
@@ -27,7 +29,7 @@ void PreviewLoadJob::run() {
         // are never stored), then decode + mix to one 48 kHz stereo buffer.
         step_.store(Step::Reading);
         app::PreviewSource source =
-            app::resolve_preview_source(entry_.notespath, pro_, bass2x_, difficulty_);
+            app::resolve_preview_source(entry_.notespath, pro_, bass2x_, difficulty_, rules_);
         // A chart with no charting at this difficulty would otherwise build an
         // empty scene and the tab would show a blank highway with no reason
         // given. Throwing here surfaces it as "Preview failed: ...", the same

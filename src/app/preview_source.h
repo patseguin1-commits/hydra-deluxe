@@ -24,6 +24,7 @@
 #include <string>
 #include <vector>
 
+#include "core/rules.h"
 #include "parse/song.h"
 
 namespace hydra::app {
@@ -49,10 +50,11 @@ struct PreviewSource {
 
 // Parse `notespath` (any supported chart kind) and gather its audio.
 // pro/bass2x/difficulty mirror the analysis toggles so the previewed notes
-// match the analyzed ones.
+// match the analyzed ones. rules places the fills the same way analysis does.
 PreviewSource resolve_preview_source(const std::string& notespath, bool pro,
                                      bool bass2x,
-                                     Difficulty difficulty = Difficulty::Expert);
+                                     Difficulty difficulty = Difficulty::Expert,
+                                     const core::Rules& rules = core::default_rules());
 
 // ---- pieces, exposed for testing and reuse -------------------------------
 

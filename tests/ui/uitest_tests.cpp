@@ -698,6 +698,30 @@ void test_dynamics_stored(ImGuiTestContext* ctx) {
              text.find("Accents:") != std::string::npos);
 }
 
+// A bad hydra_rules.ini: the app still opens and scans, the error naming the
+// key stays on screen, and both Analyze buttons are disabled.
+void test_rules_error(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h, "max_tied_paths = 0\n");
+    IM_CHECK(h.app->analysis_blocked());
+    IM_CHECK(h.app->rules_error.find("max_tied_paths") != std::string::npos);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+
+    IM_CHECK(wait_until(ctx, [&] {
+        return visible_text(h).find("analysis is off") != std::string::npos;
+    }, 5));
+    IM_CHECK(visible_text(h).find("max_tied_paths") != std::string::npos);
+    IM_CHECK((ctx->ItemInfo("Analyze library").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+    open_details(ctx, 0);
+    if (ctx->IsError()) return;
+    IM_CHECK((ctx->ItemInfo("**/Analyze paths!").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+    // The state refuses as well as the button.
+    h.app->start_analyze();
+    IM_CHECK(h.app->analyze_job == nullptr);
+}
+
 }  // namespace
 
 void register_tests(Harness& h) {
@@ -720,6 +744,7 @@ void register_tests(Harness& h) {
         {"backend-limit", test_backend_limit},
         {"dynamics", test_dynamics},
         {"dynamics-stored", test_dynamics_stored},
+        {"rules-error", test_rules_error},
     };
     for (const Entry& e : entries) {
         ImGuiTest* t = IM_REGISTER_TEST(h.engine, "hydra", e.name);

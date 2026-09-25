@@ -19,6 +19,7 @@
 #include "app/analysis.h"
 #include "app/config.h"
 #include "app/dynamics_breakdown.h"
+#include "core/rules.h"
 #include "store/record_store.h"
 #include "ui/dm_jobs.h"
 #include "ui/dynamics_load_job.h"
@@ -79,6 +80,13 @@ struct DetailsViewState {
     std::string store_error;
 };
 
+// What the app reads before it opens the store: the settings, with
+// hydra_rules.ini already loaded, and the loader's error if the file was bad.
+struct StartupSettings {
+    app::Settings settings;
+    std::string rules_error;
+};
+
 class AppState {
 public:
     AppState();
@@ -90,6 +98,12 @@ public:
 
     Settings settings;
     std::unique_ptr<store::RecordStore> store;
+    // Set at startup when hydra_rules.ini is bad (the loader's message, which
+    // names the key). While set, analysis is off: the Analyze buttons are
+    // disabled and start_batch/start_analyze do nothing. It clears only on a
+    // restart with a fixed file; there is no fallback to the default rules.
+    std::string rules_error;
+    bool analysis_blocked() const { return !rules_error.empty(); }
 
     // Library browsing.
     std::string search;              // empty = no filter
@@ -218,6 +232,7 @@ public:
     void commit_settings();
 
 private:
+    explicit AppState(StartupSettings start);
     ID3D11Device* render_device_ = nullptr;
     ID3D11DeviceContext* render_context_ = nullptr;
 

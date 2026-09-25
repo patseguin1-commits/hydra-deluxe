@@ -112,12 +112,13 @@ bool full_match(const std::string& s, const std::regex& re) {
 // `tick` (so its op must run after the chord emit), false when it belongs to
 // an earlier chord (run it before). "Lands on" means the next chord is within
 // a 1/32-of-a-beat slop of the fill end and no closer to the previous chord.
-bool fill_lands_on_chord(const Song& song, int64_t fill_end_tick, int64_t tick) {
+bool fill_lands_on_chord(const Song& song, int64_t fill_end_tick, int64_t tick,
+                         double slop_beats) {
     std::optional<int64_t> prevchord_dist;
     if (!song.sequence.empty())
         prevchord_dist = fill_end_tick - song.sequence.back().timecode.ticks();
     int64_t nextchord_dist = tick - fill_end_tick;
-    return nextchord_dist <= song.tick_resolution() / 32 &&
+    return nextchord_dist <= static_cast<int64_t>(song.tick_resolution() * slop_beats) &&
            (!prevchord_dist.has_value() || nextchord_dist <= *prevchord_dist);
 }
 
@@ -158,7 +159,7 @@ int Song::sp_phrase_count() const {
 
 // ---- Song::check_activations -------------------------------------------
 
-void Song::check_activations() {
+void Song::check_activations(const core::Rules& rules) {
     for (const SongTimestamp& ts : sequence)
         if (ts.has_activation()) return;  // chart already has fills.
 
@@ -222,17 +223,19 @@ void Song::check_activations() {
         }
     }
 
-    const int64_t ACT_COOLDOWN_MEASURES = 4;
-    const int64_t MAX_DISTANCE = tick_resolution_ / 2;
+    const int64_t cooldown_measures = rules.fill_cooldown_measures;
+    const int64_t max_distance =
+        static_cast<int64_t>(tick_resolution_ * rules.fill_max_distance_beats);
     std::optional<int64_t> last_act_measure;
     for (auto& kv : measuremap) {
         int64_t measure = kv.first;
         Cell& cell = kv.second;
         if (last_act_measure.has_value() &&
-            measure < *last_act_measure + ACT_COOLDOWN_MEASURES)
+            measure < *last_act_measure + cooldown_measures)
             continue;
-        if (cell.best.has_value() && cell.bestdist <= MAX_DISTANCE) {
-            sequence[*cell.best].activation_length = cell.pre_tpm / 2;
+        if (cell.best.has_value() && cell.bestdist <= max_distance) {
+            sequence[*cell.best].activation_length =
+                static_cast<int64_t>(cell.pre_tpm * rules.fill_length_measures);
             last_act_measure = measure;
         }
     }
@@ -281,9 +284,12 @@ bool is_handled_note(int note, int base) {
 
 class MidiParser {
 public:
+    explicit MidiParser(const core::Rules& rules) : rules_(rules) {}
     Song parse(const MidiFile& mid, bool pro, bool bass2x, Difficulty difficulty);
 
 private:
+    const core::Rules& rules_;
+
     MOp optype(const Message& msg, int64_t tick);
     void push_timestamp(int64_t tick);
     static void run_ops(std::vector<std::function<void()>>& ops);
@@ -515,7 +521,7 @@ void MidiParser::push_timestamp(int64_t tick) {
         int64_t start = *fill_start_tick_;
         auto fill_op = [this, start] { op_apply_fill(start); };
 
-        if (fill_lands_on_chord(*song_, *fill_end_tick_, tick))
+        if (fill_lands_on_chord(*song_, *fill_end_tick_, tick, rules_.fill_land_slop_beats))
             post.push_back(std::move(fill_op));
         else
             pre_timestamp.push_back(std::move(fill_op));
@@ -595,7 +601,7 @@ Song MidiParser::parse(const MidiFile& mid, bool pro, bool bass2x,
         }
     }
 
-    song.check_activations();
+    song.check_activations(rules_);
     return song;
 }
 
@@ -718,10 +724,13 @@ struct COp {
 
 class ChartParser {
 public:
+    explicit ChartParser(const core::Rules& rules) : rules_(rules) {}
     Song parse(const std::vector<uint8_t>& data, bool pro, bool bass2x,
                Difficulty difficulty);
 
 private:
+    const core::Rules& rules_;
+
     void load_sections(const std::vector<uint8_t>& data);
     COp optype(const ChartDataEntry& e, int64_t tick);
     void push_timestamp(int64_t tick, const std::vector<ChartDataEntry>& entries);
@@ -921,7 +930,7 @@ void ChartParser::push_timestamp(int64_t tick,
     // Phrase end: activation fill.
     if (chord_.count() && fill_end_tick_.has_value() &&
         tick >= *fill_end_tick_) {
-        CPhase order = fill_lands_on_chord(*song_, *fill_end_tick_, tick)
+        CPhase order = fill_lands_on_chord(*song_, *fill_end_tick_, tick, rules_.fill_land_slop_beats)
                            ? CPhase::Post
                            : CPhase::Pre;
         int64_t start = *fill_start_tick_;
@@ -1004,7 +1013,7 @@ Song ChartParser::parse(const std::vector<uint8_t>& data, bool pro,
     }
 
     song.dynamics_enabled = true;
-    song.check_activations();
+    song.check_activations(rules_);
     return song;
 }
 
@@ -1013,30 +1022,30 @@ Song ChartParser::parse(const std::vector<uint8_t>& data, bool pro,
 // ---- public loaders -----------------------------------------------------
 
 Song load_songbytes_mid(const std::vector<uint8_t>& data, bool pro,
-                        bool bass2x, Difficulty difficulty) {
+                        bool bass2x, Difficulty difficulty, const core::Rules& rules) {
     MidiFile mid(data);
-    return MidiParser().parse(mid, pro, bass2x, difficulty);
+    return MidiParser(rules).parse(mid, pro, bass2x, difficulty);
 }
 
 Song load_songbytes_chart(const std::vector<uint8_t>& data, bool pro,
-                          bool bass2x, Difficulty difficulty) {
-    return ChartParser().parse(data, pro, bass2x, difficulty);
+                          bool bass2x, Difficulty difficulty, const core::Rules& rules) {
+    return ChartParser(rules).parse(data, pro, bass2x, difficulty);
 }
 
 Song load_songpath_mid(const std::string& path, bool pro, bool bass2x,
-                       Difficulty difficulty) {
+                       Difficulty difficulty, const core::Rules& rules) {
     MidiFile mid = MidiFile::from_file(path);
-    return MidiParser().parse(mid, pro, bass2x, difficulty);
+    return MidiParser(rules).parse(mid, pro, bass2x, difficulty);
 }
 
 Song load_songpath_chart(const std::string& path, bool pro, bool bass2x,
-                         Difficulty difficulty) {
+                         Difficulty difficulty, const core::Rules& rules) {
     std::vector<uint8_t> data = read_file_bytes(path);
-    return ChartParser().parse(data, pro, bass2x, difficulty);
+    return ChartParser(rules).parse(data, pro, bass2x, difficulty);
 }
 
 Song load_songpath_sng(const std::string& path, bool pro, bool bass2x,
-                       Difficulty difficulty) {
+                       Difficulty difficulty, const core::Rules& rules) {
     std::vector<uint8_t> buf = read_file_bytes(path);
 
     auto read_u64 = [&buf](size_t pos) {
@@ -1098,12 +1107,12 @@ Song load_songpath_sng(const std::string& path, bool pro, bool bass2x,
     }
 
     if (loader == Loader::Mid)
-        return load_songbytes_mid(notebytes, pro, bass2x, difficulty);
-    return load_songbytes_chart(notebytes, pro, bass2x, difficulty);
+        return load_songbytes_mid(notebytes, pro, bass2x, difficulty, rules);
+    return load_songbytes_chart(notebytes, pro, bass2x, difficulty, rules);
 }
 
 Song load_songpath_srb(const std::string& path, bool pro, bool bass2x,
-                       Difficulty difficulty) {
+                       Difficulty difficulty, const core::Rules& rules) {
     std::vector<uint8_t> buf = read_file_bytes(path);
     if (buf.size() <= kSrbHeaderSize)
         throw std::runtime_error("Truncated SRB file.");
@@ -1133,21 +1142,21 @@ Song load_songpath_srb(const std::string& path, bool pro, bool bass2x,
     else  // Unexpected filename: sniff the payload instead.
         is_mid = notebytes.size() >= 4 && std::memcmp(notebytes.data(), "MThd", 4) == 0;
 
-    if (is_mid) return load_songbytes_mid(notebytes, pro, bass2x, difficulty);
-    return load_songbytes_chart(notebytes, pro, bass2x, difficulty);
+    if (is_mid) return load_songbytes_mid(notebytes, pro, bass2x, difficulty, rules);
+    return load_songbytes_chart(notebytes, pro, bass2x, difficulty, rules);
 }
 
 Song load_songpath(const std::string& path, bool pro, bool bass2x,
-                   Difficulty difficulty) {
+                   Difficulty difficulty, const core::Rules& rules) {
     std::string low = ascii_casefold(path);
     auto ends_with = [&low](const char* suf) {
         size_t n = std::strlen(suf);
         return low.size() >= n && low.compare(low.size() - n, n, suf) == 0;
     };
-    if (ends_with(".mid")) return load_songpath_mid(path, pro, bass2x, difficulty);
-    if (ends_with(".chart")) return load_songpath_chart(path, pro, bass2x, difficulty);
-    if (ends_with(".sng")) return load_songpath_sng(path, pro, bass2x, difficulty);
-    if (ends_with(".srb")) return load_songpath_srb(path, pro, bass2x, difficulty);
+    if (ends_with(".mid")) return load_songpath_mid(path, pro, bass2x, difficulty, rules);
+    if (ends_with(".chart")) return load_songpath_chart(path, pro, bass2x, difficulty, rules);
+    if (ends_with(".sng")) return load_songpath_sng(path, pro, bass2x, difficulty, rules);
+    if (ends_with(".srb")) return load_songpath_srb(path, pro, bass2x, difficulty, rules);
     throw std::runtime_error("unexpected chart type: " + path);
 }
 

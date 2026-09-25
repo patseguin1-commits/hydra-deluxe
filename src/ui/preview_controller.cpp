@@ -31,7 +31,8 @@ PreviewController::~PreviewController() { close(); }
 
 void PreviewController::open(const store::ChartLibraryEntry& entry, bool pro,
                              bool bass2x, Difficulty difficulty,
-                             const Path* path, int sp_cap) {
+                             const Path* path, int sp_cap,
+                             const core::Rules& rules) {
     if (active_ && open_key_ == entry.md5) {
         std::string key = overlay_key(path, sp_cap);
         if (key == path_key_) return;  // same chart, same overlay: nothing to do
@@ -59,7 +60,8 @@ void PreviewController::open(const store::ChartLibraryEntry& entry, bool pro,
     path_ = path ? std::optional<Path>(*path) : std::nullopt;
     path_key_ = overlay_key(path, sp_cap_);
     job_path_key_ = path_key_;
-    job_ = std::make_unique<PreviewLoadJob>(entry, pro, bass2x, difficulty, path_, sp_cap_);
+    job_ = std::make_unique<PreviewLoadJob>(entry, pro, bass2x, difficulty, path_, sp_cap_,
+                                            rules);
     job_->start();
 }
 

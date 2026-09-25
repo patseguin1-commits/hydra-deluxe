@@ -7,6 +7,7 @@
 //     hydra_batch --reindex          # only rebuild sort columns, no analysis
 //     hydra_batch --db <path>        # target a specific database
 //     hydra_batch --legacy-fills     # score fills by Clone Hero 1.0's rule
+//     hydra_batch --rules <path>     # rule choices from this file, not the exe's hydra_rules.ini
 //
 // --legacy-fills needs its own --db: the rule is not recorded on a row, so
 // 1.0 and 1.1 results must not share a file (docs/adr/0010). Compare two such
@@ -37,6 +38,7 @@
 
 #include "app/analysis.h"
 #include "app/config.h"
+#include "app/rules_file.h"
 #include "core/model.h"
 #include "search/graph.h"
 #include "store/record_store.h"
@@ -83,6 +85,7 @@ int main(int argc, char** argv) {
 
     bool redo = false, reindex_only = false, legacy_fills = false;
     std::optional<std::string> dbpath;
+    std::optional<std::string> rulespath;
     std::vector<std::string> folder_args;
 
     for (int i = 1; i < argc; ++i) {
@@ -91,6 +94,7 @@ int main(int argc, char** argv) {
         else if (arg == "--reindex") reindex_only = true;
         else if (arg == "--legacy-fills") legacy_fills = true;
         else if (arg == "--db" && i + 1 < argc) dbpath = argv[++i];
+        else if (arg == "--rules" && i + 1 < argc) rulespath = argv[++i];
         else if (arg.rfind("--", 0) == 0) {
             std::fprintf(stderr, "Unknown option: %s\n", arg.c_str());
             return 2;
@@ -100,6 +104,13 @@ int main(int argc, char** argv) {
     }
 
     hydra::app::Settings settings = hydra::app::Settings::load();
+    try {
+        settings.rules = hydra::app::load_rules_file(
+            rulespath ? std::filesystem::u8path(*rulespath) : hydra::app::default_rules_path());
+    } catch (const hydra::app::RulesFileError& e) {
+        std::fprintf(stderr, "%s\n", e.what());
+        return 2;
+    }
     hydra::app::AnalysisSettings analysis = settings.to_analysis_settings();
     analysis.legacy_fill_deadline = legacy_fills;
     std::string chartmode = settings.chartmode_key();

@@ -311,7 +311,7 @@ bool BackendSqueeze::operator==(const BackendSqueeze& o) const {
            offset_ms == o.offset_ms;
 }
 
-std::string BackendSqueeze::summarystr(double hit_window_ms) const {
+std::string BackendSqueeze::summarystr(double hit_window_ms, double leeway_ms) const {
     double off = offset_ms.value_or(0.0);
     const double w = hit_window_ms;
     if (is_sp) {
@@ -323,7 +323,7 @@ std::string BackendSqueeze::summarystr(double hit_window_ms) const {
     }
     if (off < -w) return "Free";
     if (off < -10) return "Easy";
-    if (off < kBackendLeewayMs) return "Standard";
+    if (off < leeway_ms) return "Standard";
     if (off < w) return "Hard (uncounted)";
     return "Insane (uncounted)";
 }

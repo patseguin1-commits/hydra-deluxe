@@ -174,14 +174,17 @@ void render_actions_row(AppState& app) {
         "Analyze search (" + widest_digits(digit_count(app.library_total)) + ")";
     const float analyze_w =
         std::max(button_slot_width("Analyze library"), button_slot_width(analyze_widest.c_str()));
-    begin_disabled_button(analyzable == 0);
+    // Also off while hydra_rules.ini is bad: no analysis on rules the user
+    // did not choose.
+    const bool analyze_off = analyzable == 0 || app.analysis_blocked();
+    begin_disabled_button(analyze_off);
     if (button_in_slot(label, analyze_w)) {
         // Confirm before starting: a library batch can be hours of all-core
         // CPU, which shouldn't fire irrevocably from one click.
         app.batch_confirm_pending = true;
         ImGui::OpenPopup("Analyzing");
     }
-    end_disabled_button(analyzable == 0);
+    end_disabled_button(analyze_off);
     ImGui::SameLine();
     ImGui::Checkbox("redo existing", &app.batch_redo);
     hint("Also re-analyze charts that already have a stored result");
@@ -212,6 +215,16 @@ void render_actions_row(AppState& app) {
     hint("Compare a dmleaderboards.com player's scores against your library");
 
     render_status_line(app, /*same_line=*/true);
+    // A bad rules file is not a passing message: it stays on screen, under
+    // the action row, for as long as analysis is off.
+    if (app.analysis_blocked()) {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(kWarningColor,
+                           "hydra_rules.ini has an error, so analysis is off until the "
+                           "file is fixed and Hydra is restarted.");
+        ImGui::TextColored(kWarningColor, "%s", app.rules_error.c_str());
+        ImGui::PopTextWrapPos();
+    }
     render_folder_manager(app);
 }
 

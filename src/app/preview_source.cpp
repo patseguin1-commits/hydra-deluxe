@@ -297,8 +297,9 @@ std::vector<PreviewAudioStem> extract_srb_audio(const std::string& path) {
 }
 
 PreviewSource resolve_preview_source(const std::string& notespath, bool pro,
-                                     bool bass2x, Difficulty difficulty) {
-    PreviewSource src{load_songpath(notespath, pro, bass2x, difficulty), {}};
+                                     bool bass2x, Difficulty difficulty,
+                                     const core::Rules& rules) {
+    PreviewSource src{load_songpath(notespath, pro, bass2x, difficulty, rules), {}};
     if (ends_with_ci(notespath, ".sng"))
         src.stems = extract_sng_audio(notespath);
     else if (ends_with_ci(notespath, ".srb")) {

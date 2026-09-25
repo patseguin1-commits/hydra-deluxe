@@ -54,7 +54,8 @@ public:
     // or a changed `sp_cap`: the overlay is swapped in place off the retained
     // song — no re-parse, no audio re-decode, playback position untouched.
     void open(const store::ChartLibraryEntry& entry, bool pro, bool bass2x,
-              Difficulty difficulty, const Path* path, int sp_cap);
+              Difficulty difficulty, const Path* path, int sp_cap,
+              const core::Rules& rules = core::default_rules());
     // Stop audio, drop the scene/transport, and join the load thread. Keeps the
     // renderer for reuse. Safe to call when nothing is open.
     void close();

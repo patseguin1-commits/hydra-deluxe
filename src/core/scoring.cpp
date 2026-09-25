@@ -7,7 +7,8 @@
 namespace hydra {
 
 CategoryScores category_scores(const Chord& chord, int combo,
-                                std::vector<CategoryScores>* per_note) {
+                                std::vector<CategoryScores>* per_note,
+                                core::SqOutRule sqout_rule) {
     // Every possible cross-multiplication of the score multipliers, named as
     // in the original.
     int base_note = 0, base_cymbal = 0;
@@ -63,11 +64,12 @@ CategoryScores category_scores(const Chord& chord, int combo,
         combospdynamic_note += is_dynamic ? basevalue * extra : 0;
         combospdynamic_cymbal += dyn_cymb * extra;
 
-        // Quick and dirty SqOut calculation -- first note only.
-        if (i == 0) {
-            sqout_reduction =
-                (basevalue + cymb) * combo_multiplier * (is_dynamic ? 2 : 1);
-        }
+        // SqOut: the notes that lose their SP doubling. FirstNote keeps the
+        // original quick calculation (note 0 only); WholeChord takes every note.
+        const bool loses_sp = i == 0 || sqout_rule == core::SqOutRule::WholeChord;
+        const int note_sqout =
+            loses_sp ? (basevalue + cymb) * combo_multiplier * (is_dynamic ? 2 : 1) : 0;
+        sqout_reduction += note_sqout;
 
         if (per_note) {
             CategoryScores note_scores;
@@ -81,10 +83,7 @@ CategoryScores category_scores(const Chord& chord, int combo,
                               dyn_cymb * extra;
             note_scores.accent = is_accent ? basevalue : 0;
             note_scores.ghost = is_ghost ? basevalue : 0;
-            note_scores.sqout_reduction =
-                (i == 0) ? (basevalue + cymb) * combo_multiplier *
-                               (is_dynamic ? 2 : 1)
-                         : 0;
+            note_scores.sqout_reduction = note_sqout;
             per_note->push_back(note_scores);
         }
     }

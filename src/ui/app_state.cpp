@@ -3,11 +3,33 @@
 #include <algorithm>
 
 #include "app/config.h"
+#include "app/rules_file.h"
 #include "ui/preview_controller.h"
 
 namespace hydra::ui {
 
-AppState::AppState() : AppState(Settings::load(), app::open_store(app::db_path())) {}
+namespace {
+
+// Settings plus hydra_rules.ini. A bad file is not fatal: the app still
+// opens so the user can read the error, but analysis stays off.
+StartupSettings load_startup_settings() {
+    StartupSettings start{Settings::load(), {}};
+    try {
+        start.settings.rules = app::load_rules_file(app::default_rules_path());
+    } catch (const app::RulesFileError& e) {
+        start.rules_error = e.what();
+    }
+    return start;
+}
+
+}  // namespace
+
+AppState::AppState() : AppState(load_startup_settings()) {}
+
+AppState::AppState(StartupSettings start)
+    : AppState(start.settings, app::open_store(app::db_path())) {
+    rules_error = std::move(start.rules_error);
+}
 
 AppState::AppState(app::Settings initial_settings,
                    std::unique_ptr<store::RecordStore> initial_store)
@@ -166,6 +188,7 @@ void AppState::start_scan() {
 }
 
 void AppState::start_batch(bool redo) {
+    if (analysis_blocked()) return;
     if (batch_job && !batch_job->snapshot().finished) return;
 
     // The job loads the (possibly search-filtered) item list on its own
@@ -179,6 +202,7 @@ void AppState::start_batch(bool redo) {
 }
 
 void AppState::start_analyze() {
+    if (analysis_blocked()) return;
     if (!selected) return;
     if (analyze_job && !analyze_job->finished()) return;
     analyze_job = std::make_unique<AnalyzeJob>(*selected, settings.record_key(selected->md5),

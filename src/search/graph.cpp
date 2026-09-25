@@ -74,8 +74,8 @@ double activation_fill_deadline_ms(const SongTiming& timing,
 }
 
 ScoreGraph::ScoreGraph(const Song& song, std::optional<int> sp_meter_cap,
-                       FillDeadlineRule rule)
-    : song_(song), sp_meter_cap_(sp_meter_cap), rule_(rule) {
+                       FillDeadlineRule rule, const core::Rules& rules)
+    : song_(song), sp_meter_cap_(sp_meter_cap), rule_(rule), rules_(rules) {
     start_ = new_node(song_.start_time(), false);
     base_track_head_ = start_;
     sp_track_head_ = new_node(song_.start_time(), true);
@@ -110,7 +110,7 @@ void ScoreGraph::build() {
         if (timestamp.flag_solo)
             store_soloscore(100 * timestamp.chord.count());
 
-        CategoryScores sg = category_scores(timestamp.chord, combo_);
+        CategoryScores sg = category_scores(timestamp.chord, combo_, nullptr, rules_.sqout_rule);
 
         try {
             MultSqueeze msq(timestamp.chord, combo_);

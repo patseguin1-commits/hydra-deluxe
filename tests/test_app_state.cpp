@@ -11,6 +11,7 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -58,16 +59,20 @@ struct ScratchPaths {
     hydra::app::PathOverrides previous;
     std::string ini;
     std::string db;
+    std::string rules;
 
     explicit ScratchPaths(const char* tag)
         : previous(hydra::app::path_overrides()),
           ini(temp_path(tag, ".ini")),
-          db(temp_path(tag, ".db")) {
+          db(temp_path(tag, ".db")),
+          rules(temp_path(tag, "_rules.ini")) {
         std::remove(ini.c_str());
         std::remove(db.c_str());
+        std::remove(rules.c_str());
         hydra::app::PathOverrides overrides = previous;
         overrides.ini_path = ini;
         overrides.db_path = db;
+        overrides.rules_path = rules;
         hydra::app::set_path_overrides(overrides);
     }
 
@@ -75,6 +80,7 @@ struct ScratchPaths {
         hydra::app::set_path_overrides(previous);
         std::remove(ini.c_str());
         std::remove(db.c_str());
+        std::remove(rules.c_str());
     }
 };
 
@@ -221,4 +227,35 @@ TEST_CASE("commit_settings with a non-identity change does not bump the record g
     CHECK_FALSE(records.changed(app->record_generation));
     CHECK(app->viewed.status == RecordStatus::Ready);
     CHECK(Settings::load_file(paths.ini).hit_window_ms == app->settings.hit_window_ms);
+}
+
+TEST_CASE("a bad hydra_rules.ini names the key and keeps analysis off") {
+    ScratchPaths paths("appstate_badrules");
+    {
+        std::ofstream f(paths.rules);
+        f << "max_tied_paths = 0\n";
+    }
+    seeded_store(paths.db).reset();  // the library and one record, on disk
+
+    // The startup constructor: settings INI, rules file and database from
+    // the (scratch) paths, exactly as Hydra.exe starts.
+    AppState app;
+    CHECK(app.rules_error.find("max_tied_paths") != std::string::npos);
+    CHECK(app.analysis_blocked());
+
+    // The buttons are disabled, and the state refuses too, so no other
+    // caller can start an analysis on the wrong rules.
+    app.selected = library_entry(0);
+    app.start_analyze();
+    CHECK(app.analyze_job == nullptr);
+    app.start_batch(false);
+    CHECK(app.batch_job == nullptr);
+}
+
+TEST_CASE("no hydra_rules.ini leaves analysis on") {
+    ScratchPaths paths("appstate_norules");
+    seeded_store(paths.db).reset();
+    AppState app;
+    CHECK(app.rules_error.empty());
+    CHECK_FALSE(app.analysis_blocked());
 }

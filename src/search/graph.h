@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "core/model.h"
+#include "core/rules.h"
 #include "core/timing.h"
 #include "parse/song.h"
 
@@ -106,14 +107,18 @@ class ScoreGraph {
 public:
     // sp_meter_cap: bars the meter holds, or nullopt for no ceiling.
     // rule: which game version decides when a fill spawns (default Ch11).
+    // rules: the user's rule choices; the graph prices squeeze-outs by
+    // rules.sqout_rule and hands the rest to the engine through rules().
     ScoreGraph(const Song& song, std::optional<int> sp_meter_cap,
-               FillDeadlineRule rule = FillDeadlineRule::Ch11);
+               FillDeadlineRule rule = FillDeadlineRule::Ch11,
+               const core::Rules& rules = core::default_rules());
 
     ScoreGraphNode* start() const { return start_; }
     ScoreGraphNode* sp_start() const { return sp_start_; }
     int length() const { return length_; }
     std::optional<int> sp_meter_cap() const { return sp_meter_cap_; }
     FillDeadlineRule fill_rule() const { return rule_; }
+    const core::Rules& rules() const { return rules_; }
     const SongTiming& timing() const { return song_.timing(); }
 
     // The notes left in the squeeze window (kSqueezeWindowMs) before the song's
@@ -172,6 +177,7 @@ private:
     const Song& song_;
     std::optional<int> sp_meter_cap_;
     FillDeadlineRule rule_ = FillDeadlineRule::Ch11;
+    core::Rules rules_;
 
     // Stable-address storage for the graph. deque never invalidates element
     // references on push_back.

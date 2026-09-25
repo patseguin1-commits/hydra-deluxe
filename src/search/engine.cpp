@@ -32,7 +32,6 @@ const int32_t DEACT_NONE = 0;
 const int32_t DEACT_NORMAL = 1;
 const int32_t DEACT_SQINOUT = 2;
 
-const int32_t MAX_TIED_PATHS = 4;
 const int32_t NODE_BROKEN = -2;
 
 // ---- the graph, enumerated ----------------------------------------------
@@ -252,9 +251,12 @@ class Engine {
 public:
     Engine(const Enum& en, bool has_sp_cap, int32_t sp_cap, DepthMode depth_mode,
            int32_t depth_value, bool has_ms_filter, double ms_filter,
-           bool no_skips, bool hard_ms_filter,
+           bool no_skips, bool hard_ms_filter, double backend_leeway_ms,
+           int32_t max_tied_paths,
            const std::vector<int64_t>* target_act_ticks = nullptr)
         : en_(en),
+          backend_leeway_ms_(backend_leeway_ms),
+          max_tied_paths_(max_tied_paths),
           has_sp_cap_(has_sp_cap),
           sp_cap_(sp_cap),
           depth_mode_(depth_mode),
@@ -360,6 +362,9 @@ private:
                    int32_t* begin, int32_t* end);
 
     const Enum& en_;
+    // hydra_rules.ini: the backend leeway edge and the tied-path fold limit.
+    double backend_leeway_ms_;
+    int32_t max_tied_paths_;
     bool has_sp_cap_;
     int32_t sp_cap_;
     DepthMode depth_mode_;
@@ -571,7 +576,7 @@ void Engine::create_deactivated_path(const Path& p, Path* child, bool is_sq_out)
         const int32_t be_sqout_points = beo.sqout_points;
 
         const bool is_already_counted = be_offset <= 0;
-        const bool is_leeway = be_offset > 0 && be_offset < kBackendLeewayMs;
+        const bool is_leeway = be_offset > 0 && be_offset < backend_leeway_ms_;
 
         if (is_sq_out) {
             const bool is_before_sqout = be_tick < e.sqinout_time;
@@ -719,7 +724,7 @@ void Engine::reduce_group(const int32_t* members, int32_t n) {
 
         Path& leader = cur_[(size_t)leader_idx];
         const Path& p = cur_[(size_t)idx];
-        if (leader.tied_count + p.tied_count <= MAX_TIED_PATHS) {
+        if (leader.tied_count + p.tied_count <= max_tied_paths_) {
             Variant v;
             v.prev = leader.var_head;
             v.var_point = act_count(leader);
@@ -1294,7 +1299,9 @@ std::vector<MPath> run_search(const ScoreGraph& graph, DepthMode depth_mode,
 
     Engine engine(en, has_cap, cap, depth_mode, depth_value,
                   ms_filter.has_value(), ms_filter.value_or(0.0),
-                  no_skips, hard_ms_filter, target_act_ticks);
+                  no_skips, hard_ms_filter, graph.rules().backend_leeway_ms,
+                  static_cast<int32_t>(graph.rules().max_tied_paths),
+                  target_act_ticks);
     if (on_progress) engine.set_progress_cb(on_progress);
 
     if (!engine.run())

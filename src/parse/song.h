@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "core/model.h"
+#include "core/rules.h"
 #include "core/timing.h"
 
 namespace hydra {
@@ -97,7 +98,7 @@ public:
     int sp_phrase_count() const;
 
     // If the chart has no drum fills, synthesize them like Clone Hero would.
-    void check_activations();
+    void check_activations(const core::Rules& rules = core::default_rules());
 
 private:
     int64_t tick_resolution_;
@@ -105,22 +106,29 @@ private:
 };
 
 Song load_songpath_mid(const std::string& path, bool pro, bool bass2x,
-                       Difficulty difficulty = Difficulty::Expert);
+                       Difficulty difficulty = Difficulty::Expert,
+                       const core::Rules& rules = core::default_rules());
 Song load_songpath_chart(const std::string& path, bool pro, bool bass2x,
-                         Difficulty difficulty = Difficulty::Expert);
+                         Difficulty difficulty = Difficulty::Expert,
+                         const core::Rules& rules = core::default_rules());
 Song load_songpath_sng(const std::string& path, bool pro, bool bass2x,
-                       Difficulty difficulty = Difficulty::Expert);
+                       Difficulty difficulty = Difficulty::Expert,
+                       const core::Rules& rules = core::default_rules());
 Song load_songpath_srb(const std::string& path, bool pro, bool bass2x,
-                       Difficulty difficulty = Difficulty::Expert);
+                       Difficulty difficulty = Difficulty::Expert,
+                       const core::Rules& rules = core::default_rules());
 
 Song load_songbytes_mid(const std::vector<uint8_t>& data, bool pro, bool bass2x,
-                        Difficulty difficulty = Difficulty::Expert);
+                        Difficulty difficulty = Difficulty::Expert,
+                        const core::Rules& rules = core::default_rules());
 Song load_songbytes_chart(const std::vector<uint8_t>& data, bool pro, bool bass2x,
-                          Difficulty difficulty = Difficulty::Expert);
+                          Difficulty difficulty = Difficulty::Expert,
+                          const core::Rules& rules = core::default_rules());
 
 // Dispatch on the file extension (.mid/.chart/.sng/.srb, case-insensitive).
 Song load_songpath(const std::string& path, bool pro, bool bass2x,
-                   Difficulty difficulty = Difficulty::Expert);
+                   Difficulty difficulty = Difficulty::Expert,
+                   const core::Rules& rules = core::default_rules());
 
 }  // namespace hydra
 

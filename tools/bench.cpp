@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdio>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <optional>
@@ -24,6 +25,7 @@
 #include "json.hpp"
 
 #include "app/analysis.h"
+#include "app/rules_file.h"
 #include "corpus_util.h"
 #include "parse/song.h"
 #include "search/pather.h"
@@ -31,6 +33,9 @@
 
 using namespace hydra;
 using clk = std::chrono::steady_clock;
+
+// hydra_rules.ini (or --rules <path>): the rule choices every mode runs under.
+static core::Rules g_rules;
 
 static double secs_since(clk::time_point t0) {
     return std::chrono::duration<double>(clk::now() - t0).count();
@@ -65,7 +70,7 @@ static void folder_breakdown(const std::string& folder) {
         auto t = clk::now();
         std::optional<Song> song_opt;
         try {
-            song_opt.emplace(load_songpath(it.notespath, true, true));
+            song_opt.emplace(load_songpath(it.notespath, true, true, Difficulty::Expert, g_rules));
         } catch (const std::exception& e) {
             std::printf("  (skipped: %s)\n\n", e.what());
             continue;
@@ -81,6 +86,7 @@ static void folder_breakdown(const std::string& folder) {
         settings.depth_value = 4;
         settings.ms_filter = 10.0;
         settings.time_budget_s = std::nullopt;
+        settings.rules = g_rules;
         HydraRecord rec = analyze_chart(song, settings);
         double search_s = secs_since(t);
 
@@ -190,7 +196,7 @@ static void corpus_bench() {
     std::vector<Song> songs;
     for (const std::string& path : corpus::chart_paths()) {
         try {
-            songs.push_back(load_songpath(path, true, true));
+            songs.push_back(load_songpath(path, true, true, Difficulty::Expert, g_rules));
         } catch (const std::exception&) {
         }
     }
@@ -202,6 +208,7 @@ static void corpus_bench() {
         settings.depth_mode = DepthMode::Scores;
         settings.depth_value = dvalue;
         settings.ms_filter = std::nullopt;
+        settings.rules = g_rules;
         double best = 1e30;
         for (int rep = 0; rep < 3; ++rep) {
             auto t0 = clk::now();
@@ -242,6 +249,28 @@ static void dump_db(const std::string& dbpath, const std::string& outpath) {
 }
 
 int main(int argc, char** argv) {
+    // --rules <path> may sit anywhere; take it out so the positional mode
+    // checks below see the same argv they always did.
+    std::vector<char*> args;
+    std::string rules_path;
+    for (int i = 0; i < argc; ++i) {
+        if (i > 0 && std::string(argv[i]) == "--rules" && i + 1 < argc) {
+            rules_path = argv[++i];
+            continue;
+        }
+        args.push_back(argv[i]);
+    }
+    try {
+        g_rules = app::load_rules_file(rules_path.empty()
+                                           ? app::default_rules_path()
+                                           : std::filesystem::u8path(rules_path));
+    } catch (const app::RulesFileError& e) {
+        std::fprintf(stderr, "%s\n", e.what());
+        return 2;
+    }
+    argc = static_cast<int>(args.size());
+    argv = args.data();
+
     if (argc > 3 && std::string(argv[1]) == "--dump-db") {
         dump_db(argv[2], argv[3]);
         return 0;

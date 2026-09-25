@@ -128,6 +128,7 @@ add_library(hydra_core STATIC
     src/core/chord_tables.cpp
     src/core/model.cpp
     src/core/scoring.cpp
+    src/core/rules.cpp
     src/core/squeeze_rating.cpp
     src/core/replay.cpp
     src/core/strutil.cpp
@@ -144,6 +145,7 @@ add_library(hydra_core STATIC
     src/store/record_store.cpp
     src/app/analysis.cpp
     src/app/config.cpp
+    src/app/rules_file.cpp
     src/app/html_page.cpp
     src/app/dynamics_breakdown.cpp
     src/app/path_view.cpp
@@ -330,6 +332,7 @@ add_executable(hydra_tests
     tests/test_analysis.cpp
     tests/test_report.cpp
     tests/test_config.cpp
+    tests/test_rules.cpp
     tests/test_dm_report.cpp
     tests/test_fill_deadline.cpp
     tests/test_fill_report.cpp

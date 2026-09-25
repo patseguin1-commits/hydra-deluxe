@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "core/model.h"
+#include "core/rules.h"
 #include "parse/song.h"
 #include "search/engine.h"
 #include "search/graph.h"
@@ -33,6 +34,8 @@ struct SearchSettings {
     // beats (FillDeadlineRule in search/graph.h). CLI-only: it is not part of
     // a record's identity, so a legacy run needs its own db (docs/adr/0010).
     bool legacy_fill_deadline = false;
+    // The user's rule choices (hydra_rules.ini). Defaults are today's rules.
+    core::Rules rules = core::default_rules();
 };
 
 // The best all-0 path over an already-built graph: the highest-scoring path

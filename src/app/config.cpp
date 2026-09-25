@@ -174,7 +174,8 @@ AnalysisSettings Settings::to_analysis_settings() const {
     // Bound the Auto ladder so a pathologically heavy chart can't hang the
     // app for minutes (hymisc.SP_CAP_TIME_BUDGET). A fixed cap is a single
     // run and needs no budget.
-    s.time_budget_s = sp_cap ? std::nullopt : std::optional<double>(120.0);
+    s.time_budget_s = sp_cap ? std::nullopt : std::optional<double>(rules.auto_budget_s);
+    s.rules = rules;
     return s;
 }
 
