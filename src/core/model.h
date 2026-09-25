@@ -69,10 +69,11 @@ constexpr double kDifficultMs = 2.0;
 // display-layer defaults below use it so all entry points agree.
 constexpr double kDefaultHitWindowMs = 85.0;
 
-// Backends within this window of the deactivation are stored and shown.
-// 500 matches the graph's squeeze window, so nothing the engine collects
-// is trimmed; the Backend limit setting narrows the display from here.
-constexpr double kBackendDisplayWindowMs = 500.0;
+// The squeeze horizon in ms. The search graph only looks this far from the SP
+// end for a reachable squeeze, and backends within it of the deactivation are
+// stored and shown, so nothing the engine collects is trimmed. The Backend
+// limit setting narrows the display from here. hydra_batch prints it.
+constexpr double kSqueezeWindowMs = 500.0;
 
 // Calibration-fill (E) timing window, applied to e_offset in both directions:
 // an activation with e_offset < -window is illegal (the fill can't be
@@ -82,6 +83,14 @@ constexpr double kBackendDisplayWindowMs = 500.0;
 // place. Search-load-bearing, so it is a constant, never the hit_window_ms
 // setting.
 constexpr double kCalibrationFillWindowMs = 60.0;
+
+// ---- note value ----------------------------------------------------------
+// What one note is worth before any multiplier. ChordNote::basescore and
+// category_scores both read these, so the price has one home.
+inline constexpr int kNoteBasePoints = 50;
+inline constexpr int kCymbalBonusPoints = 15;
+// Solo bonus: this many points per note hit inside a solo section.
+inline constexpr int kSoloBonusPerNote = 100;
 
 // ---- ChordNote ----------------------------------------------------------
 

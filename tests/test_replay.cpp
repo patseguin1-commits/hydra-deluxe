@@ -27,7 +27,7 @@
 #include "corpus_util.h"
 #include "parse/song.h"
 #include "search/engine.h"
-#include "search/graph.h"  // kSqueezeWindowMs, the horizon the warning uses
+#include "core/model.h"  // kSqueezeWindowMs, the horizon the warning uses
 #include "search/pather.h"
 
 using namespace hydra;

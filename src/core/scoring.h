@@ -23,6 +23,9 @@ struct CategoryScores {
     int accent = 0;
     int ghost = 0;
     int sqout_reduction = 0;
+    // The SP points this chord keeps when it is squeezed out: the chord's SP
+    // value minus the lost doubling. The one place that subtraction lives.
+    int sqout_sp() const { return sp - sqout_reduction; }
     // The combo multiplier applied to the chord's first note (base-sorted),
     // the same note the SqOut calculation reads. Per note, that note's own.
     int multiplier = 1;

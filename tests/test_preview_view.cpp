@@ -14,6 +14,7 @@
 #include "app/analysis.h"
 #include "app/preview_view.h"
 #include "core/squeeze_rating.h"
+#include "core/timing.h"  // sp_bars_to_measures
 #include "corpus_util.h"
 #include "parse/song.h"
 #include "search/engine.h"
@@ -142,7 +143,7 @@ Activation sp_act_at(const Song& song, int64_t tick, int sp_meter) {
     a.sp_meter = sp_meter;
     a.skips = 0;
     a.deact_tick =
-        song.timing().plusmeasure(*a.timecode, 2 * static_cast<int64_t>(sp_meter)).ticks();
+        song.timing().plusmeasure(*a.timecode, sp_bars_to_measures(sp_meter)).ticks();
     return a;
 }
 

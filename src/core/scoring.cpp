@@ -44,8 +44,8 @@ CategoryScores category_scores(const Chord& chord, int combo,
         if (i == 0) first_multiplier = combo_multiplier;
         last_multiplier = combo_multiplier;
 
-        const int basevalue = 50;
-        const int cymbvalue = 15;
+        const int basevalue = kNoteBasePoints;
+        const int cymbvalue = kCymbalBonusPoints;
 
         const int cymb = is_cymbal ? cymbvalue : 0;
         const int dyn_cymb = (is_cymbal && is_dynamic) ? cymbvalue : 0;
@@ -68,11 +68,11 @@ CategoryScores category_scores(const Chord& chord, int combo,
         combospdynamic_note += is_dynamic ? basevalue * extra : 0;
         combospdynamic_cymbal += dyn_cymb * extra;
 
-        // SqOut: the notes that lose their SP doubling. FirstNote keeps the
-        // original quick calculation (note 0 only); WholeChord takes every note.
+        // SqOut: the notes that lose their SP doubling. FirstNote takes note 0
+        // only; WholeChord takes every note. A lost doubling is the note's full
+        // value at its own multiplier, and basescore() is that value.
         const bool loses_sp = i == 0 || sqout_rule == core::SqOutRule::WholeChord;
-        const int note_sqout =
-            loses_sp ? (basevalue + cymb) * combo_multiplier * (is_dynamic ? 2 : 1) : 0;
+        const int note_sqout = loses_sp ? note.basescore() * combo_multiplier : 0;
         sqout_reduction += note_sqout;
 
         if (per_note) {

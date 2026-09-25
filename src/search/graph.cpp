@@ -8,11 +8,10 @@
 
 namespace hydra {
 
-// How far apart (ms) a note and a deactivation can be and still be a SqIn/SqOut,
-// and how far back edge.backends must stay complete.
+// kSqueezeWindowMs (core/model.h) is how far apart (ms) a note and a
+// deactivation can be and still be a SqIn/SqOut, and how far back
+// edge.backends must stay complete.
 namespace {
-constexpr double SQUEEZE_WINDOW_MS = kSqueezeWindowMs;  // exported in graph.h
-
 // Min-heap comparator on ticks (std::*_heap build a max-heap by default, so
 // `greater` yields a min-heap whose front() is the earliest tick).
 struct TickGreater {
@@ -108,7 +107,7 @@ void ScoreGraph::build() {
 
         store_notecount(timestamp.chord.count());
         if (timestamp.flag_solo)
-            store_soloscore(100 * timestamp.chord.count());
+            store_soloscore(kSoloBonusPerNote * timestamp.chord.count());
 
         CategoryScores sg = category_scores(timestamp.chord, combo_, nullptr, rules_.sqout_rule);
 
@@ -126,13 +125,13 @@ void ScoreGraph::build() {
 
         combo_ += timestamp.chord.count();
 
-        store_new_backend(timestamp, sg.sp, sg.sp - sg.sqout_reduction);
+        store_new_backend(timestamp, sg.sp, sg.sqout_sp());
 
         if (timestamp.flag_sp) {
             // Deacts within the squeeze window keep a non-extended copy (SqOut).
             std::vector<Timecode> sqout_deacts;
             for (const auto& kv : pending_deacts_)
-                if (kv.second.ms() - timestamp.timecode.ms() < SQUEEZE_WINDOW_MS)
+                if (kv.second.ms() - timestamp.timecode.ms() < kSqueezeWindowMs)
                     sqout_deacts.push_back(kv.second);
 
             // Timecodes this SP phrase can extend: pending deacts plus very
@@ -249,7 +248,7 @@ void ScoreGraph::store_new_backend(const SongTimestamp& ts, int sp_points,
             recent_edge->sqinout_time = ts.timecode;
             recent_edge->sqinout_timing = offset_ms;
             recent_edge->late_sqin_count += 1;
-            recent_edge->sqin_time = plusmeasure(*recent_edge->sqin_time, 2);
+            recent_edge->sqin_time = plusmeasure(*recent_edge->sqin_time, sp_bars_to_measures(1));
         }
     }
 }
@@ -266,13 +265,13 @@ std::vector<ScoreGraph::DeactExtension> ScoreGraph::extend_deacts(
 
     if (!sp_meter_cap_.has_value()) {
         for (const Timecode& tc : deact_tcs)
-            out.push_back({tc, plusmeasure(tc, 2), false});
+            out.push_back({tc, plusmeasure(tc, sp_bars_to_measures(1)), false});
         return out;
     }
 
-    Timecode ceiling = plusmeasure(sp_timecode, 2 * (*sp_meter_cap_));
+    Timecode ceiling = plusmeasure(sp_timecode, sp_bars_to_measures(*sp_meter_cap_));
     for (const Timecode& tc : deact_tcs) {
-        Timecode ext = plusmeasure(tc, 2);
+        Timecode ext = plusmeasure(tc, sp_bars_to_measures(1));
         // min(ext, ceiling): ceiling only when it is strictly earlier. When
         // it wins, the meter was full to the cap on this phrase, and from
         // here on the SP end is measured from this collecting note (a tie
@@ -284,7 +283,7 @@ std::vector<ScoreGraph::DeactExtension> ScoreGraph::extend_deacts(
 }
 
 bool ScoreGraph::is_recent_to_head(const Timecode& tc) const {
-    return head_time_offset(tc) < SQUEEZE_WINDOW_MS;
+    return head_time_offset(tc) < kSqueezeWindowMs;
 }
 
 void ScoreGraph::set_head_time(const Timecode& tc) {
@@ -347,7 +346,7 @@ ScoreGraphEdge* ScoreGraph::add_act_edge(const Chord& frontend_chord,
 
     for (int sp = 2; sp <= max_sp_bars(); ++sp) {
         act_edge->activation_initial_end_times[sp] =
-            plusmeasure(act_edge->dest->timecode, 2 * sp);
+            plusmeasure(act_edge->dest->timecode, sp_bars_to_measures(sp));
     }
 
     base_track_head_->branch_edge = act_edge;
@@ -371,8 +370,8 @@ void ScoreGraph::add_deact_edge() {
         if (recent_backend.is_sp && !deact_edge->sqinout_time.has_value()) {
             deact_edge->sqinout_time = recent_backend.timecode;
             deact_edge->sqinout_timing = offset_ms;
-            deact_edge->sqout_time = plusmeasure(*deact_edge->sqout_time, 2);
-            deact_edge->sqin_time = plusmeasure(*deact_edge->sqin_time, 2);
+            deact_edge->sqout_time = plusmeasure(*deact_edge->sqout_time, sp_bars_to_measures(1));
+            deact_edge->sqin_time = plusmeasure(*deact_edge->sqin_time, sp_bars_to_measures(1));
         }
     }
 

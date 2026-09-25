@@ -96,7 +96,7 @@ std::string ChordNote::str() const {
 }
 
 int ChordNote::basescore() const {
-    int points = is_cymbal() ? 65 : 50;
+    int points = kNoteBasePoints + (is_cymbal() ? kCymbalBonusPoints : 0);
     if (is_dynamic()) points *= 2;
     return points;
 }
@@ -580,7 +580,7 @@ std::vector<BackendSqueeze> Activation::display_backends() const {
     std::vector<BackendSqueeze> out;
     for (const BackendSqueeze& bsq : backends) {
         if (is_beyond_sqout(bsq)) continue;
-        if (std::fabs(bsq.offset_ms.value_or(0.0)) < kBackendDisplayWindowMs ||
+        if (std::fabs(bsq.offset_ms.value_or(0.0)) < kSqueezeWindowMs ||
             is_sqout_backend(bsq))
             out.push_back(bsq);
     }

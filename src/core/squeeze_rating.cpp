@@ -45,7 +45,7 @@ std::optional<ActTransferScales> frontend_transfer_scales(const Activation& act,
     // for the last extension -- one `pre` per activation is all the data
     // model (and the blob) carries.
     int64_t pre_tick =
-        has_sqin ? timing.plusmeasure(timing.timecode(post_tick), -2).ticks()
+        has_sqin ? timing.plusmeasure(timing.timecode(post_tick), -sp_bars_to_measures(1)).ticks()
                  : post_tick;
 
     std::optional<TransferScale> post =
@@ -225,7 +225,7 @@ double sp_end_shift_ms(double displaced_ms, SqueezeKind kind,
                        const Activation& act, const SongTiming& timing) {
     if (!act.timecode || !act.sp_meter) return 0.0;
     const double h = act.timecode->ms();
-    const int64_t end_measures = 2 * static_cast<int64_t>(*act.sp_meter);
+    const int64_t end_measures = sp_bars_to_measures(*act.sp_meter);
     const double base = timing.sp_end_ms(h, end_measures);
     if (kind == SqueezeKind::SqOut)
         return base - timing.sp_end_ms(h - displaced_ms, end_measures);
