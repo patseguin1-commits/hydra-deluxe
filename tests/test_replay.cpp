@@ -279,27 +279,16 @@ TEST_CASE("windows read from a path JSON match the ones read from the record") {
         HydraRecord rec = analyze_chart(song, cfg);
         if (rec.paths.empty()) continue;
 
-        for (const Path* p : rec.all_paths()) {
+        const std::vector<const Path*> all = rec.all_paths();
+        const json dumped = paths_json(all, song.timing());
+        REQUIRE(dumped.size() == all.size());
+        for (size_t k = 0; k < all.size(); ++k) {
+            const Path* p = all[k];
             const std::vector<ReplayWindow> want = windows_for_path(*p, song);
             if (want.empty()) continue;
 
-            // The part of dump's JSON that windows_from_json reads, built the
-            // way tools/replay.cpp's paths_json builds it.
-            json acts = json::array();
-            for (const Activation& act : p->all_activations()) {
-                json sq = json::array();
-                for (const SPSqueeze& sqz : act.sqinouts)
-                    sq.push_back(json{{"kind", sqz.type_name()},
-                                      {"offset_ms", sqz.offset()}});
-                acts.push_back(json{
-                    {"act_tick", act.timecode ? act.timecode->ticks() : -1},
-                    {"deact_tick", act.deact_tick ? *act.deact_tick : -1},
-                    {"sqout_tick", act.sqout_tick ? *act.sqout_tick : -1},
-                    {"sqinouts", sq}});
-            }
-
-            const std::vector<ReplayWindow> got =
-                windows_from_json(json{{"activations", acts}});
+            // The real dump producer, so a format change on either side fails.
+            const std::vector<ReplayWindow> got = windows_from_json(dumped[k]);
             REQUIRE(got.size() == want.size());
             for (size_t i = 0; i < got.size(); ++i) {
                 CHECK(got[i].act_tick == want[i].act_tick);
@@ -312,6 +301,41 @@ TEST_CASE("windows read from a path JSON match the ones read from the record") {
         if (checked > 0) break;  // one chart's paths are the whole contract
     }
     CHECK(checked > 0);
+}
+
+// fcvideo and `hydra_replay score --path` read these fields out of a dump. A
+// dump-format change that drops one has to fail here, not in the video tools.
+TEST_CASE("paths_json writes every field the dump readers use") {
+    const app::AnalysisSettings cfg = app::Settings().to_analysis_settings();
+
+    bool checked = false;
+    for (const std::string& chart : corpus::chart_paths()) {
+        Song song = load_songpath(chart, cfg.prodrums, cfg.bass2x, cfg.difficulty);
+        if (song.is_empty()) continue;
+        HydraRecord rec = analyze_chart(song, cfg);
+        const std::vector<const Path*> all = rec.all_paths();
+        if (all.empty() || all[0]->all_activations().empty()) continue;
+
+        const json dumped = paths_json(all, song.timing());
+        REQUIRE(dumped.size() == all.size());
+
+        const json& p0 = dumped[0];
+        for (const char* k : {"index", "pathstring", "total", "score", "activations"})
+            CHECK_MESSAGE(p0.contains(k), k);
+        for (const char* k : {"base", "combo", "sp", "solo", "accent", "ghost"})
+            CHECK_MESSAGE(p0["score"].contains(k), k);
+        CHECK(p0["pathstring"].get<std::string>() == all[0]->pathstring());
+
+        REQUIRE(!p0["activations"].empty());
+        const json& a0 = p0["activations"][0];
+        for (const char* k : {"act_tick", "deact_tick", "sqout_tick", "nominal_deact_tick",
+                              "sp_meter", "skips", "chord_code", "sqinouts"})
+            CHECK_MESSAGE(a0.contains(k), k);
+
+        checked = true;
+        break;  // one chart's first path is the whole contract
+    }
+    CHECK(checked);
 }
 
 // A window that ends on the note closing a Star Power phrase is exactly where
