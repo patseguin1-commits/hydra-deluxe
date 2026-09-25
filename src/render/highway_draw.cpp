@@ -138,6 +138,13 @@ Material overlay_mat(TextureId base, TextureId overlay) {
 
 bool toggle_on(Toggle t) { return t != Toggle::Empty && t != Toggle::End; }
 
+// Gem sizes from Onyx's drawDrumPlay / drawGem (mtolly/onyx,
+// haskell/packages/onyx-lib-game/src/Onyx/Game/Graphics.hs, lines 660-668 at
+// commit 84d5e51). They are literals in Onyx's code, not keys in its
+// 3d-config.yml, so they live here rather than in PreviewConfig.
+constexpr float kGhostWidthScale = 0.7f;        // Onyx: (v - xCenter) * 0.7
+constexpr float kPadGemHalfSize = 0.5f / 2.0f;  // Onyx: reference = 0.5 / 2
+
 TextureId lane_tex(Pad p) {
     switch (p) {
         case Pad::Red:    return TextureId::LaneRed;
@@ -335,10 +342,12 @@ std::vector<DrawCommand> build_highway_draws(const TrackState& state, const Prev
             }
             if (g.velocity == Velocity::Ghost) {
                 const float cx = x1 + (x2 - x1) * 0.5f;
-                x1 = cx + (x1 - cx) * 0.7f;
-                x2 = cx + (x2 - cx) * 0.7f;
+                x1 = cx + (x1 - cx) * kGhostWidthScale;
+                x2 = cx + (x2 - cx) * kGhostWidthScale;
             }
-            const float ref = g.kick ? (x2 - x1) * 0.5f : 0.5f * 0.5f;
+            // A kick's box is as deep and tall as half its width (Onyx:
+            // (x2' - x1') / 2); a pad gem's is fixed.
+            const float ref = g.kick ? (x2 - x1) * 0.5f : kPadGemHalfSize;
             DrawCommand c;
             c.mesh = g.kick ? MeshId::Kick : g.cymbal ? MeshId::Cymbal : MeshId::Tom;
             c.lo[0] = x1; c.lo[1] = T.y - ref; c.lo[2] = z - ref;
