@@ -312,6 +312,47 @@ void test_preview_path_overlay(ImGuiTestContext* ctx) {
     IM_CHECK_STR_EQ(h.app->preview->overlay_path_key().c_str(), first_overlay.c_str());
 }
 
+// The Preview's new transport buttons and keys: -5s / +5s and Left / Right
+// jump 5 s, < Tick / Tick > and comma / period step one chart tick.
+void test_preview_buttons_keys(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_preview(ctx)) return;
+    auto& pc = *h.app->preview;
+    IM_CHECK(!pc.playing());
+    IM_CHECK(pc.length_ms() > 16000.0);
+
+    pc.seek_ms(10000.0);
+    ctx->ItemClick("**/+5s");
+    IM_CHECK_FLOAT_NEAR_EQ(pc.position_ms(), 15000.0, 0.5);
+    ctx->ItemClick("**/-5s");
+    IM_CHECK_FLOAT_NEAR_EQ(pc.position_ms(), 10000.0, 0.5);
+
+    // The arrows jump exactly 5 s. Had keyboard navigation also taken the
+    // arrow and nudged the scrubber, the playhead would be off by the nudge.
+    ctx->KeyPress(ImGuiKey_RightArrow);
+    IM_CHECK_FLOAT_NEAR_EQ(pc.position_ms(), 15000.0, 0.5);
+    ctx->KeyPress(ImGuiKey_LeftArrow);
+    IM_CHECK_FLOAT_NEAR_EQ(pc.position_ms(), 10000.0, 0.5);
+
+    // A tick step pauses.
+    ctx->ItemClick("**/Play");
+    IM_CHECK(pc.playing());
+    ctx->ItemClick("**/Tick >");
+    IM_CHECK(!pc.playing());
+
+    // After a step the playhead sits on a tick; period then comma returns
+    // the time box to it.
+    ctx->ItemClick(("**/" + escape_ref("< Tick")).c_str());
+    const double t0 = pc.position_ms();
+    const std::string mb0 = pc.time_box().measure_beat;
+    ctx->KeyPress(ImGuiKey_Period);
+    IM_CHECK(pc.position_ms() > t0);
+    IM_CHECK(pc.position_ms() - t0 < 20.0);
+    IM_CHECK(pc.time_box().measure_beat != mb0);
+    ctx->KeyPress(ImGuiKey_Comma);
+    IM_CHECK_STR_EQ(pc.time_box().measure_beat.c_str(), mb0.c_str());
+}
+
 // Click-and-hold on the time bar while playing. Onyx pauses playback for the
 // hold; Hydra used to keep playing and re-seek the audio to the held time
 // every frame, which came out as a buzz. The transport must be paused while
@@ -764,6 +805,7 @@ void register_tests(Harness& h) {
         {"difficulty", test_difficulty},
         {"analyze-on-preview", test_analyze_on_preview},
         {"preview-path-overlay", test_preview_path_overlay},
+        {"preview-buttons-keys", test_preview_buttons_keys},
         {"scrub-hold", test_scrub_hold},
         {"layout-drift", test_layout_drift},
         {"batch-modal-drift", test_batch_modal_drift},
