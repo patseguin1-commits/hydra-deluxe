@@ -47,14 +47,32 @@ struct ReplayWindow {
     int64_t act_tick = 0;
     int64_t deact_tick = 0;
 
-    // Set when the activation ends on a squeeze-out: the SqOut phrase note's
-    // offset from D, in ms (the value stored on the activation's SPSqueeze).
-    // The note is hit after Star Power has ended, so it and everything after
-    // it inside the window lose their doubling, and the note itself keeps
-    // only what its non-first hits are worth (CategoryScores::sqout_reduction
-    // is the first hit's share). Unset for a plain deactivation.
+    // Set when the activation ends on a squeeze-out: the tick of the phrase
+    // chord squeezed out (Activation::sqout_tick). That chord is hit after
+    // Star Power has ended, so it and everything after it lose their
+    // doubling, and the chord itself keeps only what its non-first hits are
+    // worth (CategoryScores::sqout_reduction is the first hit's share).
+    std::optional<int64_t> sqout_tick;
+
+    // The same squeeze-out as an ms offset from D, for display, and as typed
+    // by hand in `--acts`. replay_path reads only the tick; a window with an
+    // offset and no tick must go through resolve_sqout_note first.
     std::optional<double> sqout_offset_ms;
 };
+
+// The phrase chord a typed SqOut offset means.
+struct SqOutNote {
+    int64_t tick = 0;
+    double offset_ms = 0.0;  // its real offset from D
+};
+
+// Resolve w.sqout_offset_ms to the phrase chord nearest D + offset, among
+// the phrase chords strictly within kSqueezeWindowMs of D on either side.
+// The engine only ever squeezes out the first of those, so when the nearest
+// one is any other chord this refuses (user decision 23). Throws
+// std::runtime_error, with a message naming both chords, in that case; also
+// when there is no candidate, or when w has no offset.
+SqOutNote resolve_sqout_note(const Song& song, const ReplayWindow& w);
 
 // The six score categories a Path stores, in the same order.
 struct ReplayScore {
@@ -124,7 +142,8 @@ struct ReplayResult {
 };
 
 // Score `song` under `windows` (any order; they are sorted here). An empty
-// list scores the chart with no Star Power anywhere.
+// list scores the chart with no Star Power anywhere. Throws
+// std::invalid_argument for a window with a SqOut offset but no SqOut tick.
 ReplayResult replay_path(const Song& song, std::vector<ReplayWindow> windows,
                          const core::Rules& rules = core::default_rules());
 
@@ -135,17 +154,21 @@ ReplayScore score_of(const Path& path);
 
 // The Star Power windows a stored path describes: one per activation, with
 // its deactivation node read straight off the record (Activation::deact_tick,
-// stamped by the search) and the SqOut offset copied across when the
+// stamped by the search) and the SqOut tick and offset copied across when the
 // activation ends on one. An activation with no stored deact node — only a
-// record written before blob v4 — is skipped, so a path that yields fewer
+// record written before blob v4 — is skipped, and so is a squeeze-out with no
+// stored sqout_tick (a record from before v6), so a path that yields fewer
 // windows than it has activations cannot be replayed faithfully; check the
 // counts before trusting the score.
 std::vector<ReplayWindow> windows_for_path(const Path& path, const Song& song);
 
 // The same windows, read out of a `dump` or `target` JSON file instead of a
 // live record. `path` is one entry of that file's top-level "paths" array;
-// each of its "activations" carries act_tick, deact_tick, and a "sqinouts"
-// list whose SqOut entry holds the squeeze-out's offset in ms.
+// each of its "activations" carries act_tick, deact_tick, sqout_tick (-1 or
+// absent when there is none, or in a dump from before v6), and a "sqinouts"
+// list whose SqOut entry holds the squeeze-out's offset in ms. A window with
+// an offset but no sqout_tick must go through resolve_sqout_note before it
+// is replayed.
 //
 // This exists because the only other way to hand a path to `hydra_replay
 // score` was to retype it as an "act:deact,..." string, and that string used
@@ -164,16 +187,17 @@ std::vector<ReplayWindow> windows_from_json(const nlohmann::json& path);
 //
 // A squeeze-out lives on the note that ends a Star Power phrase: the player
 // delays that note until after Star Power has run out, so it is not doubled.
-// A window that ends on such a note — or a few ms after one — is therefore
-// ambiguous. The score is right if the player did not squeeze, and high by
-// that note's first-hit share if they did, and nothing in the window list
-// says which. So this reports the doubt and nothing else: it never changes a
-// score and never invents an offset.
+// The chord it can be about is the first phrase chord strictly within
+// kSqueezeWindowMs of the deactivation node, the one the graph would squeeze
+// out. A window with such a chord is ambiguous: the score is right if the
+// player did not squeeze, and high by that chord's first-hit share if they
+// did, and nothing in the window list says which. So this reports the doubt
+// and nothing else: it never changes a score and never invents an offset.
 //
-// A window that already carries a squeeze-out offset is settled and is never
-// reported, and neither is one whose last phrase note is further back than
-// the engine's own squeeze horizon (kSqueezeWindowMs), because no squeeze-out
-// was reachable there in the first place.
+// It warns only when the window paid that chord (`result` must be the replay
+// of these same windows): a chord past the leeway after D was never doubled,
+// so squeezing it out changes nothing. A window that already carries a
+// squeeze-out offset or chord is settled and is never reported.
 std::vector<std::string> ambiguous_window_warnings(
     const Song& song, const ReplayResult& result,
     const std::vector<ReplayWindow>& windows);

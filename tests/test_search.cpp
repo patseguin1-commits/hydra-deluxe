@@ -246,20 +246,28 @@ TEST_CASE("no activation keeps backends past its squeezed-out note") {
         std::string d;
         for (const Path* p : record->all_paths()) {
             for (const Activation& act : p->all_activations()) {
-                std::optional<double> sqout;
+                bool has_sqout = false;
                 for (const SPSqueeze& sq : act.sqinouts)
-                    if (sq.kind == SqueezeKind::SqOut &&
-                        (!sqout || sq.offset() < *sqout))
-                        sqout = sq.offset();
-                if (!sqout) continue;
+                    if (sq.kind == SqueezeKind::SqOut) has_sqout = true;
+                if (!has_sqout) continue;
                 ++sqout_acts;
 
+                // The engine stamps the squeezed-out chord's tick (record
+                // v6); everything is compared by tick, never by ms.
+                if (!act.sqout_tick) {
+                    d = "squeeze-out activation missing sqout_tick";
+                    break;
+                }
+                int on_sqout = 0;
                 for (const BackendSqueeze& b : act.backends) {
-                    if (b.offset_ms.value_or(0.0) > *sqout + 0.01) {
+                    if (b.timecode.ticks() > *act.sqout_tick) {
                         d = "backend past the sqout note";
                         break;
                     }
+                    if (b.timecode.ticks() == *act.sqout_tick) ++on_sqout;
                 }
+                if (d.empty() && on_sqout != 1)
+                    d = "not exactly one backend row on the sqout tick";
                 if (!d.empty()) break;
             }
             if (!d.empty()) break;
