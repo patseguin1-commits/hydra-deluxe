@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <limits>
 
+#include "core/backend_value.h"
 #include "core/chord_tables.h"
 
 namespace hydra {
@@ -323,7 +324,8 @@ std::string BackendSqueeze::summarystr(double hit_window_ms, double leeway_ms) c
     }
     if (off < -w) return "Free";
     if (off < -10) return "Easy";
-    if (off < leeway_ms) return "Standard";
+    // Counted by the engine with no squeeze: the same edge it prices with.
+    if (core::counted_without_squeeze(off, leeway_ms)) return "Standard";
     if (off < w) return "Hard (uncounted)";
     return "Insane (uncounted)";
 }
