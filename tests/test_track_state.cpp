@@ -3,6 +3,7 @@
 
 #include "doctest.h"
 
+#include <stdexcept>
 #include <vector>
 
 #include "app/preview_view.h"
@@ -42,6 +43,16 @@ PreviewFill fill(PreviewSpan s, PreviewFillState state) {
     return f;
 }
 
+// One tick per millisecond (60 BPM at 1000 ticks per beat), matching note()
+// and span() above, so half a tick is 0.5 ms and the edges these cases expect
+// (1.0005, 0.2505, ...) are the same as before spans moved to ticks.
+PreviewScene timed_scene() {
+    PreviewScene s;
+    s.timing = SongTiming(1000, {{0, 4000}}, {{0, 60.0}});
+    s.tick_resolution = 1000;
+    return s;
+}
+
 const TrackInstant* find(const std::vector<TrackInstant>& v, double t) {
     for (const TrackInstant& i : v)
         if (i.t == doctest::Approx(t)) return &i;
@@ -61,14 +72,14 @@ TEST_CASE("toggle_at: Onyx makeToggle truth table") {
 }
 
 TEST_CASE("build_track_state: gems, pro-off, and the phrase end note reads inside") {
-    PreviewScene scene;
+    PreviewScene scene = timed_scene();
     scene.notes = {note(0.0, PreviewLane::Red), note(500.0, PreviewLane::Yellow, true, true),
                    note(500.0, PreviewLane::Kick), note(1000.0, PreviewLane::Green, true, false, true)};
     scene.sp_phrases = {span(500.0, 1000.0)};
 
     TrackState st = build_track_state(scene, TrackStateOptions{true});
     const auto& inst = st.instants();
-    // Instants: 0.0, 0.5, 1.0, 1.0005 (phrase end + epsilon).
+    // Instants: 0.0, 0.5, 1.0, 1.0005 (phrase end + half a tick).
     REQUIRE(inst.size() == 4);
     CHECK(inst[0].t == doctest::Approx(0.0));
     CHECK(inst[1].t == doctest::Approx(0.5));
@@ -120,7 +131,7 @@ TEST_CASE("build_track_state: active SP window ends exactly at the deact node") 
 }
 
 TEST_CASE("build_track_state: taken, offered and hidden fills toggle different spans") {
-    PreviewScene scene;
+    PreviewScene scene = timed_scene();
     scene.notes = {note(0.0, PreviewLane::Red), note(2000.0, PreviewLane::Green),
                    note(5000.0, PreviewLane::Green), note(8000.0, PreviewLane::Green)};
     scene.fills = {fill(span(1000.0, 2000.0), PreviewFillState::Taken),
@@ -170,7 +181,7 @@ TEST_CASE("build_track_state: taken, offered and hidden fills toggle different s
 }
 
 TEST_CASE("build_track_state: beats land on instants; solo toggles") {
-    PreviewScene scene;
+    PreviewScene scene = timed_scene();
     scene.notes = {note(250.0, PreviewLane::Red)};
     scene.beats = {{0, 0.0, PreviewBeatKind::Bar}, {0, 250.0, PreviewBeatKind::Half},
                    {0, 500.0, PreviewBeatKind::Beat}};
@@ -186,7 +197,7 @@ TEST_CASE("build_track_state: beats land on instants; solo toggles") {
 }
 
 TEST_CASE("window: strict bounds, and a synthesized instant when empty") {
-    PreviewScene scene;
+    PreviewScene scene = timed_scene();
     scene.notes = {note(1000.0, PreviewLane::Red), note(2000.0, PreviewLane::Red),
                    note(3000.0, PreviewLane::Red)};
     scene.solos = {span(900.0, 3100.0)};
@@ -213,9 +224,9 @@ TEST_CASE("window: strict bounds, and a synthesized instant when empty") {
 }
 
 TEST_CASE("make_toggle_bounds: covers [near, far], merges equal neighbours") {
-    PreviewScene scene;
+    PreviewScene scene = timed_scene();
     scene.notes = {note(0.0, PreviewLane::Red), note(10000.0, PreviewLane::Red)};
-    // Touching solos: with the end epsilon they overlap, so the second's start
+    // Touching solos: with the half-tick end they overlap, so the second's start
     // and the first's end both read as On and the span never breaks.
     scene.solos = {span(1000.0, 2000.0), span(2000.0, 3000.0)};
     TrackState st = build_track_state(scene, TrackStateOptions{});
@@ -244,4 +255,47 @@ TEST_CASE("make_toggle_bounds: covers [near, far], merges equal neighbours") {
     CHECK(mid_spans[0].on);
     CHECK(mid_spans[0].t1 == doctest::Approx(1.5));
     CHECK(mid_spans[0].t2 == doctest::Approx(2.5));
+}
+
+TEST_CASE("build_track_state: a chord one tick after a phrase ends is not SP (480 res, 300 BPM)") {
+    // One tick here is 0.417 ms, shorter than the old half-millisecond margin.
+    SongTiming timing(480, {{0, 1920}}, {{0, 300.0}});
+    auto at_tick = [&](int64_t tick, PreviewLane lane) {
+        PreviewNote n;
+        n.tick = tick;
+        n.ms = timing.ms_index().at(tick);
+        n.lane = lane;
+        return n;
+    };
+    PreviewScene scene;
+    scene.timing = timing;
+    scene.tick_resolution = 480;
+    scene.notes = {at_tick(0, PreviewLane::Red), at_tick(480, PreviewLane::Yellow),
+                   at_tick(481, PreviewLane::Blue)};
+    PreviewSpan phrase;
+    phrase.start_tick = 0;
+    phrase.end_tick = 480;
+    phrase.start_ms = timing.ms_index().at(0);
+    phrase.end_ms = timing.ms_index().at(480);
+    scene.sp_phrases = {phrase};
+
+    TrackState st = build_track_state(scene, TrackStateOptions{});
+    const TrackInstant* last_in = find(st.instants(), timing.ms_index().at(480) / 1000.0);
+    const TrackInstant* next = find(st.instants(), timing.ms_index().at(481) / 1000.0);
+    REQUIRE(last_in);
+    REQUIRE(next);
+    CHECK(last_in->overdrive == Toggle::On);
+    CHECK(next->overdrive == Toggle::Empty);
+}
+
+TEST_CASE("build_track_state: spans need the song timing") {
+    PreviewScene scene;  // no timing
+    scene.notes = {note(1000.0, PreviewLane::Red)};
+    scene.sp_phrases = {span(1000.0, 1000.0)};
+    CHECK_THROWS_AS(build_track_state(scene, TrackStateOptions{}), std::invalid_argument);
+
+    // A scene with no spans still builds without timing.
+    PreviewScene plain;
+    plain.notes = {note(1000.0, PreviewLane::Red)};
+    CHECK(build_track_state(plain, TrackStateOptions{}).instants().size() == 1);
 }

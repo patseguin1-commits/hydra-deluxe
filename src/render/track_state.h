@@ -92,9 +92,12 @@ private:
     TrackInstant synthesize(double t) const;
 };
 
-// Build the timeline from a scene. SP phrases and fills are extended by half a
-// millisecond past their last note so that note reads as inside (Hydra marks
-// a phrase by its last note; Onyx's phrase extends past it). Active SP
+// Build the timeline from a scene. SP phrases, solos and fills end half a tick
+// past their last note (through scene.timing), so that note reads as inside
+// and a note on the next tick reads as outside (Hydra marks a phrase by its
+// last note; Onyx's phrase extends past it). A scene with spans must carry
+// its timing; build_preview_scene always sets it, and a scene with spans but
+// no timing throws std::invalid_argument. Active SP
 // windows end exactly at the deact node. Offered fills drive `fill` and taken
 // ones `fill_taken`; hidden fills produce no intervals at all, since the game
 // would never have shown them. The activated fill's lane comes from the

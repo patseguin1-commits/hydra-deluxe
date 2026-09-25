@@ -64,6 +64,13 @@ struct PreviewConfig {
         LightConfig light{{0, 1, 0.2f}};  // relative to the gem's bottom centre
     } gems;
 
+    // Onyx's text.time_box. Hydra draws the box in its own monospace font,
+    // so the file's `font` key is not read; size and margin are.
+    struct Text {
+        float time_box_size = 15;
+        float time_box_margin = 10;
+    } text;
+
     // Hydra-only (not in Onyx's file).
     struct Hydra {
         int msaa = 4;  // mirrors Onyx's prefMSAA default

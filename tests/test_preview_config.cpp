@@ -70,6 +70,8 @@ void check_is_onyx(const PreviewConfig& c) {
     check_color(c.gems.color_hit, 1, 1, 1);
     CHECK(c.gems.secs_fade == doctest::Approx(0.1));
     check_light(c.gems.light, 0, 1, 0.2f);
+    CHECK(c.text.time_box_size == doctest::Approx(15));
+    CHECK(c.text.time_box_margin == doctest::Approx(10));
 }
 
 }  // namespace
@@ -108,4 +110,11 @@ TEST_CASE("parse_hex_color follows Onyx stackColor") {
     check_color(parse_hex_color("#FFFFFF"), 1, 1, 1);
     check_color(parse_hex_color("#00000080"), 0, 0, 0, 0x80 / 255.0f);
     check_color(parse_hex_color("nope"), 1, 0, 1);
+}
+
+TEST_CASE("load_preview_config reads the time box size and margin") {
+    PreviewConfig c =
+        load_preview_config(R"({"text": {"time_box": {"font": "x.ttf", "size": 20, "margin": 12}}})");
+    CHECK(c.text.time_box_size == doctest::Approx(20));
+    CHECK(c.text.time_box_margin == doctest::Approx(12));
 }

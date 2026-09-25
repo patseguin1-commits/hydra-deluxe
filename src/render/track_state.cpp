@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <map>
+#include <stdexcept>
 
 namespace hydra::render {
 
@@ -14,10 +15,12 @@ using app::PreviewSpan;
 
 namespace {
 
-// Hydra marks an SP phrase (and a fill) by its last note's tick; Onyx's span
-// reaches past that note. Half a millisecond keeps the note inside without
-// ever reaching the next note.
-constexpr double kSpanEndEpsilonS = 0.0005;
+// Hydra marks an SP phrase, a solo or a fill by the tick of its last note;
+// Onyx's span reaches past that note. The drawn edge sits half a tick after
+// the last note: past it, and short of any note on the next tick, at every
+// resolution and tempo. (A fixed half millisecond was not: at 480 ticks per
+// beat and 300 BPM one tick is 0.417 ms.)
+constexpr double kSpanEndTicks = 0.5;
 
 double s_of(double ms) { return ms / 1000.0; }
 
@@ -64,17 +67,23 @@ Toggle toggle_at(const std::vector<std::pair<double, double>>& intervals, double
 
 TrackState build_track_state(const PreviewScene& scene, const TrackStateOptions& opts) {
     TrackState st;
-    auto span_iv = [](const PreviewSpan& s, double end_eps) {
-        return TrackState::Interval{s_of(s.start_ms), s_of(s.end_ms) + end_eps};
+    // The end edge comes from the span's end tick through the song's own
+    // timing (the display-only sub-tick lookup), never from its end ms.
+    auto span_iv = [&scene](const PreviewSpan& s) {
+        if (!scene.timing)
+            throw std::invalid_argument("build_track_state: a scene with spans needs its song timing");
+        const double end_ms =
+            scene.timing->ms_index().ms_at_tick_f(static_cast<double>(s.end_tick) + kSpanEndTicks);
+        return TrackState::Interval{s_of(s.start_ms), s_of(end_ms)};
     };
-    for (const PreviewSpan& s : scene.sp_phrases) st.overdrive_.push_back(span_iv(s, kSpanEndEpsilonS));
-    for (const PreviewSpan& s : scene.solos) st.solo_.push_back(span_iv(s, kSpanEndEpsilonS));
+    for (const PreviewSpan& s : scene.sp_phrases) st.overdrive_.push_back(span_iv(s));
+    for (const PreviewSpan& s : scene.solos) st.solo_.push_back(span_iv(s));
     // A hidden fill is one the game never showed, so it draws nothing.
     for (const app::PreviewFill& f : scene.fills) {
         if (f.state == app::PreviewFillState::Offered)
-            st.fill_.push_back(span_iv(f.span, kSpanEndEpsilonS));
+            st.fill_.push_back(span_iv(f.span));
         else if (f.state == app::PreviewFillState::Taken)
-            st.fill_taken_.push_back(span_iv(f.span, kSpanEndEpsilonS));
+            st.fill_taken_.push_back(span_iv(f.span));
     }
     for (const PreviewActivation& a : scene.activations) {
         if (a.has_sp_end && a.sp_end_ms > a.ms)
@@ -84,7 +93,7 @@ TrackState build_track_state(const PreviewScene& scene, const TrackStateOptions&
             if (!pad) continue;
             for (const app::PreviewFill& f : scene.fills) {
                 if (f.state != app::PreviewFillState::Taken || f.span.end_tick != a.tick) continue;
-                st.fill_lane_.push_back({span_iv(f.span, kSpanEndEpsilonS), *pad});
+                st.fill_lane_.push_back({span_iv(f.span), *pad});
                 break;
             }
         }

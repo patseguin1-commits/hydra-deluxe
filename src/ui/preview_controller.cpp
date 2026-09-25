@@ -215,6 +215,11 @@ hydra::app::PreviewTimeBox PreviewController::time_box() const {
                                       transport_.length_ms());
 }
 
+const render::PreviewConfig& PreviewController::preview_config() const {
+    static const render::PreviewConfig kOnyxDefaults;
+    return renderer_ ? renderer_->config() : kOnyxDefaults;
+}
+
 double PreviewController::sp_meter_bars() const {
     return hydra::app::sp_meter_bars_at(scene_.sp_meter, transport_.now_ms());
 }

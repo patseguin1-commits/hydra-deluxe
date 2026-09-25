@@ -139,9 +139,16 @@ TEST_CASE("PreviewRenderer: SP phrase energy gems and active SP floor change pix
     std::vector<uint8_t> a = warp::read_pixels(dev.Get(), ctx.Get(), r.texture_srv(), W, H);
 
     PreviewScene lit = plain;
+    // Spans end half a tick past their last note through the song's timing,
+    // so a scene with a phrase carries one: one tick per ms (60 BPM at 1000
+    // ticks per beat), matching note_at().
+    lit.timing = hydra::SongTiming(1000, {{0, 4000}}, {{0, 60.0}});
+    lit.tick_resolution = 1000;
     hydra::app::PreviewSpan phrase;
     phrase.start_ms = 1100.0;
     phrase.end_ms = 1200.0;
+    phrase.start_tick = 1100;
+    phrase.end_tick = 1200;
     lit.sp_phrases.push_back(phrase);
     hydra::app::PreviewActivation act;
     act.ms = 900.0;
