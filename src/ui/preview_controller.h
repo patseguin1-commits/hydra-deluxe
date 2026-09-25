@@ -121,6 +121,11 @@ public:
     // The time box the panel draws over the highway (Onyx's top-left text).
     hydra::app::PreviewTimeBox time_box() const;
 
+    // The Preview's look, as read from 3d-config.json by the renderer. Before
+    // the first render (no renderer yet) this is the struct's defaults, which
+    // are Onyx's values.
+    const render::PreviewConfig& preview_config() const;
+
 private:
     ID3D11Device* device_;
     ID3D11DeviceContext* context_;

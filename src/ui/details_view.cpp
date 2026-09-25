@@ -680,8 +680,9 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
         lines[line_count++] = box.bpm.c_str();
         if (!box.section.empty()) lines[line_count++] = box.section.c_str();
         ImFont* font = g_mono_font ? g_mono_font : ImGui::GetFont();
-        const float size = px(15.0f);
-        const float margin = px(10.0f);
+        const render::PreviewConfig& pcfg = pc->preview_config();
+        const float size = px(pcfg.text.time_box_size);
+        const float margin = px(pcfg.text.time_box_margin);
         const float pad = px(8.0f);
         ImVec2 origin = ImGui::GetItemRectMin();
         float text_w = 0.0f;

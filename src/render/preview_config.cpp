@@ -113,6 +113,10 @@ PreviewConfig load_preview_config(const std::string& json_text) {
     get_f(gems, "secs_fade", c.gems.secs_fade);
     get_light(gems, "light", c.gems.light);
 
+    const json& time_box = sub(sub(root, "text"), "time_box");
+    get_f(time_box, "size", c.text.time_box_size);
+    get_f(time_box, "margin", c.text.time_box_margin);
+
     const json& hy = sub(root, "hydra");
     get_i(hy, "msaa", c.hydra.msaa);
     get_color(hy, "sp_active_color", c.hydra.sp_active_color);
