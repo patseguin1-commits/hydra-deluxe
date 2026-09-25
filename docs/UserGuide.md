@@ -38,8 +38,8 @@ A confirmation shows how many charts are about to be analyzed before anything st
 
 When a batch finishes, Hydra builds the **path index report**: a sortable, searchable HTML page of every analyzed chart's paths, squeeze timings, and scores. Use `Open path report` in the finished dialog (or the same button next to the search box any time after) to open it in your browser; check `Open automatically` if you'd rather it always opens itself.
 
-### View Options (Pro Drums / 2x Bass)
-Path/scoring analysis depends on difficulty, whether it's Pro Drums, and whether 2x bass is enabled. When you analyze a song, that analysis result is for that particular combination of options and it'll only be visible when that combination is selected. (Only Expert difficulty is supported right now, so it's shown as a fixed label.)
+### View Options (Difficulty / Pro Drums / 2x Bass)
+Path/scoring analysis depends on difficulty, whether it's Pro Drums, and whether 2x bass is enabled. When you analyze a song, that analysis result is for that particular combination of options and it'll only be visible when that combination is selected. Pick the difficulty from the dropdown: Expert, Hard, Medium or Easy. 2x Bass only exists on Expert, so it is greyed out on the other three. The dmleaderboards comparison also needs Expert, because the leaderboard only carries Expert scores.
 
 For example, if you analyzed a song with 2x Bass enabled, but want to see what it would be with 1x bass, simply uncheck 2x Bass and analyze the song again. Whenever you re-check 2x Bass, _that_ analysis will come back.
 
@@ -58,7 +58,7 @@ The list of songs from the latest scan, filtered by the search box. The **Best P
 
 - **`(New...)`** — not analyzed yet.
 - A gold path string — the optimal path, for quick reference.
-- **`(Stale)`** — analyzed by an older Hydra version (or the other edition); re-analyze to refresh it.
+- **`(Stale)`** — analyzed by an older Hydra version, or under different rules in `hydra_rules.ini`; re-analyze to refresh it. Switching the rules back brings the old results back.
 
 Hover the cell for an explanation. Click on a song's row to go to the details screen for that song. Column widths can be resized and are remembered between sessions.
 
@@ -161,7 +161,7 @@ The score that this path should get, following the same categories that Clone He
 
 The score includes multiplier squeezes, frontend squeezes, and backend squeezes, so if you follow the path but your score has a bit less Star Power score than this readout, one of those was probably missed.
 
-Double squeezes are currently not considered in this scoring unless they're `2ms` or less, there's a slight margin.
+Double squeezes only count in this score when the backend note lands inside a small leeway past the Star Power end. The leeway is `3ms` by default. You can change it with `backend_leeway_ms` in `hydra_rules.ini` (see below).
 
 ### Dynamics tab
 
@@ -173,11 +173,46 @@ The Chart box says whether the chart has dynamics turned on. A MIDI chart has to
 
 Counts are worked out the first time you open the tab and saved in the library database, so the tab opens instantly after that. Analyzing a song with 2x Bass on also saves its counts as a by-product.
 
+## Scoring rules (`hydra_rules.ini`)
+
+A few of Hydra's rules are judgment calls, not facts read from Clone Hero. You can change them in `hydra_rules.ini`, a plain text file next to Hydra.exe. The app and every command line tool read the same file.
+
+The file is optional. A missing file, or a missing line, means the default below. Each line is `key = value`. A line starting with `#` is a comment. There are no `[section]` headers.
+
+```ini
+# Hydra's defaults
+backend_leeway_ms = 3.0
+sqout_rule = first_note
+max_tied_paths = 4
+auto_cap_ladder = 16,32,64,128,256,512
+auto_budget_s = 120
+fill_cooldown_measures = 4
+fill_max_distance_beats = 0.5
+fill_length_measures = 0.5
+fill_land_slop_beats = 0.03125
+```
+
+What each line does:
+
+- **`backend_leeway_ms`** (default `3.0`): how far past the Star Power end a backend note can land and still count in the score.
+- **`sqout_rule`** (default `first_note`): what a squeeze-out costs. `first_note` removes the Star Power doubling from one note of the chord (the lowest-value one). `whole_chord` removes it from every note in the chord.
+- **`max_tied_paths`** (default `4`): how many paths Hydra keeps when several reach the same score. More paths means longer lists and slower analysis.
+- **`auto_cap_ladder`** (default `16,32,64,128,256,512`): the SP caps Auto tries, in rising order, until the score stops changing. Separate them with commas.
+- **`auto_budget_s`** (default `120`): how many seconds Auto may spend on one chart before it stops climbing the ladder.
+- **`fill_cooldown_measures`** (default `4`): for charts with no authored fills, how many measures must pass after an activation point before Hydra places the next one.
+- **`fill_max_distance_beats`** (default `0.5`): for charts with no authored fills, how far from a measure line a note can sit and still get a fill.
+- **`fill_length_measures`** (default `0.5`): for charts with no authored fills, how long each fill Hydra places is, in measures.
+- **`fill_land_slop_beats`** (default `0.03125`, a 32nd of a beat): how close a fill's end must be to a note for the fill to count. This one applies to authored fills too.
+
+A value Hydra can't read, or a key it doesn't know, is an error that names the key. The command line tools print the error and stop with exit code 2. The app still opens and shows the error, but Analyze stays off until you fix the file and restart Hydra. Hydra never analyzes on the defaults behind your back.
+
+Every analysis result remembers the rules it was made with. After you change the file, results made under the old rules show **`(Stale)`** until you re-analyze them. Switching the rules back brings those results back.
+
 ## Command line tools
 
 Two console programs ship alongside the app and share its settings and library:
 
-- **`hydra_batch`** — runs the same batch analysis as `Analyze library`, printing one line per chart. Flags: `--redo` (re-analyze existing results), `--reindex`, `--db <path>`.
-- **`hydra_report`** — rebuilds the HTML path index from stored results. Flags: `--paths N`, `--all-paths`, `--out <path>`, `--no-open`, `--db <path>`.
+- **`hydra_batch`** — runs the same batch analysis as `Analyze library`, printing one line per chart. Flags: `--redo` (re-analyze existing results), `--reindex`, `--db <path>`, `--rules <path>`, `--legacy-fills`. `--legacy-fills` prices charts under Clone Hero 1.0's fill rule instead of 1.1's. It is a command-line-only mode, and it refuses to write the app's own database, so give it its own `--db`.
+- **`hydra_report`** — rebuilds the HTML path index from stored results. Flags: `--paths N`, `--all-paths`, `--out <path>`, `--no-open`, `--db <path>`, `--rules <path>`.
 
-Both use the chart mode and SP cap from the app's settings file.
+Both use the chart mode and SP cap from the app's settings file. Both read the scoring rules from `hydra_rules.ini` next to Hydra.exe, or from the file `--rules` names. If that file has an error, they print it and stop with exit code 2.
