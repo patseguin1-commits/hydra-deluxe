@@ -3,10 +3,10 @@
 // object-based C++ engine in src/search/engine.cpp, then serialize the record
 // into the RecordStore. This times exactly that.
 //
-// With a folder argument it discovers the folder's charts and prints a per-
-// chart breakdown at the GUI's UNCAPPED DEFAULT settings (score range 4, 10ms
-// limit) -- parse, search, and DB store timed separately, plus the capped
-// number for reference:
+// With a folder argument (and an optional --rules <path>) it discovers the
+// folder's charts and prints a per-chart breakdown at the GUI's default
+// settings, taken from app::Settings so the two cannot drift -- parse,
+// search, and DB store timed separately:
 //   hydra_bench.exe "C:\Clone Hero\songs\...\blink-182 - Discography"
 // With no argument it best-of-3 times the testdata corpus search across
 // configs.
@@ -25,6 +25,7 @@
 #include "json.hpp"
 
 #include "app/analysis.h"
+#include "app/config.h"
 #include "app/rules_file.h"
 #include "corpus_util.h"
 #include "parse/song.h"
@@ -41,28 +42,19 @@ static double secs_since(clk::time_point t0) {
     return std::chrono::duration<double>(clk::now() - t0).count();
 }
 
-static int count_paths(const HydraRecord& r) {
-    int n = 0;
-    std::vector<const Path*> q;
-    for (const Path& p : r.paths) q.push_back(&p);
-    while (!q.empty()) {
-        const Path* p = q.back();
-        q.pop_back();
-        ++n;
-        for (const Path& v : p->variants) q.push_back(&v);
-    }
-    return n;
-}
-
-// Folder mode: the real GUI default (uncapped, score range 4, 10ms limit),
-// broken into the phases the app actually pays, per chart.
-static void folder_breakdown(const std::string& folder) {
+// Folder mode: the real GUI default (app::Settings) under `rules`, broken into
+// the phases the app actually pays, per chart.
+static void folder_breakdown(const std::string& folder, const core::Rules& rules) {
     auto [items, errors] = app::discover_charts({folder});
     std::printf("Discovered %zu chart(s) (%zu folder error(s)).\n", items.size(),
                 errors.size());
-    std::printf("Settings: UNCAPPED, score range 4, 10ms limit (the GUI default).\n\n");
+    app::Settings gui;  // struct defaults are the GUI defaults
+    gui.rules = rules;
+    const app::AnalysisSettings settings = gui.to_analysis_settings();
+    std::printf("Settings: the GUI default (SP cap %d, score range %d, %dms limit).\n\n",
+                gui.sp_cap.value_or(-1), gui.depth_value, gui.mslimit_value);
 
-    store::RecordStore store(":memory:", g_rules.fingerprint());
+    store::RecordStore store(":memory:", rules.fingerprint());
 
     for (const app::ScanItem& it : items) {
         std::printf("%s\n", it.notespath.c_str());
@@ -70,7 +62,8 @@ static void folder_breakdown(const std::string& folder) {
         auto t = clk::now();
         std::optional<Song> song_opt;
         try {
-            song_opt.emplace(load_songpath(it.notespath, true, true, Difficulty::Expert, g_rules));
+            song_opt.emplace(load_songpath(it.notespath, settings.prodrums, settings.bass2x,
+                                           settings.difficulty, settings.rules));
         } catch (const std::exception& e) {
             std::printf("  (skipped: %s)\n\n", e.what());
             continue;
@@ -78,30 +71,20 @@ static void folder_breakdown(const std::string& folder) {
         const Song& song = *song_opt;
         double parse_s = secs_since(t);
 
-        // Uncapped ladder, score range 4, 10ms limit -- the exact default.
         t = clk::now();
-        SearchSettings settings;
-        settings.sp_cap = std::nullopt;
-        settings.depth_mode = DepthMode::Scores;
-        settings.depth_value = 4;
-        settings.ms_filter = 10.0;
-        settings.time_budget_s = std::nullopt;
-        settings.rules = g_rules;
         HydraRecord rec = analyze_chart(song, settings);
         double search_s = secs_since(t);
 
         t = clk::now();
         store.add_song(it.md5, it.title, it.artist, it.charter, song);
-        store.add_record(store::RecordKey{it.md5, "Expert Pro Drums, 2x Bass",
-                                          store::CapQuery::automatic()},
-                         rec);
+        store.add_record(gui.record_key(it.md5), rec);
         double store_s = secs_since(t);
 
         long long best = rec.paths.empty() ? 0 : rec.best_path().totalscore();
         std::printf("  parse %.2fs | search %.2fs | store %.2fs  => TOTAL %.2fs\n",
                     parse_s, search_s, store_s, parse_s + search_s + store_s);
         std::printf("  best score %lld | %d paths | sp_cap %d (%s)\n\n", best,
-                    count_paths(rec), rec.sp_cap.value_or(-1),
+                    static_cast<int>(rec.all_paths().size()), rec.sp_cap.value_or(-1),
                     rec.sp_cap_converged ? "settled" : "unsettled");
         std::fflush(stdout);
     }
@@ -285,7 +268,7 @@ int main(int argc, char** argv) {
         }
         scan_mode(folder, db, dump, dumprel);
     } else if (argc > 1) {
-        folder_breakdown(argv[1]);
+        folder_breakdown(argv[1], g_rules);
     } else {
         corpus_bench();
     }
