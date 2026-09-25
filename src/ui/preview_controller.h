@@ -106,7 +106,7 @@ public:
     // Playing stays playing; the transport stops it at the song's ends.
     void jump_ms(double delta_ms);
     // Pause, then move the playhead `delta_ticks` chart ticks from the tick
-    // the time box shows (the < Tick / Tick > buttons, comma and period).
+    // the time box shows (the < 5 Ticks / 5 Ticks > buttons, comma and period).
     // A step of 0 snaps onto the displayed tick.
     void step_ticks(int delta_ticks);
     bool has_audio() const;

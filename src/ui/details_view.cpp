@@ -621,23 +621,26 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
         return;
     }
 
-    // Transport row: back 5 s, back a tick, play/pause, forward a tick,
+    // Transport row: back 5 s, back 5 ticks, play/pause, forward 5 ticks,
     // forward 5 s, a scrubber, and the time readout. Every piece whose text
     // changes while playing sits in a fixed slot (see widgets.h): otherwise
     // the Vol slider walked under a held mouse as the readout's digits
     // changed width. The four step buttons have fixed labels, so they need
     // no slot.
+    // The tick buttons and comma/period step this many chart ticks.
+    constexpr int kTickStep = 5;
     if (ImGui::Button("-5s")) pc->jump_ms(-5000.0);
     hint("Back 5 seconds (Left arrow)");
     ImGui::SameLine();
-    if (ImGui::Button("< Tick")) pc->step_ticks(-1);
-    hint("Back one tick (Comma)");
+    if (ImGui::Button("< 5 Ticks")) pc->step_ticks(-kTickStep);
+    hint("Back 5 ticks (Comma)");
     ImGui::SameLine();
     const float play_w = std::max(button_slot_width("Play"), button_slot_width("Pause"));
     if (button_in_slot(pc->playing() ? "Pause" : "Play", play_w)) pc->toggle();
+    hint("Play or pause (Space)");
     ImGui::SameLine();
-    if (ImGui::Button("Tick >")) pc->step_ticks(1);
-    hint("Forward one tick (Period)");
+    if (ImGui::Button("5 Ticks >")) pc->step_ticks(kTickStep);
+    hint("Forward 5 ticks (Period)");
     ImGui::SameLine();
     if (ImGui::Button("+5s")) pc->jump_ms(5000.0);
     hint("Forward 5 seconds (Right arrow)");
@@ -676,23 +679,26 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
     }
     if (ImGui::IsItemDeactivatedAfterEdit()) app.commit_settings();
 
-    // Keys: Left/Right jump 5 s, comma/period step one tick; a held key
-    // repeats. Not while a text field has the keyboard. Keyboard navigation
-    // (on in app_shell.cpp) reads the arrows only when nobody owns them, so
-    // the Preview claims Left and Right every frame it shows; a claim made
-    // this frame still holds during next frame's navigation update, so even
-    // the first press lands here rather than moving focus or nudging the
-    // scrubber.
+    // Keys: Space plays or pauses, Left/Right jump 5 s, comma/period step
+    // 5 ticks; a held arrow or comma/period repeats. Not while a text field
+    // has the keyboard. Keyboard navigation (on in app_shell.cpp) reads the
+    // arrows and Space only when nobody owns them, so the Preview claims them
+    // every frame it shows; a claim made this frame still holds during next
+    // frame's navigation update, so even the first press lands here rather
+    // than moving focus, nudging the scrubber, or pressing whichever button
+    // was clicked last.
     if (!ImGui::GetIO().WantTextInput) {
         const ImGuiID keys_owner = ImGui::GetID("##preview_keys");
         ImGui::SetKeyOwner(ImGuiKey_LeftArrow, keys_owner);
         ImGui::SetKeyOwner(ImGuiKey_RightArrow, keys_owner);
+        ImGui::SetKeyOwner(ImGuiKey_Space, keys_owner);
+        if (ImGui::IsKeyPressed(ImGuiKey_Space, ImGuiInputFlags_None, keys_owner)) pc->toggle();
         if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, ImGuiInputFlags_Repeat, keys_owner))
             pc->jump_ms(-5000.0);
         if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, ImGuiInputFlags_Repeat, keys_owner))
             pc->jump_ms(5000.0);
-        if (ImGui::IsKeyPressed(ImGuiKey_Comma, true)) pc->step_ticks(-1);
-        if (ImGui::IsKeyPressed(ImGuiKey_Period, true)) pc->step_ticks(1);
+        if (ImGui::IsKeyPressed(ImGuiKey_Comma, true)) pc->step_ticks(-kTickStep);
+        if (ImGui::IsKeyPressed(ImGuiKey_Period, true)) pc->step_ticks(kTickStep);
     }
 
     // Highway viewport: size the offscreen target to the remaining region.

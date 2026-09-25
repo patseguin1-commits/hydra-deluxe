@@ -377,7 +377,8 @@ void test_preview_controls(ImGuiTestContext* ctx) {
 }
 
 // The Preview's new transport buttons and keys: -5s / +5s and Left / Right
-// jump 5 s, < Tick / Tick > and comma / period step one chart tick.
+// jump 5 s, < 5 Ticks / 5 Ticks > and comma / period step 5 chart ticks, Space
+// plays and pauses.
 void test_preview_buttons_keys(ImGuiTestContext* ctx) {
     Harness& h = harness(ctx);
     if (!open_preview(ctx)) return;
@@ -401,20 +402,39 @@ void test_preview_buttons_keys(ImGuiTestContext* ctx) {
     // A tick step pauses.
     ctx->ItemClick("**/Play");
     IM_CHECK(pc.playing());
-    ctx->ItemClick("**/Tick >");
+    ctx->ItemClick("**/5 Ticks >");
     IM_CHECK(!pc.playing());
 
     // After a step the playhead sits on a tick; period then comma returns
     // the time box to it.
-    ctx->ItemClick(("**/" + escape_ref("< Tick")).c_str());
+    ctx->ItemClick(("**/" + escape_ref("< 5 Ticks")).c_str());
     const double t0 = pc.position_ms();
     const std::string mb0 = pc.time_box().measure_beat;
     ctx->KeyPress(ImGuiKey_Period);
-    IM_CHECK(pc.position_ms() > t0);
-    IM_CHECK(pc.position_ms() - t0 < 20.0);
+    const double t5 = pc.position_ms();
+    IM_CHECK(t5 > t0);
     IM_CHECK(pc.time_box().measure_beat != mb0);
     ctx->KeyPress(ImGuiKey_Comma);
     IM_CHECK_STR_EQ(pc.time_box().measure_beat.c_str(), mb0.c_str());
+
+    // The key steps 5 ticks: the same place five single steps reach.
+    for (int i = 0; i < 5; ++i) pc.step_ticks(1);
+    IM_CHECK_FLOAT_NEAR_EQ(pc.position_ms(), t5, 0.001);
+    pc.step_ticks(-5);
+    IM_CHECK_FLOAT_NEAR_EQ(pc.position_ms(), t0, 0.001);
+
+    // Space plays and pauses. Tab puts the keyboard focus box on the button
+    // after "< 5 Ticks"; had navigation also taken Space it would have
+    // pressed that button too, which undoes the toggle or steps the playhead.
+    ctx->ItemClick(("**/" + escape_ref("< 5 Ticks")).c_str());
+    ctx->KeyPress(ImGuiKey_Tab);
+    IM_CHECK(!pc.playing());
+    const double t1 = pc.position_ms();
+    ctx->KeyPress(ImGuiKey_Space);
+    IM_CHECK(pc.playing());
+    IM_CHECK(pc.position_ms() >= t1);
+    ctx->KeyPress(ImGuiKey_Space);
+    IM_CHECK(!pc.playing());
 }
 
 // Click-and-hold on the time bar while playing. Onyx pauses playback for the
