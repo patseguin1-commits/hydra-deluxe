@@ -45,6 +45,16 @@ PreviewFill fill(PreviewSpan s, PreviewFillState state) {
     return f;
 }
 
+// One tick per millisecond (60 BPM at 1000 ticks per beat), matching note()
+// and span() above, so half a tick is 0.5 ms and the edges these cases expect
+// (1.0005, 0.2505, ...) are the same as before spans moved to ticks.
+PreviewScene timed_scene() {
+    PreviewScene s;
+    s.timing = SongTiming(1000, {{0, 4000}}, {{0, 60.0}});
+    s.tick_resolution = 1000;
+    return s;
+}
+
 XMFLOAT3 transform(const XMFLOAT4X4& m, float x, float y, float z) {
     XMVECTOR v = XMVector3TransformCoord(XMVectorSet(x, y, z, 1.0f), XMLoadFloat4x4(&m));
     XMFLOAT3 out;
@@ -142,7 +152,7 @@ TEST_CASE("stretch_matrix and light_for") {
 
 TEST_CASE("build_highway_draws: order and geometry for a frame") {
     PreviewConfig cfg;
-    PreviewScene scene;
+    PreviewScene scene = timed_scene();
     scene.notes = {note(1000.0, PreviewLane::Red), note(1500.0, PreviewLane::Yellow, true),
                    note(1500.0, PreviewLane::Kick)};
     scene.solos = {span(900.0, 1200.0)};
@@ -340,7 +350,7 @@ TEST_CASE("build_highway_draws: hit flash and target glow after a note passes") 
 
 TEST_CASE("build_highway_draws: energy gems inside an SP phrase, tinted floor in an active window") {
     PreviewConfig cfg;
-    PreviewScene scene;
+    PreviewScene scene = timed_scene();
     scene.notes = {note(1100.0, PreviewLane::Red), note(1200.0, PreviewLane::Yellow, true),
                    note(1200.0, PreviewLane::Kick), note(1300.0, PreviewLane::Blue)};
     scene.sp_phrases = {span(1100.0, 1200.0)};  // ends on the yellow/kick chord
@@ -375,7 +385,7 @@ TEST_CASE("build_highway_draws: energy gems inside an SP phrase, tinted floor in
 
 TEST_CASE("build_highway_draws: the taken fill lights its lane with the lit target") {
     PreviewConfig cfg;
-    PreviewScene scene;
+    PreviewScene scene = timed_scene();
     scene.notes = {note(1000.0, PreviewLane::Red), note(1500.0, PreviewLane::Green)};
     scene.fills = {fill(span(1300.0, 1500.0), PreviewFillState::Taken)};
     PreviewActivation a;
@@ -407,7 +417,7 @@ TEST_CASE("build_highway_draws: the taken fill lights its lane with the lit targ
 
 TEST_CASE("build_highway_draws: an offered fill's strips are dimmed") {
     PreviewConfig cfg;
-    PreviewScene scene;
+    PreviewScene scene = timed_scene();
     scene.notes = {note(1000.0, PreviewLane::Red), note(1500.0, PreviewLane::Green)};
     scene.fills = {fill(span(1300.0, 1500.0), PreviewFillState::Offered)};
     TrackState st = build_track_state(scene, TrackStateOptions{});
@@ -454,4 +464,36 @@ TEST_CASE("texture_file names every texture") {
     for (int i = 1; i < static_cast<int>(TextureId::Count); ++i)
         CHECK(texture_file(static_cast<TextureId>(i))[0] != '\0');
     CHECK(std::string(texture_file(TextureId::LongKick)) == "long-kick.jpg");
+}
+
+TEST_CASE("build_highway_draws: a chord one tick after a phrase ends draws plain") {
+    PreviewConfig cfg;
+    SongTiming timing(480, {{0, 1920}}, {{0, 300.0}});
+    auto at_tick = [&](int64_t tick, PreviewLane lane) {
+        PreviewNote n;
+        n.tick = tick;
+        n.ms = timing.ms_index().at(tick);
+        n.lane = lane;
+        return n;
+    };
+    PreviewScene scene;
+    scene.timing = timing;
+    scene.tick_resolution = 480;
+    scene.notes = {at_tick(480, PreviewLane::Yellow), at_tick(481, PreviewLane::Blue)};
+    PreviewSpan phrase;
+    phrase.start_tick = 0;
+    phrase.end_tick = 480;
+    phrase.start_ms = 0.0;
+    phrase.end_ms = timing.ms_index().at(480);
+    scene.sp_phrases = {phrase};
+    TrackState st = build_track_state(scene, TrackStateOptions{});
+    std::vector<DrawCommand> cmds = build_highway_draws(st, cfg, 0.0, 1.0);
+
+    int energy = 0, plain_blue = 0;
+    for (const DrawCommand& c : cmds) {
+        if (c.material.texture == TextureId::BoxEnergy) ++energy;
+        if (c.material.texture == TextureId::BoxBlue) ++plain_blue;
+    }
+    CHECK(energy == 1);      // the yellow on the phrase's last tick
+    CHECK(plain_blue == 1);  // the blue one tick later
 }
