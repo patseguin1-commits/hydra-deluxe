@@ -15,6 +15,8 @@
 #include <vector>
 
 #include "app/dynamics_breakdown.h"
+#include "midi_util.h"
+#include "parse/song.h"
 #include "store/record_store.h"
 
 using namespace hydra::app;
@@ -157,4 +159,40 @@ TEST_CASE("RecordStore dynamics put/get") {
         DynamicsKey key_hard{"abc123", "Hard", false};
         CHECK(store2.get_dynamics(key_hard).has_value());
     }
+}
+
+TEST_CASE("dynamics keys come from one place") {
+    CHECK(dynamics_cache_key("C:\\songs\\a\\notes.mid", true, hydra::Difficulty::Expert) ==
+          "C:\\songs\\a\\notes.mid|pro|Expert");
+    CHECK(dynamics_cache_key("x.chart", false, hydra::Difficulty::Hard) == "x.chart|std|Hard");
+
+    DynamicsKey k = dynamics_store_key("abc123", hydra::Difficulty::Medium, true);
+    CHECK(k.md5 == "abc123");
+    CHECK(k.difficulty == "Medium");
+    CHECK(k.pro);
+
+    // The background count always parses with 2x kicks kept.
+    CHECK(kDynamicsParseBass2x);
+}
+
+TEST_CASE("store_dynamics_from_analysis stores only when the parse kept 2x kicks") {
+    TempFile tmp;
+    RecordStore store(tmp.path);
+    hydra::Song song = hydra::load_songbytes_mid(
+        testmidi::smf(testmidi::concat({testmidi::track_name("PART DRUMS"), testmidi::set_tempo(),
+                                        testmidi::note_on(96, 100), testmidi::end_of_track()})),
+        true, true);
+
+    store_dynamics_from_analysis(store, "nokicks", song, /*bass2x=*/false,
+                                 hydra::Difficulty::Expert, true);
+    CHECK_FALSE(store.get_dynamics(dynamics_store_key("nokicks", hydra::Difficulty::Expert, true))
+                    .has_value());
+
+    store_dynamics_from_analysis(store, "withkicks", song, /*bass2x=*/true,
+                                 hydra::Difficulty::Expert, true);
+    auto blob = store.get_dynamics(dynamics_store_key("withkicks", hydra::Difficulty::Expert, true));
+    REQUIRE(blob.has_value());
+    auto bd = decode_dynamics(*blob);
+    REQUIRE(bd.has_value());
+    CHECK(bd->row(DynamicsRow::Kick).all() == 1);
 }

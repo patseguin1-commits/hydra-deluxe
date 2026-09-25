@@ -171,5 +171,26 @@ std::optional<DynamicsBreakdown> decode_dynamics(const std::vector<uint8_t>& blo
     return b;
 }
 
+// ---- the cache rules --------------------------------------------------------
+
+std::string dynamics_cache_key(const std::string& notespath, bool pro, Difficulty difficulty) {
+    return notespath + "|" + (pro ? "pro" : "std") + "|" + difficulty_name(difficulty);
+}
+
+store::DynamicsKey dynamics_store_key(const std::string& md5, Difficulty difficulty, bool pro) {
+    return store::DynamicsKey{md5, difficulty_name(difficulty), pro};
+}
+
+void store_dynamics_from_analysis(store::RecordStore& store, const std::string& md5,
+                                  const Song& song, bool bass2x, Difficulty difficulty, bool pro) {
+    if (!bass2x) return;  // the 2x kicks were dropped; the counts would be incomplete
+    try {
+        store.put_dynamics(dynamics_store_key(md5, difficulty, pro),
+                           encode_dynamics(count_dynamics(song)));
+    } catch (...) {
+        // Best effort: never block the analysis record.
+    }
+}
+
 }  // namespace app
 }  // namespace hydra
