@@ -402,3 +402,17 @@ TEST_CASE("mid: a stray SP note-off flags nothing") {
     CHECK(song.sequence[0].flag_sp);
     CHECK_FALSE(song.sequence[1].flag_sp);
 }
+
+TEST_CASE(".chart: [Song] Offset is read in seconds") {
+    std::string text = multidiff::chart_text();
+    const std::string at = "  Resolution = 192\n";
+    text.insert(text.find(at) + at.size(), "  Offset = 0.25\n");
+    const std::vector<uint8_t> data(text.begin(), text.end());
+
+    Song song = load_songbytes_chart(data, true, true);
+    REQUIRE(song.chart_offset_s.has_value());
+    CHECK(*song.chart_offset_s == doctest::Approx(0.25));
+
+    Song plain = load_songbytes_chart(multidiff::chart_bytes(), true, true);
+    CHECK_FALSE(plain.chart_offset_s.has_value());
+}

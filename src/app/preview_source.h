@@ -21,6 +21,7 @@
 #define HYDRA_APP_PREVIEW_SOURCE_H
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -46,6 +47,10 @@ struct PreviewAudioStem {
 struct PreviewSource {
     Song song;
     std::vector<PreviewAudioStem> stems;
+    // Where chart time 0 sits in the audio: audio_ms = chart_ms +
+    // audio_offset_ms. From song.ini delay (ms) and .chart Offset (s), as
+    // Clone Hero applies them. 0 for .sng and .srb.
+    double audio_offset_ms = 0.0;
 };
 
 // Parse `notespath` (any supported chart kind) and gather its audio.
@@ -57,6 +62,14 @@ PreviewSource resolve_preview_source(const std::string& notespath, bool pro,
                                      const core::Rules& rules = core::default_rules());
 
 // ---- pieces, exposed for testing and reuse -------------------------------
+
+// song.ini's `delay` in milliseconds, or nullopt when the file or key is
+// missing or the value is not a number.
+std::optional<double> read_ini_delay_ms(const std::string& ini_path);
+
+// The Preview's audio offset in ms from the two values Clone Hero reads.
+double preview_audio_offset_ms(std::optional<double> ini_delay_ms,
+                               std::optional<double> chart_offset_s);
 
 // True if `filename` ends in an audio extension Hydra can decode
 // (.ogg/.opus/.mp3/.wav/.flac), case-insensitive.

@@ -31,10 +31,13 @@ public:
     PreviewTransport(const PreviewTransport&) = delete;
     PreviewTransport& operator=(const PreviewTransport&) = delete;
 
-    // Load a chart's audio (may be null/empty for a chart with no audio) and
-    // the song length: the later of `last_note_ms` and the audio's end.
-    // Resets the playhead to 0, paused.
-    void load(std::unique_ptr<audio::Playhead> playhead, double last_note_ms);
+    // Load a chart's audio (may be null/empty for a chart with no audio), the
+    // song length, and where chart time 0 sits in the audio (audio_ms =
+    // chart_ms + audio_offset_ms, never negative; see PreviewLoadJob). The
+    // length is the later of `last_note_ms` and the audio's end in chart time.
+    // Resets the playhead to the offset, paused.
+    void load(std::unique_ptr<audio::Playhead> playhead, double last_note_ms,
+              double audio_offset_ms = 0.0);
     void unload();  // drop the playhead, back to an empty paused transport
 
     void play();    // seeks the playhead to the clock and starts both
@@ -64,6 +67,7 @@ public:
 private:
     app::PreviewClock clock_;  // GUI thread only
     double length_ms_ = 0.0;
+    double audio_offset_ms_ = 0.0;  // audio_ms = chart_ms + this
     float gain_ = 1.0f;
     mutable std::mutex mu_;  // guards playhead_ (device thread pulls, GUI controls)
     std::unique_ptr<audio::Playhead> playhead_;

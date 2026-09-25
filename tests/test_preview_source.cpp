@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -315,4 +316,46 @@ TEST_CASE("containers pass the difficulty through to the chart inside") {
           multidiff::kHardChords);
     CHECK(load_songpath_srb(srb, true, true, Difficulty::Hard).sequence.size() ==
           multidiff::kHardChords);
+}
+
+TEST_CASE("read_ini_delay_ms reads song.ini delay in milliseconds") {
+    const std::string dir = make_subdir("ini_delay");
+    const std::string ini = dir + "\\song.ini";
+
+    write_bytes(ini, bytes_of("[song]\nname = X\ndelay = 1016\n"));
+    REQUIRE(read_ini_delay_ms(ini).has_value());
+    CHECK(*read_ini_delay_ms(ini) == doctest::Approx(1016.0));
+
+    write_bytes(ini, bytes_of("[Song]\r\nDelay = -250\r\n"));  // any case, CRLF
+    REQUIRE(read_ini_delay_ms(ini).has_value());
+    CHECK(*read_ini_delay_ms(ini) == doctest::Approx(-250.0));
+
+    write_bytes(ini, bytes_of("[song]\nname = X\n"));
+    CHECK_FALSE(read_ini_delay_ms(ini).has_value());
+
+    write_bytes(ini, bytes_of("[song]\ndelay = soon\n"));
+    CHECK_FALSE(read_ini_delay_ms(ini).has_value());
+
+    CHECK_FALSE(read_ini_delay_ms(dir + "\\missing.ini").has_value());
+}
+
+TEST_CASE("preview_audio_offset_ms combines delay and Offset") {
+    CHECK(preview_audio_offset_ms(std::nullopt, std::nullopt) == doctest::Approx(0.0));
+    CHECK(preview_audio_offset_ms(1016.0, std::nullopt) == doctest::Approx(1016.0));
+    CHECK(preview_audio_offset_ms(std::nullopt, 0.25) == doctest::Approx(250.0));
+    // Lunaris: delay = 0 in song.ini, Offset = 0.25 in the chart. A delay of 0
+    // counts as unset, so the Offset applies (measured +248 ms at the game).
+    CHECK(preview_audio_offset_ms(0.0, 0.25) == doctest::Approx(250.0));
+    // The delay-500 copy of Lunaris from Task 17 step 1: both set, and the
+    // nonzero delay replaces the Offset (measured +496 ms at the game).
+    CHECK(preview_audio_offset_ms(500.0, 0.25) == doctest::Approx(500.0));
+}
+
+TEST_CASE("resolve_preview_source reads delay from a song.ini in any case") {
+    const std::string dir = make_subdir("ini_delay_case");
+    write_bytes(dir + "\\notes.chart", multidiff::chart_bytes());
+    write_bytes(dir + "\\Song.INI", bytes_of("[song]\ndelay = 500\n"));
+    const PreviewSource src =
+        resolve_preview_source(dir + "\\notes.chart", true, true, Difficulty::Expert);
+    CHECK(src.audio_offset_ms == doctest::Approx(500.0));
 }

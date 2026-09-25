@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "audio/decode.h"
+#include "audio/mixer.h"
 #include "audio/player.h"
 #include "ui/preview_transport.h"
 
@@ -181,4 +182,40 @@ TEST_CASE("gain set before load applies to the next playhead") {
     // A later change reaches the loaded playhead too.
     transport.set_gain(0.25f);
     CHECK(playhead->gain() == doctest::Approx(0.25f));
+}
+
+TEST_CASE("an audio offset seeks the playhead ahead of the clock") {
+    double t = 0.0;
+    PreviewTransport transport([&] { return t; });
+
+    auto* playhead = new Playhead(make_ramp(96000));  // 2000 ms
+    transport.load(std::unique_ptr<Playhead>(playhead), 0.0, /*audio_offset_ms=*/500.0);
+    // The audio past the chart's end still plays out: 2000 - 500.
+    CHECK(transport.length_ms() == doctest::Approx(1500.0));
+
+    transport.seek_ms(250.0);
+    CHECK(transport.now_ms() == doctest::Approx(250.0));
+    CHECK(playhead->position_ms() == doctest::Approx(750.0));
+
+    transport.play();
+    CHECK(playhead->position_ms() == doctest::Approx(750.0));
+}
+
+TEST_CASE("load with no audio offset behaves exactly as before") {
+    PreviewTransport transport([] { return 0.0; });
+    auto* playhead = new Playhead(make_ramp(48000));
+    transport.load(std::unique_ptr<Playhead>(playhead), 0.0);
+    transport.seek_ms(250.0);
+    CHECK(playhead->position_ms() == doctest::Approx(250.0));
+}
+
+TEST_CASE("pad_front_ms adds silence before the first sample") {
+    DecodedAudio a = make_ramp(4);
+    hydra::audio::pad_front_ms(a, 1.0);  // 48 frames at 48 kHz
+    REQUIRE(a.frames() == 52);
+    CHECK(a.samples[0] == 0.0f);
+    CHECK(a.samples[47 * 2 + 1] == 0.0f);
+    CHECK(a.samples[48 * 2] == 0.0f);       // the ramp's frame 0, L = 0
+    CHECK(a.samples[49 * 2] == 1.0f);       // the ramp's frame 1, L = 1
+    CHECK(a.samples[49 * 2 + 1] == 1.5f);
 }

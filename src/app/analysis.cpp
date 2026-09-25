@@ -177,60 +177,23 @@ HashedFile stream_md5(BCRYPT_ALG_HANDLE alg, const std::string& path,
 
 // ---- song.ini metadata, mirroring ScanItem.get_metadata_ini --------------
 //
-// A minimal INI reader: a [Song]/[song] section, `key = value` lines,
-// `;`/`#` comments. Chart libraries are UTF-8 in practice; a leading BOM is
-// stripped and anything else is read byte-for-byte rather than replicating
-// Python's utf-8/utf-8-sig/ansi fallback chain.
+// The name, artist and charter keys, read through read_song_ini_keys (the
+// one song.ini reader, shared with the Preview's delay). Its declaration in
+// analysis.h says which lines count.
 
 std::tuple<std::string, std::string, std::string> read_metadata_ini(const std::string& path) {
-    std::vector<uint8_t> raw = read_file_bytes(path);
-    size_t start = 0;
-    if (raw.size() >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF) start = 3;
-    std::string text(reinterpret_cast<const char*>(raw.data() + start), raw.size() - start);
+    const std::map<std::string, std::string> ini = read_song_ini_keys(path);
 
     // Empty = no usable name; discover_charts applies the one fallback.
     std::string title;
     std::string artist = "<unknown artist>";
     std::string charter = "<unknown charter>";
 
-    bool in_song_section = false;
-    size_t pos = 0;
-    while (pos <= text.size()) {
-        size_t eol = text.find('\n', pos);
-        std::string line = text.substr(pos, eol == std::string::npos ? std::string::npos
-                                                                      : eol - pos);
-        pos = (eol == std::string::npos) ? text.size() + 1 : eol + 1;
-
-        while (!line.empty() && (line.back() == '\r' || line.back() == ' ' ||
-                                 line.back() == '\t'))
-            line.pop_back();
-        size_t a = line.find_first_not_of(" \t");
-        if (a == std::string::npos) continue;
-        line = line.substr(a);
-        if (line.empty() || line[0] == ';' || line[0] == '#') continue;
-
-        if (line.front() == '[' && line.back() == ']') {
-            std::string section = lower(line.substr(1, line.size() - 2));
-            in_song_section = (section == "song");
-            continue;
-        }
-        if (!in_song_section) continue;
-
-        size_t eq = line.find('=');
-        if (eq == std::string::npos) continue;
-        std::string key = lower(line.substr(0, eq));
-        while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) key.pop_back();
-        std::string value = line.substr(eq + 1);
-        size_t vb = value.find_first_not_of(" \t");
-        value = (vb == std::string::npos) ? std::string() : value.substr(vb);
-
-        if (key == "name") title = value;
-        else if (key == "artist") artist = value;
-        // Only `charter` — Python's get_metadata_ini never reads the `frets`
-        // alias, and some inis carry both with different values.
-        else if (key == "charter") charter = value;
-    }
-
+    if (auto it = ini.find("name"); it != ini.end()) title = it->second;
+    if (auto it = ini.find("artist"); it != ini.end()) artist = it->second;
+    // Only `charter` — Python's get_metadata_ini never reads the `frets`
+    // alias, and some inis carry both with different values.
+    if (auto it = ini.find("charter"); it != ini.end()) charter = it->second;
     return {title, artist, charter};
 }
 
@@ -324,6 +287,51 @@ std::string sig_of(const DirEntry& notes, const DirEntry* ini) {
 }
 
 }  // namespace
+
+// Chart libraries are UTF-8 in practice; a leading BOM is stripped and
+// anything else is read byte-for-byte rather than replicating Python's
+// utf-8/utf-8-sig/ansi fallback chain.
+std::map<std::string, std::string> read_song_ini_keys(const std::string& path) {
+    std::vector<uint8_t> raw = read_file_bytes(path);
+    size_t start = 0;
+    if (raw.size() >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF) start = 3;
+    std::string text(reinterpret_cast<const char*>(raw.data() + start), raw.size() - start);
+
+    std::map<std::string, std::string> keys;
+    bool in_song_section = false;
+    size_t pos = 0;
+    while (pos <= text.size()) {
+        size_t eol = text.find('\n', pos);
+        std::string line = text.substr(pos, eol == std::string::npos ? std::string::npos
+                                                                      : eol - pos);
+        pos = (eol == std::string::npos) ? text.size() + 1 : eol + 1;
+
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ' ||
+                                 line.back() == '\t'))
+            line.pop_back();
+        size_t a = line.find_first_not_of(" \t");
+        if (a == std::string::npos) continue;
+        line = line.substr(a);
+        if (line.empty() || line[0] == ';' || line[0] == '#') continue;
+
+        if (line.front() == '[' && line.back() == ']') {
+            std::string section = lower(line.substr(1, line.size() - 2));
+            in_song_section = (section == "song");
+            continue;
+        }
+        if (!in_song_section) continue;
+
+        size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        std::string key = lower(line.substr(0, eq));
+        while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) key.pop_back();
+        std::string value = line.substr(eq + 1);
+        size_t vb = value.find_first_not_of(" \t");
+        value = (vb == std::string::npos) ? std::string() : value.substr(vb);
+        keys[key] = value;
+    }
+    return keys;
+}
 
 // Hashes the whole chart file with MD5, the same way the library scan does.
 // So the result here always matches the hyhash already stored in the

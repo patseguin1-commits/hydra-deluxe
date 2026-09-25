@@ -36,6 +36,9 @@ public:
     struct Result {
         app::PreviewScene scene;
         audio::DecodedAudio mixed;
+        // Where chart time 0 sits in `mixed` (never negative: a negative
+        // chart offset is padded into the front of `mixed` instead).
+        double audio_offset_ms = 0.0;
         // The parsed song the scene was built from. The controller keeps it so
         // a later path selection can rebuild the overlay without re-parsing.
         Song song;

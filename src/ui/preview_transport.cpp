@@ -9,14 +9,15 @@ PreviewTransport::PreviewTransport(app::PreviewClock::Now now)
     : clock_(std::move(now)) {}
 
 void PreviewTransport::load(std::unique_ptr<audio::Playhead> playhead,
-                            double last_note_ms) {
+                            double last_note_ms, double audio_offset_ms) {
     std::lock_guard<std::mutex> lock(mu_);
     playhead_ = std::move(playhead);
-    double audio_end = playhead_ ? playhead_->length_ms() : 0.0;
+    audio_offset_ms_ = audio_offset_ms;
+    double audio_end = playhead_ ? playhead_->length_ms() - audio_offset_ms_ : 0.0;
     length_ms_ = (std::max)(last_note_ms, audio_end);
     if (playhead_) {
         playhead_->pause();
-        playhead_->seek_frames(0);
+        playhead_->seek_ms(audio_offset_ms_);
         playhead_->set_gain(gain_);
     }
     clock_.pause();
@@ -27,6 +28,7 @@ void PreviewTransport::unload() {
     std::lock_guard<std::mutex> lock(mu_);
     playhead_.reset();
     length_ms_ = 0.0;
+    audio_offset_ms_ = 0.0;
     clock_.pause();
     clock_.seek_ms(0.0);
 }
@@ -35,7 +37,7 @@ void PreviewTransport::play() {
     {
         std::lock_guard<std::mutex> lock(mu_);
         if (playhead_) {
-            playhead_->seek_ms(clock_.now_ms());
+            playhead_->seek_ms(clock_.now_ms() + audio_offset_ms_);
             playhead_->play();
         }
     }
@@ -60,7 +62,7 @@ void PreviewTransport::seek_ms(double ms) {
     if (length_ms_ > 0.0 && ms > length_ms_) ms = length_ms_;
     clock_.seek_ms(ms);
     std::lock_guard<std::mutex> lock(mu_);
-    if (playhead_) playhead_->seek_ms(ms);
+    if (playhead_) playhead_->seek_ms(ms + audio_offset_ms_);
 }
 
 bool PreviewTransport::playing() const { return clock_.playing(); }

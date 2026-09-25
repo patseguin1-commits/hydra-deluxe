@@ -12,8 +12,12 @@
 
 #include <algorithm>
 #include <cstring>
+#include <map>
+#include <optional>
 
+#include "app/analysis.h"
 #include "core/winstr.h"
+#include "parse/chart_files.h"
 #include "parse/srb.h"
 #include "parse/sng.h"
 
@@ -122,6 +126,31 @@ bool srb_decrypt_blob(const uint8_t* enc, size_t len, const uint8_t* header16,
         out[i] = enc[i] ^ ecb_buf[i];
     return true;
 }
+
+// The folder's song.ini, matched in any case (Song.INI counts), or "" when
+// there is none.
+std::string find_song_ini(const std::string& folder) {
+    std::wstring pattern = utf8_to_wide(folder + "\\*");
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(pattern.c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return {};
+    std::string found;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        const std::string name = wide_to_utf8(fd.cFileName);
+        if (is_song_ini(name)) {
+            found = folder + "\\" + name;
+            break;
+        }
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    return found;
+}
+
+// +1: a positive delay or Offset makes the notes come later than the music,
+// so the audio runs ahead of chart time. Confirmed at the game (Task 17
+// step 1, Thornhill "Limbo": delay = 1016 put the notes 1018 ms later).
+constexpr double kOffsetDirection = 1.0;
 
 }  // namespace
 
@@ -264,6 +293,36 @@ std::vector<PreviewAudioStem> extract_srb_audio(const std::string& path) {
     return stems;
 }
 
+std::optional<double> read_ini_delay_ms(const std::string& ini_path) {
+    std::map<std::string, std::string> ini;
+    try {
+        ini = read_song_ini_keys(ini_path);
+    } catch (const std::exception&) {
+        return std::nullopt;  // no song.ini, or unreadable: no delay
+    }
+    const auto it = ini.find("delay");
+    if (it == ini.end()) return std::nullopt;
+    try {
+        size_t used = 0;
+        const double ms = std::stod(it->second, &used);
+        if (used != it->second.size()) return std::nullopt;
+        return ms;
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+}
+
+// song.ini's delay replaces the chart's Offset: the delay = 500 copy of
+// Lunaris (Offset = 0.25) moved by 0.5 s at the game (Task 17 step 1). The
+// original Lunaris (delay = 0) still moved by 0.25 s, so a delay of 0 counts
+// as unset.
+double preview_audio_offset_ms(std::optional<double> ini_delay_ms,
+                               std::optional<double> chart_offset_s) {
+    const bool delay_wins = ini_delay_ms.has_value() && *ini_delay_ms != 0.0;
+    const double ms = delay_wins ? *ini_delay_ms : chart_offset_s.value_or(0.0) * 1000.0;
+    return kOffsetDirection * ms;
+}
+
 PreviewSource resolve_preview_source(const std::string& notespath, bool pro,
                                      bool bass2x, Difficulty difficulty,
                                      const core::Rules& rules) {
@@ -275,8 +334,14 @@ PreviewSource resolve_preview_source(const std::string& notespath, bool pro,
         // If decryption fails (wrong key, corrupt file, etc.) fall back to
         // loose audio files beside the .srb, same as a folder chart.
         if (src.stems.empty()) src.stems = find_loose_audio(dir_name(notespath));
-    } else
-        src.stems = find_loose_audio(dir_name(notespath));
+    } else {
+        const std::string folder = dir_name(notespath);
+        src.stems = find_loose_audio(folder);
+        const std::string ini = find_song_ini(folder);
+        const std::optional<double> delay =
+            ini.empty() ? std::nullopt : read_ini_delay_ms(ini);
+        src.audio_offset_ms = preview_audio_offset_ms(delay, src.song.chart_offset_s);
+    }
     return src;
 }
 
