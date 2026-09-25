@@ -455,6 +455,13 @@ PreviewTimeBox build_time_box(const PreviewScene& scene, double now_ms,
     return box;
 }
 
+double step_tick_ms(const PreviewScene& scene, double now_ms, int delta_ticks) {
+    if (!scene.timing) return now_ms;
+    int64_t target = tick_at(*scene.timing, now_ms < 0.0 ? 0.0 : now_ms) + delta_ticks;
+    if (target < 0) target = 0;
+    return scene.timing->ms_index().at(target);
+}
+
 std::string path_overlay_key(const Path* path) {
     if (path == nullptr) return {};
     return path->pathstring_verbose() + "|" + std::to_string(path->totalscore());
