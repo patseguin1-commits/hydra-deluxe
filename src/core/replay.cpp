@@ -142,6 +142,7 @@ ReplayResult replay_path(const Song& song, std::vector<ReplayWindow> windows,
         row.points.ghost = sg.ghost;
 
         combo += ts.chord.count();
+        row.combo_after = combo;
 
         cum.add(row.points);
         row.cum = cum;

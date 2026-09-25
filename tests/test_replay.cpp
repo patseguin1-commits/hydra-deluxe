@@ -72,6 +72,35 @@ TEST_CASE("replay reproduces the engine's score for every corpus path") {
     CHECK(mismatches == 0);
 }
 
+// The combo the game's counter shows once a chord is hit. The Preview's score
+// box reads it straight off the replay rather than adding note counts itself.
+TEST_CASE("replay: combo_after is the combo once the chord is hit") {
+    Song song(480);
+    song.bpm_changes[0] = 120.0;
+    song.build_timing();
+    const std::vector<std::vector<NoteColor>> chords = {
+        {NoteColor::Red},
+        {NoteColor::Red, NoteColor::Yellow},
+        {NoteColor::Kick, NoteColor::Blue, NoteColor::Green}};
+    int64_t tick = 0;
+    for (const std::vector<NoteColor>& colors : chords) {
+        SongTimestamp ts;
+        ts.timecode = song.timecode(tick);
+        for (NoteColor c : colors) ts.chord.add_note(c);
+        song.sequence.push_back(std::move(ts));
+        tick += 480;
+    }
+
+    const ReplayResult r = replay_path(song, {});
+    REQUIRE(r.chords.size() == 3);
+    CHECK(r.chords[0].combo_before == 0);
+    CHECK(r.chords[0].combo_after == 1);
+    CHECK(r.chords[1].combo_before == 1);
+    CHECK(r.chords[1].combo_after == 3);
+    CHECK(r.chords[2].combo_before == 3);
+    CHECK(r.chords[2].combo_after == 6);
+}
+
 // A targeted search is only useful if it gives back the same path the ordinary
 // search would have found. So take every path the ordinary search DID find,
 // hand its activation ticks back to search_target, and require the engine to
