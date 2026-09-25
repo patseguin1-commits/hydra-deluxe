@@ -199,7 +199,8 @@ void PreviewController::jump_ms(double delta_ms) {
 void PreviewController::step_ticks(int delta_ticks) {
     if (!active_ || job_) return;
     transport_.pause();
-    transport_.seek_ms(hydra::app::step_tick_ms(scene_, transport_.now_ms(), delta_ticks));
+    transport_.seek_ms(hydra::app::step_tick_ms(scene_, transport_.now_ms(),
+                                                transport_.length_ms(), delta_ticks));
 }
 
 void PreviewController::set_scrubbing(bool held) {

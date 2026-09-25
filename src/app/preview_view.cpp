@@ -200,20 +200,17 @@ SpMeterCurve build_sp_meter_curve(const PreviewScene& scene, const SongTiming& t
 }
 
 // The running score, from the same replay hydra_replay uses. Trusted only
-// when the replay provably stands for the path: every activation became a
-// window, and all six category totals equal the stored ones.
+// when replay_stored_path says the replay stands for the path.
 PreviewScore build_score(const Song& song, const Path* path, const core::Rules& rules) {
     PreviewScore score;
     if (path == nullptr) return score;  // None
     score.state = PreviewScore::State::Unavailable;
     try {
-        std::vector<ReplayWindow> windows = windows_for_path(*path, song);
-        if (windows.size() != path->all_activations().size()) return score;
-        const ReplayResult r = replay_path(song, std::move(windows), rules);
-        if (!(r.final == score_of(*path))) return score;
-        score.steps.reserve(r.chords.size());
-        for (const ReplayChord& c : r.chords)
-            score.steps.push_back({c.ms, c.cum_onscreen_total, c.multiplier_after, c.combo_after});
+        const PathReplay pr = replay_stored_path(song, *path, rules);
+        if (!pr.faithful()) return score;
+        score.steps.reserve(pr.result.chords.size());
+        for (const ReplayChord& c : pr.result.chords)
+            score.steps.push_back({c.ms, c.cum_onscreen_total, c.multiplier_shown, c.combo_after});
     } catch (const std::exception&) {
         score.steps.clear();
         return score;  // Unavailable
@@ -441,14 +438,25 @@ std::string bracket_str(int64_t measure, int64_t beat, int64_t tick_in_beat) {
     return buf;
 }
 
+// The song length the time box shows: never negative.
+double shown_length(double length_ms) { return length_ms < 0.0 ? 0.0 : length_ms; }
+
+// The moment the time box shows: the playhead held inside [0, length].
+// step_tick_ms starts from the same moment, so a step moves the displayed
+// tick by exactly its size.
+double shown_ms(double now_ms, double length_ms) {
+    const double len = shown_length(length_ms);
+    return now_ms < 0.0 ? 0.0 : (now_ms > len ? len : now_ms);
+}
+
 }  // namespace
 
 PreviewTimeBox build_time_box(const PreviewScene& scene, double now_ms,
                               double length_ms) {
     PreviewTimeBox box;
 
-    const double len = length_ms < 0.0 ? 0.0 : length_ms;
-    const double now = now_ms < 0.0 ? 0.0 : (now_ms > len ? len : now_ms);
+    const double len = shown_length(length_ms);
+    const double now = shown_ms(now_ms, length_ms);
 
     box.timestamp = clock_str(now) + " / " + clock_str(len);
 
@@ -500,24 +508,17 @@ PreviewScoreBox build_score_box(const PreviewScene& scene, double now_ms) {
     PreviewScoreStep at;
     if (it != steps.begin()) at = *(it - 1);
 
-    // Star Power doubles the multiplier across the window the highway tints.
-    int multiplier = at.multiplier;
-    for (const PreviewActivation& a : scene.activations)
-        if (a.has_sp_end && now_ms >= a.ms && now_ms <= a.sp_end_ms) {
-            multiplier *= 2;
-            break;
-        }
-
     box.score = group_thousands(at.total);
     char buf[64];
-    std::snprintf(buf, sizeof buf, "x%d \xC2\xB7 combo %d", multiplier, at.combo);
+    std::snprintf(buf, sizeof buf, "x%d \xC2\xB7 combo %d", at.multiplier, at.combo);
     box.detail = buf;
     return box;
 }
 
-double step_tick_ms(const PreviewScene& scene, double now_ms, int delta_ticks) {
+double step_tick_ms(const PreviewScene& scene, double now_ms, double length_ms,
+                    int delta_ticks) {
     if (!scene.timing) return now_ms;
-    int64_t target = tick_at(*scene.timing, now_ms < 0.0 ? 0.0 : now_ms) + delta_ticks;
+    int64_t target = tick_at(*scene.timing, shown_ms(now_ms, length_ms)) + delta_ticks;
     if (target < 0) target = 0;
     return scene.timing->ms_index().at(target);
 }

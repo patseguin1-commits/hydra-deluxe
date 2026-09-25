@@ -714,12 +714,13 @@ void check_chart(const std::string& path, const core::Rules& rules, Tally* tally
         const int i = index++;
         ++tally->paths;
 
-        std::vector<ReplayWindow> windows = windows_for_path(*p, song);
-        const ReplayResult r = replay_path(song, windows, rules);
-        const ReplayScore want = score_of(*p);
+        const PathReplay pr = replay_stored_path(song, *p, rules);
+        const std::vector<ReplayWindow>& windows = pr.windows;
+        const ReplayResult& r = pr.result;
+        const ReplayScore& want = pr.stored;
 
         std::string diffs;
-        if (!(r.final == want)) {
+        if (!pr.totals_match()) {
             for (const ReplayScoreField& f : kReplayScoreFields) {
                 const int64_t got = r.final.*(f.member);
                 const int64_t wanted = want.*(f.member);
@@ -729,10 +730,10 @@ void check_chart(const std::string& path, const core::Rules& rules, Tally* tally
                          std::to_string(wanted) + " (" + std::to_string(got - wanted) + ")";
             }
         }
-        if (windows.size() != p->all_activations().size())
+        if (!pr.all_windows())
             diffs += (diffs.empty() ? "" : ", ") + std::string("only ") +
                      std::to_string(windows.size()) + " of " +
-                     std::to_string(p->all_activations().size()) +
+                     std::to_string(pr.activations) +
                      " activations resolved";
 
         if (g_verbose) {

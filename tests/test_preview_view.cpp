@@ -216,7 +216,7 @@ const AnalysisResult& analyzed() {
 Path priced_path(const Song& song, std::vector<Activation> acts) {
     Path p;
     p.activations = std::move(acts);
-    const ReplayScore s = replay_path(song, windows_for_path(p, song)).final;
+    const ReplayScore s = replay_stored_path(song, p).result.final;
     p.score_base = s.base;
     p.score_combo = s.combo;
     p.score_sp = s.sp;
@@ -938,19 +938,24 @@ TEST_CASE("step_tick_ms: one tick from the tick the time box shows") {
     const MsIndex& ms = song.timing().ms_index();
 
     // 1300 ms is the time box's own example: tick 1248, "[1:3:288]".
-    const double fwd = step_tick_ms(scene, 1300.0, 1);
-    const double back = step_tick_ms(scene, 1300.0, -1);
+    const double fwd = step_tick_ms(scene, 1300.0, 5000.0, 1);
+    const double back = step_tick_ms(scene, 1300.0, 5000.0, -1);
     CHECK(fwd == doctest::Approx(ms.at(1249)));
     CHECK(back == doctest::Approx(ms.at(1247)));
     CHECK(build_time_box(scene, fwd, 5000.0).measure_beat == "[1:3:289] / [3:3:000]");
     CHECK(build_time_box(scene, back, 5000.0).measure_beat == "[1:3:287] / [3:3:000]");
 
     // Between ticks it steps from the rounded tick: 1300.6 ms rounds to 1249.
-    CHECK(step_tick_ms(scene, 1300.6, 1) == doctest::Approx(ms.at(1250)));
+    CHECK(step_tick_ms(scene, 1300.6, 5000.0, 1) == doctest::Approx(ms.at(1250)));
 
     // Never before tick 0.
-    CHECK(step_tick_ms(scene, 0.0, -1) == doctest::Approx(0.0));
-    CHECK(step_tick_ms(scene, 0.5, -3) == doctest::Approx(0.0));
+    CHECK(step_tick_ms(scene, 0.0, 5000.0, -1) == doctest::Approx(0.0));
+    CHECK(step_tick_ms(scene, 0.5, 5000.0, -3) == doctest::Approx(0.0));
+
+    // Past the end the time box shows the end (5000 ms, tick 4800), and the
+    // step starts there too.
+    CHECK(build_time_box(scene, 6000.0, 5000.0).measure_beat == "[3:3:000] / [3:3:000]");
+    CHECK(step_tick_ms(scene, 6000.0, 5000.0, -1) == doctest::Approx(ms.at(4799)));
 }
 
 TEST_CASE("step_tick_ms: a tempo change moves the tick length with it") {
@@ -961,15 +966,15 @@ TEST_CASE("step_tick_ms: a tempo change moves the tick length with it") {
     const MsIndex& ms = song.timing().ms_index();
     REQUIRE(ms.at(1920) == doctest::Approx(2000.0));
 
-    CHECK(step_tick_ms(scene, 2000.0, 1) == doctest::Approx(ms.at(1921)));
-    CHECK(step_tick_ms(scene, 2000.0, -1) == doctest::Approx(ms.at(1919)));
-    CHECK(step_tick_ms(scene, 2000.0, 1) - 2000.0 == doctest::Approx(250.0 / 480.0));
-    CHECK(2000.0 - step_tick_ms(scene, 2000.0, -1) == doctest::Approx(500.0 / 480.0));
+    CHECK(step_tick_ms(scene, 2000.0, 5000.0, 1) == doctest::Approx(ms.at(1921)));
+    CHECK(step_tick_ms(scene, 2000.0, 5000.0, -1) == doctest::Approx(ms.at(1919)));
+    CHECK(step_tick_ms(scene, 2000.0, 5000.0, 1) - 2000.0 == doctest::Approx(250.0 / 480.0));
+    CHECK(2000.0 - step_tick_ms(scene, 2000.0, 5000.0, -1) == doctest::Approx(500.0 / 480.0));
 }
 
 TEST_CASE("step_tick_ms: a scene with no song leaves the time alone") {
     PreviewScene empty;
-    CHECK(step_tick_ms(empty, 1234.5, 1) == doctest::Approx(1234.5));
+    CHECK(step_tick_ms(empty, 1234.5, 5000.0, 1) == doctest::Approx(1234.5));
 }
 
 TEST_CASE("score box: no path hides the box") {
@@ -1021,7 +1026,7 @@ TEST_CASE("score box: before the first note nothing is hit yet") {
     CHECK(box.detail == "x1 " + kDot + " combo 0");
 }
 
-TEST_CASE("score box: Star Power doubles the multiplier inside the active window") {
+TEST_CASE("score box: the multiplier is the replay's, doubled on chords Star Power pays") {
     // A Red note every 500 ms (tick 480 steps). One bar of SP activated at
     // tick 2400 (2500 ms) runs two measures, to tick 6240 (6500 ms).
     Song song = make_sp_song({1920}, 9600);
@@ -1032,11 +1037,21 @@ TEST_CASE("score box: Star Power doubles the multiplier inside the active window
     REQUIRE(scene.activations[0].has_sp_end);
     CHECK(scene.activations[0].sp_end_ms == doctest::Approx(6500.0));
 
+    // Each step carries exactly what the replay says the disc shows.
+    const ReplayResult r = replay_stored_path(song, path).result;
+    REQUIRE(r.chords.size() == scene.score.steps.size());
+    for (size_t i = 0; i < r.chords.size(); ++i)
+        CHECK(scene.score.steps[i].multiplier == r.chords[i].multiplier_shown);
+
     // 2000 ms: five notes hit, before the activation.
     CHECK(build_score_box(scene, 2000.0).detail == "x1 " + kDot + " combo 5");
-    // 3000 ms: seven notes hit, inside the window, so x1 doubles to x2.
+    // 2500 ms: the activation chord is hit and paid, so x1 shows as x2.
+    CHECK(build_score_box(scene, 2500.0).detail == "x2 " + kDot + " combo 6");
     CHECK(build_score_box(scene, 3000.0).detail == "x2 " + kDot + " combo 7");
-    // 7000 ms: fifteen notes hit, past the window: the plain x2 of combo 15.
+    // 6600 ms: the tint has ended, but the last chord hit (6500 ms, on the
+    // deactivation node) was paid, so its x2 still shows doubled.
+    CHECK(build_score_box(scene, 6600.0).detail == "x4 " + kDot + " combo 14");
+    // 7000 ms: the first chord Star Power doesn't pay: the plain x2 of combo 15.
     CHECK(build_score_box(scene, 7000.0).detail == "x2 " + kDot + " combo 15");
 }
 

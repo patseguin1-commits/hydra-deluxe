@@ -50,17 +50,14 @@ TEST_CASE("replay reproduces the engine's score for every corpus path") {
 
         for (const Path* p : rec.all_paths()) {
             ++paths;
-            std::vector<ReplayWindow> windows = windows_for_path(*p, song);
-            REQUIRE(windows.size() == p->all_activations().size());
+            const PathReplay pr = replay_stored_path(song, *p);
+            REQUIRE(pr.all_windows());
 
-            const ReplayResult r = replay_path(song, windows);
-
-            const bool ok = r.final == score_of(*p);
-            if (!ok) {
+            if (!pr.totals_match()) {
                 ++mismatches;
                 if (first_diff.empty())
                     first_diff = path + " [" + p->pathstring() + "]: replay " +
-                                 std::to_string(r.final.total()) + " vs stored " +
+                                 std::to_string(pr.result.final.total()) + " vs stored " +
                                  std::to_string(p->totalscore());
             }
         }
@@ -169,8 +166,7 @@ TEST_CASE("targeted search reproduces every corpus path") {
 
             // The recovered path also has to replay to its own score, which is
             // the invariant the first test pins for search-found paths.
-            const ReplayResult r = replay_path(song, windows_for_path(*match, song));
-            CHECK(r.final == score_of(*match));
+            CHECK(replay_stored_path(song, *match).totals_match());
         }
     }
 
@@ -255,6 +251,17 @@ TEST_CASE("a squeezed-out chord past the leeway earns nothing") {
     CHECK(r.chords[4].points.sp > 0);
     CHECK_FALSE(r.chords[5].in_sp);
     CHECK(r.chords[5].points.sp == 0);
+
+    // The disc follows the same decision: doubled on the paid chord only.
+    CHECK(r.chords[4].multiplier_shown == r.chords[4].multiplier_after * kStarPowerMultiplier);
+    CHECK(r.chords[5].multiplier_shown == r.chords[5].multiplier_after);
+}
+
+TEST_CASE("shown_multiplier doubles the combo multiplier only under Star Power") {
+    CHECK(shown_multiplier(1, false) == 1);
+    CHECK(shown_multiplier(1, true) == 2);
+    CHECK(shown_multiplier(4, false) == 4);
+    CHECK(shown_multiplier(4, true) == 8);
 }
 
 // `score --path` prices a path straight out of the JSON `dump` and `target`

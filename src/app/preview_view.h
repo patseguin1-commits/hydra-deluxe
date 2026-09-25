@@ -160,7 +160,7 @@ struct SpMeterCurve {
 struct PreviewScoreStep {
     double ms = 0.0;      // the chord's onset
     int64_t total = 0;    // on-screen total: a solo's bonus lands on its last chord
-    int multiplier = 1;   // combo multiplier once the chord is hit, before SP doubles it
+    int multiplier = 1;   // the game's disc once the chord is hit (ReplayChord::multiplier_shown)
     int combo = 0;        // notes hit so far, this chord included
 };
 
@@ -232,9 +232,9 @@ PreviewTimeBox build_time_box(const PreviewScene& scene, double now_ms,
 
 // The score box the Preview draws under the time box, at `now_ms`. `score`
 // is the total with thousands separators ("12,345"), and `detail` is
-// "x<multiplier> · combo <n>". The multiplier doubles while `now_ms` is
-// inside an activation's Star Power window (activation to deact node, the
-// span the highway tints). Hidden (`shown` false) when the scene has no
+// "x<multiplier> · combo <n>", both as the last chord hit left them. The
+// multiplier is the replay's: doubled on the chords the engine pays Star
+// Power on, not by where the playhead sits. Hidden (`shown` false) when the scene has no
 // path; "Score unavailable" with an empty `detail` when the replay could not
 // be trusted.
 struct PreviewScoreBox {
@@ -247,12 +247,13 @@ struct PreviewScoreBox {
 PreviewScoreBox build_score_box(const PreviewScene& scene, double now_ms);
 
 // The playhead `delta_ticks` chart ticks from `now_ms`, for the Preview's
-// tick-step buttons. It starts from the tick the time box shows (the tempo
-// map's tick at `now_ms`, rounded to the nearest), so each step changes the
-// displayed tick by exactly `delta_ticks`. Never before tick 0. The ms comes
-// from the song's own tempo map, so a step follows tempo changes. A scene
-// with no timing returns `now_ms` unchanged.
-double step_tick_ms(const PreviewScene& scene, double now_ms, int delta_ticks);
+// tick-step buttons. It starts from the tick build_time_box shows for the
+// same `now_ms` and `length_ms` (one shared helper computes that moment), so
+// each step changes the displayed tick by exactly `delta_ticks`. Never before
+// tick 0. The ms comes from the song's own tempo map, so a step follows tempo
+// changes. A scene with no timing returns `now_ms` unchanged.
+double step_tick_ms(const PreviewScene& scene, double now_ms, double length_ms,
+                    int delta_ticks);
 
 // Bars banked at `ms`: 0 before the curve begins, its final value after the
 // curve ends, and interpolated inside a segment. On a boundary shared by two

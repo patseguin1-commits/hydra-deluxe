@@ -154,7 +154,11 @@ struct ReplayChord {
     // What category_scores applied to the chord's last note: the multiplier
     // the game's disc shows once this chord is hit.
     int multiplier_after = 1;
+    // Star Power pays this chord (at least one window claims it).
     bool in_sp = false;
+    // What the game's disc shows once this chord is hit: multiplier_after,
+    // doubled when in_sp (shown_multiplier).
+    int multiplier_shown = 1;
 
     ReplayScore points;
     ReplayScore cum;
@@ -186,9 +190,31 @@ ReplayScore score_of(const Path& path);
 // activation ends on one. An activation with no stored deact node — only a
 // record written before blob v4 — is skipped, and so is a squeeze-out with no
 // stored sqout_tick (a record from before v6), so a path that yields fewer
-// windows than it has activations cannot be replayed faithfully; check the
-// counts before trusting the score.
+// windows than it has activations cannot be replayed faithfully.
+// replay_stored_path below checks that before a score is trusted.
 std::vector<ReplayWindow> windows_for_path(const Path& path, const Song& song);
+
+// A stored path replayed, with the two checks that say whether the replay
+// stands for it. The one place those checks live: hydra_replay's selfcheck,
+// the Preview's score and the corpus tests all read them from here.
+struct PathReplay {
+    std::vector<ReplayWindow> windows;  // windows_for_path
+    ReplayResult result;
+    ReplayScore stored;                 // score_of(path)
+    size_t activations = 0;             // path.all_activations().size()
+
+    // Every activation became a window.
+    bool all_windows() const { return windows.size() == activations; }
+    // The replay's six totals equal the stored ones.
+    bool totals_match() const { return result.final == stored; }
+    // Both: the replay provably stands for the path.
+    bool faithful() const { return all_windows() && totals_match(); }
+};
+
+// Replay `path` through its own windows. Replays even when some activation
+// yields no window, so a caller can report what did not match.
+PathReplay replay_stored_path(const Song& song, const Path& path,
+                              const core::Rules& rules = core::default_rules());
 
 // The same windows, read out of a `dump` or `target` JSON file instead of a
 // live record. `path` is one entry of that file's top-level "paths" array;

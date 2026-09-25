@@ -132,6 +132,7 @@ ReplayResult replay_path(const Song& song, std::vector<ReplayWindow> windows,
                 rules.backend_leeway_ms);
         }
         row.in_sp = sp_claims > 0;
+        row.multiplier_shown = shown_multiplier(row.multiplier_after, row.in_sp);
 
         row.points.base = sg.base;
         row.points.combo = sg.combo;
@@ -193,6 +194,16 @@ std::vector<ReplayWindow> windows_for_path(const Path& path, const Song&) {
         w.sqout_tick = act.sqout_tick;
         out.push_back(w);
     }
+    return out;
+}
+
+PathReplay replay_stored_path(const Song& song, const Path& path,
+                              const core::Rules& rules) {
+    PathReplay out;
+    out.windows = windows_for_path(path, song);
+    out.result = replay_path(song, out.windows, rules);
+    out.stored = score_of(path);
+    out.activations = path.all_activations().size();
     return out;
 }
 

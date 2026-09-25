@@ -22,6 +22,14 @@ namespace hydra {
 // combo -> score multiplier: x1 below 10, x2 below 20, x3 below 30, else x4.
 int to_multiplier(int combo);
 
+// Star Power pays a chord's value once more (CategoryScores::sp), so the game
+// shows the combo multiplier doubled while it runs.
+inline constexpr int kStarPowerMultiplier = 2;
+
+// The multiplier the game's disc shows for a chord: its combo multiplier,
+// times kStarPowerMultiplier when Star Power pays the chord.
+int shown_multiplier(int combo_multiplier, bool in_sp);
+
 // Where each tempo section starts and the time elapsed by then.
 // Built from a bpm map (tick -> BPM) and the tick resolution.
 class MsIndex {

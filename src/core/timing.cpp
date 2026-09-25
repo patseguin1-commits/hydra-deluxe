@@ -13,6 +13,10 @@ int to_multiplier(int combo) {
     return 4;
 }
 
+int shown_multiplier(int combo_multiplier, bool in_sp) {
+    return in_sp ? combo_multiplier * kStarPowerMultiplier : combo_multiplier;
+}
+
 // ---- MsIndex ------------------------------------------------------------
 
 MsIndex::MsIndex(const std::map<int64_t, double>& bpm_map, int64_t tick_r) {
