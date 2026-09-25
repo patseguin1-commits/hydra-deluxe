@@ -159,15 +159,15 @@ class EngineModel:
             "precision_back": read(C.RVA_CONST_PRECISION_BACK),
             "precision_front": read(C.RVA_CONST_PRECISION_FRONT),
             # Shared divisor and exponent.
-            "divisor": read(C.RVA_FORMULA_DIVISOR),
-            "exponent": read(C.RVA_FORMULA_EXPONENT),
+            C.CONST_KEY_DIVISOR: read(C.RVA_FORMULA_DIVISOR),
+            C.CONST_KEY_EXPONENT: read(C.RVA_FORMULA_EXPONENT),
             # Threshold used in the hit-check comparison.
             "hitcheck_threshold": read(C.RVA_HITCHECK_THRESHOLD),
         }
         # Normal-branch formula constants, prefixed so the names stay clear.
         for name, rva in C.RVA_FORMULA_NORMAL.items():
-            out["normal_" + name] = read(rva)
+            out[C.CONST_KEY_PREFIX_NORMAL + name] = read(rva)
         # Precision-branch formula constants.
         for name, rva in C.RVA_FORMULA_PRECISION.items():
-            out["precision_" + name] = read(rva)
+            out[C.CONST_KEY_PREFIX_PRECISION + name] = read(rva)
         return out

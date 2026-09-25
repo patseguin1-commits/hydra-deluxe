@@ -85,7 +85,7 @@ class TestClampVerdict(unittest.TestCase):
             (190.0, 88.0, 88.0),
             (211.0, 89.5, 89.5),
         ]
-        result = analysis.clamp_verdict(rows)
+        result = analysis.clamp_verdict(rows, cap_ms=C.EXPECT_NORMAL_BACK_MS)
         self.assertEqual(result.verdict, analysis.CLAMP_ABSENT)
         self.assertAlmostEqual(result.tracked_fraction, 1.0, places=6)
         self.assertEqual(result.n_above, 3)
@@ -98,7 +98,7 @@ class TestClampVerdict(unittest.TestCase):
             (190.0, 88.0, 85.0),
             (211.0, 89.5, 85.0),
         ]
-        result = analysis.clamp_verdict(rows)
+        result = analysis.clamp_verdict(rows, cap_ms=C.EXPECT_NORMAL_BACK_MS)
         self.assertEqual(result.verdict, analysis.CLAMP_PRESENT)
         self.assertAlmostEqual(result.flat_fraction, 1.0, places=6)
         self.assertEqual(result.n_above, 3)
@@ -110,7 +110,7 @@ class TestClampVerdict(unittest.TestCase):
             (60.0, 60.0, 60.0),
             (100.0, 80.0, 80.0),
         ]
-        result = analysis.clamp_verdict(rows)
+        result = analysis.clamp_verdict(rows, cap_ms=C.EXPECT_NORMAL_BACK_MS)
         self.assertEqual(result.verdict, analysis.CLAMP_INCONCLUSIVE)
         self.assertEqual(result.n_above, 0)
 
@@ -122,7 +122,7 @@ class TestClampVerdict(unittest.TestCase):
             (190.0, 89.0, 85.0),
             (211.0, 89.0, 85.0),
         ]
-        result = analysis.clamp_verdict(rows)
+        result = analysis.clamp_verdict(rows, cap_ms=C.EXPECT_NORMAL_BACK_MS)
         self.assertEqual(result.verdict, analysis.CLAMP_INCONCLUSIVE)
 
 
@@ -131,7 +131,7 @@ class TestParabolaPredictor(unittest.TestCase):
         # With divisor 1 the pre-scale is a no-op, so t == spacing. With
         # c1=1, c2=0, c3=1, c4=0 the formula reduces to plain t. So window(50)=50.
         value = analysis.predicted_window_normal(
-            50.0, c1=1.0, c2=0.0, c3=1.0, c4=0.0, divisor=1.0
+            50.0, c1=1.0, c2=0.0, c3=1.0, c4=0.0, divisor=1.0, exponent=2.0
         )
         self.assertAlmostEqual(value, 50.0, places=9)
 
@@ -147,7 +147,7 @@ class TestParabolaPredictor(unittest.TestCase):
         # divisor 1000, so t = spacing*1000. With c1=1, c2=0, c3=1, c4=0 the
         # window is (t*1)/1000 = spacing*1000/1000 = spacing. window(0.2)=0.2.
         value = analysis.predicted_window_normal(
-            0.2, c1=1.0, c2=0.0, c3=1.0, c4=0.0, divisor=1000.0
+            0.2, c1=1.0, c2=0.0, c3=1.0, c4=0.0, divisor=1000.0, exponent=2.0
         )
         self.assertAlmostEqual(value, 0.2, places=9)
 
@@ -187,6 +187,45 @@ class TestSummarizeActive(unittest.TestCase):
         summary = analysis.summarize_active(rows)
         self.assertEqual(len(summary), 1)
         self.assertIsNone(summary[0].predicted_edge_ms)
+
+
+from tools.ch_probe import constants as C  # noqa: E402
+from tools.ch_probe import probe_chart  # noqa: E402
+from tools.ch_probe.engine import EngineModel  # noqa: E402
+
+
+class _ConstProcess:
+    """Just enough of a ProcessHandle for EngineModel.constants(): every RVA
+    reads back as a distinct float, so a mis-mapped key shows up."""
+
+    def read_const_double(self, rva):
+        return float(rva % 100003) + 0.25
+
+
+class TestNormalFormulaConstants(unittest.TestCase):
+    def test_maps_the_real_engine_shape(self):
+        decoded = EngineModel(_ConstProcess(), None).constants()
+        got = analysis.normal_formula_constants(decoded)
+        self.assertIsNotNone(got)
+        for name in C.RVA_FORMULA_NORMAL:
+            self.assertEqual(got[name], decoded[C.CONST_KEY_PREFIX_NORMAL + name])
+        self.assertEqual(got["divisor"], decoded[C.CONST_KEY_DIVISOR])
+        self.assertEqual(got["exponent"], decoded[C.CONST_KEY_EXPONENT])
+
+    def test_missing_exponent_gives_no_prediction(self):
+        decoded = EngineModel(_ConstProcess(), None).constants()
+        del decoded[C.CONST_KEY_EXPONENT]
+        self.assertIsNone(analysis.normal_formula_constants(decoded))
+
+
+class TestProbeSettingsHaveOneHome(unittest.TestCase):
+    def test_clamp_verdict_needs_an_explicit_edge(self):
+        with self.assertRaises(TypeError):
+            analysis.clamp_verdict([])
+
+    def test_probe_chart_spacings_and_lane_come_from_constants(self):
+        self.assertEqual(tuple(probe_chart.DEFAULT_SPACINGS_MS), tuple(C.PROBE_SPACINGS_MS))
+        self.assertEqual(probe_chart.DRUM_LANE_KICK, C.PROBE_LANE_KICK)
 
 
 if __name__ == "__main__":

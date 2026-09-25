@@ -18,18 +18,21 @@ from __future__ import annotations
 
 from typing import Sequence
 
+try:
+    from . import constants as C
+except ImportError:
+    import constants as C
+
 
 # The default set of spacings the spec asks for, in milliseconds. Dense near
 # the 180-220 ms region where the hit-window parabola peaks (that is where the
 # clamp decision happens), sparse elsewhere just to see the shape.
-DEFAULT_SPACINGS_MS = [
-    30, 50, 100, 150, 180, 185, 190, 195, 205, 211, 220, 240, 300,
-]
+DEFAULT_SPACINGS_MS = list(C.PROBE_SPACINGS_MS)
 
 # Drum note numbers in the .chart format. 0 is the kick. 1-4 are the four
 # colored pads (red, yellow, blue, green). We default to the kick because it is
 # a single lane with no cymbal-vs-tom ambiguity, which keeps the probe clean.
-DRUM_LANE_KICK = 0
+DRUM_LANE_KICK = C.PROBE_LANE_KICK
 
 # How much silent room to leave around each pair, expressed as whole notes. One
 # whole note at 120 BPM is two seconds, so four whole notes is a wide moat -- no
