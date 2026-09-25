@@ -120,25 +120,23 @@ SpMeterCurve build_sp_meter_curve(const PreviewScene& scene, const SongTiming& t
             ++next_phrase;  // consumed here; the flat walk must not step it again
         }
 
-        // How many of those SP actually collects: the deact node already says.
-        // The engine anchors it 2 measures past the activation per banked bar,
-        // plus 2 more for every phrase collected mid-SP, so the surplus
-        // measures are the count. A squeezed-out phrase lies inside the window
-        // on the highway but is hit late, just after SP ends, so it buys no
-        // extension and takes no step here — it banks the moment the window
-        // closes, for the next activation.
-        const double act_measures =
-            timing.measures_at_tick_f(static_cast<double>(act.tick));
-        const double end_measures =
-            timing.measures_at_tick_f(static_cast<double>(act.sp_end_tick));
-        int64_t collected = std::llround((end_measures - act_measures) / 2.0 -
-                                         static_cast<double>(act.sp_meter));
-        collected = std::clamp<int64_t>(collected, 0,
-                                        static_cast<int64_t>(window.size()));
-
+        // Which phrases SP collects is engine truth: the record lists them,
+        // late-SqIn and cap-clamped ones included. A phrase ending on the
+        // activation note is already inside sp_meter, so only ticks strictly
+        // inside the window step the drain (the same bounds the tempo and
+        // meter splits below use). A window phrase the list does not name was
+        // squeezed out: it is hit just after SP ends, so it takes no step here
+        // and banks the moment the window closes, for the next activation.
         std::vector<DrainSplit> splits;
-        for (int64_t i = 0; i < collected; ++i)
-            splits.push_back({window[i]->end_tick, window[i]->end_ms, true});
+        for (int64_t t : act.collected_phrase_ticks)
+            if (t > act.tick && t < act.sp_end_tick)
+                splits.push_back({t, timing.ms_index().at(t), true});
+        int64_t squeezed_out = 0;
+        for (const PreviewSpan* p : window)
+            if (std::find(act.collected_phrase_ticks.begin(),
+                          act.collected_phrase_ticks.end(),
+                          p->end_tick) == act.collected_phrase_ticks.end())
+                ++squeezed_out;
         for (const PreviewTempo& t : scene.tempos)
             if (t.tick > act.tick && t.tick < act.sp_end_tick)
                 splits.push_back({t.tick, t.ms, false});
@@ -175,9 +173,7 @@ SpMeterCurve build_sp_meter_curve(const PreviewScene& scene, const SongTiming& t
         // player hits them just past the deact node, so they are banked as the
         // window closes. The next segment starts at that value, which is what
         // makes it read as a step at the boundary.
-        bank = std::min(static_cast<double>(static_cast<int64_t>(window.size()) -
-                                            collected),
-                        cap);
+        bank = std::min(static_cast<double>(squeezed_out), cap);
         cursor_ms = std::max(cursor_ms, act.sp_end_ms);
     }
 
@@ -281,6 +277,7 @@ PreviewScene build_preview_scene(const Song& song, const Path* path, int sp_cap)
             pa.ms = song.timecode(pa.tick).ms();
             pa.sp_meter = a.sp_meter.value_or(0);
             pa.skips = a.skips.value_or(0);
+            pa.collected_phrase_ticks = a.collected_phrase_ticks;
             if (std::optional<int64_t> d = activation_deact_tick(a)) {
                 pa.has_sp_end = true;
                 pa.sp_end_tick = *d;

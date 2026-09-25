@@ -184,9 +184,10 @@ engine records nothing about them.
 The vertical gauge on the note highway's right edge showing banked Star Power
 at the playhead: up one bar at each collected phrase, draining through each
 activation to hit empty exactly at the deact node. Anchored to the record's
-per-activation bank and deact node, never re-derived — which phrases SP
-collects is counted off the deact node's own extension, so a squeezed-out
-phrase inside the window banks when SP ends rather than during the drain.
+per-activation bank, deact node and list of collected phrases, never
+re-derived. Late-SqIn and cap-clamped phrases are in that list. A phrase
+inside the window that the record does not list was squeezed out, so it
+banks when SP ends rather than during the drain.
 Without a path it fills and pins at the cap, since nothing spends it.
 
 **Stem**:
