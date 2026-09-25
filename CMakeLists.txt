@@ -148,6 +148,7 @@ add_library(hydra_core STATIC
     src/app/rules_file.cpp
     src/app/html_page.cpp
     src/app/dynamics_breakdown.cpp
+    src/app/display_format.cpp
     src/app/path_view.cpp
     src/app/preview_view.cpp
     src/app/preview_source.cpp
