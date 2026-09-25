@@ -230,13 +230,13 @@ std::vector<PreviewAudioStem> extract_srb_audio(const std::string& path) {
         srb_inflate_stream(buf.data(), buf.size(), kSrbHeaderSize,
                            kSrbMaxMetadata, &offset);  // stream 1: metadata
         srb_inflate_stream(buf.data(), buf.size(), offset,
-                           size_t{1} << 30, &offset);  // stream 2: notes
+                           kSrbMaxStream, &offset);  // stream 2: notes
 
         int index = 3;
         while (offset < buf.size()) {
             size_t next = 0;
             std::vector<uint8_t> stream = srb_inflate_stream(
-                buf.data(), buf.size(), offset, size_t{1} << 30, &next);
+                buf.data(), buf.size(), offset, kSrbMaxStream, &next);
             if (next <= offset) break;
             offset = next;
             if (looks_like_audio(stream)) {

@@ -1150,10 +1150,8 @@ Song load_songpath_srb(const std::string& path, bool pro, bool bass2x,
     SrbMetadata md;
     srb_parse_metadata(meta, md);
 
-    // The notes file inflates to well under a hundred MB even for mega-charts;
-    // a 1 GB ceiling only exists to bound hostile input.
     std::vector<uint8_t> notebytes = srb_inflate_stream(
-        buf.data(), buf.size(), notes_offset, size_t{1} << 30, nullptr);
+        buf.data(), buf.size(), notes_offset, kSrbMaxStream, nullptr);
 
     std::string fn = ascii_casefold(md.notes_filename);
     auto fn_ends_with = [&fn](const char* suf) {

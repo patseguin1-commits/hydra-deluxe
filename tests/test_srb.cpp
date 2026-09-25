@@ -266,3 +266,10 @@ TEST_CASE("srb: an empty embedded name reads (unknown)") {
     CHECK(items[0].title == kUnknownTitle);
     CHECK(items[0].artist == "Scanned Artist");
 }
+
+TEST_CASE("srb: one named cap bounds every inflated stream") {
+    // Notes files inflate to well under 100 MB even for mega-charts; the cap
+    // exists only to bound hostile input.
+    CHECK(kSrbMaxStream == (size_t{1} << 30));
+    CHECK(kSrbMaxStream > kSrbMaxMetadata);
+}
