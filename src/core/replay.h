@@ -146,6 +146,9 @@ struct ReplayChord {
     bool is_sp_phrase_end = false;  // the chord ends an SP phrase
 
     int combo_before = 0;
+    // The combo once this chord is hit: combo_before plus the chord's notes.
+    // What the game's combo counter shows after the chord.
+    int combo_after = 0;
     // What category_scores applied to the chord's first note (base-sorted).
     int multiplier = 1;
     // What category_scores applied to the chord's last note: the multiplier
