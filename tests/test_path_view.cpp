@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "app/analysis.h"
+#include "app/display_format.h"
 #include "app/path_view.h"
 #include "corpus_util.h"
 
@@ -90,18 +91,63 @@ TEST_CASE("build_record_status: the three states and their lines") {
     CHECK(none.lines[0] == "No paths found.");
 }
 
-TEST_CASE("build_score_breakdown: exact lines, truncation not rounding") {
+TEST_CASE("build_score_breakdown: exact lines, rounded like the report") {
     Path p;
     p.score_base = 3;
-    p.score_combo = 2;  // 5/3 = 1.6666... — a slice truncates, %.3f would round
+    p.score_combo = 2;  // 5/3 = 1.6666...
 
     std::vector<std::string> lines = build_score_breakdown(p);
     REQUIRE(lines.size() == 8);
-    // (str(avg_mult()) + "000")[:5]: "1.666", NOT the rounded "1.667".
-    CHECK(lines[0] == "Avg. Multiplier:      1.666x");
+    // Rounded to three places, the same as the report's mult column.
+    CHECK(lines[0] == "Avg. Multiplier:      1.667x");
     CHECK(lines[1] == "\nNotes:                     3");
     CHECK(lines[2] == "Combo Bonus:               2");
     CHECK(lines[7] == "\nTotal Score:               5");
+}
+
+TEST_CASE("display format: the average multiplier rounds the exact double") {
+    // Python's round(x, 3) on the binary value, not on the decimal literal.
+    CHECK(format_avg_mult(2.3456) == "2.346");  // a slice would give 2.345
+    CHECK(format_avg_mult(2.0005) == "2.001");  // stored as 2.000500000000000167
+    CHECK(format_avg_mult(1.0005) == "1.000");  // stored as 1.000499999999999945
+    CHECK(py_round3(2.3456) == 2.346);
+}
+
+TEST_CASE("display format: ms text is one decimal and a unit") {
+    CHECK(format_ms(12.3) == "12.3ms");
+    CHECK(format_ms(-20.0) == "-20.0ms");
+    CHECK(format_ms(0.0) == "0.0ms");
+}
+
+TEST_CASE("build_activations: the calibration fill reads positive = early on both lines") {
+    HydraRecord rec;  // only feeds the footer
+    auto view_of = [&rec](const Activation& act) {
+        Path p;
+        p.activations.push_back(act);
+        ActivationsView v = build_activations(p, rec, nullptr, 85.0);
+        REQUIRE(v.acts.size() == 1);
+        return v.acts[0];
+    };
+
+    // E0: 12.3 ms early. The header already showed +12.3; the details line
+    // used to print the raw offset, -12.3.
+    Activation e0;
+    e0.skips = 0;
+    e0.sp_meter = 2;
+    e0.e_offset = -12.3;
+    ActivationDetailsView av = view_of(e0);
+    CHECK(av.header == "E0    (2 SP)\t         \t   12.3ms");
+    CHECK(av.calibration == "Calibration fill: 12.3ms (required)");
+
+    // E-critical but not E0: no ms in the header, and the details line uses
+    // the same sign rule, so 20 ms late reads negative.
+    Activation e1;
+    e1.skips = 1;
+    e1.sp_meter = 2;
+    e1.e_offset = 20.0;
+    av = view_of(e1);
+    CHECK(av.header == "E1    (2 SP)\t         ");
+    CHECK(av.calibration == "Calibration fill: -20.0ms (optional)");
 }
 
 TEST_CASE("build_path_row: right-aligned ms, warn past the difficult floor") {

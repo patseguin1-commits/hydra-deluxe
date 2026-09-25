@@ -59,9 +59,9 @@ struct BackendRowView {
 };
 
 struct ActivationDetailsView {
-    std::string header;  // "%-6s(%d SP)\t%9s" (+ "\t%7.1fms" when difficult-rated)
+    std::string header;  // "%-6s(%d SP)\t%9s" (+ "\t" and format_ms right-aligned in 9 when difficulty-rated)
     bool difficult = false;
-    std::string calibration;    // "Calibration fill: ..."; empty when not E-critical
+    std::string calibration;    // "Calibration fill: " + format_ms(positive = early); empty when not E-critical
     std::string frontend;       // "Frontend: ..."
     std::string scale_warning;  // the transfer-scale prose; empty when immaterial
     std::string overfill_warning;  // cap-clamped anchor prose; empty when not clamped

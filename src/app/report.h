@@ -105,9 +105,6 @@ GeneratedReport generate_report(store::RecordStore& store,
 // for tests.
 std::string py_repr(double v);
 
-// round(v, 3), matching Python's correctly-rounded decimal rounding.
-double py_round3(double v);
-
 }  // namespace hydra::app::report
 
 #endif  // HYDRA_APP_REPORT_H

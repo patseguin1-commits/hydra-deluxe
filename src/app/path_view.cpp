@@ -1,4 +1,5 @@
 #include "app/path_view.h"
+#include "app/display_format.h"
 
 #include <cmath>
 #include <cstdint>
@@ -96,17 +97,19 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
                       act.sp_meter.value_or(0), meas.c_str());
         av.header = hbuf;
         if (auto ms = act.difficulty()) {
-            char buf[32];
-            std::snprintf(buf, sizeof(buf), "\t%7.1fms", *ms);
+            // "%9s" of "12.3ms" is byte-identical to the old "%7.1fms".
+            char buf[48];
+            std::snprintf(buf, sizeof(buf), "\t%9s", format_ms(*ms).c_str());
             av.header += buf;
         }
         av.difficult = act.is_difficult();
 
         if (act.is_e_critical()) {
-            char buf[96];
-            std::snprintf(buf, sizeof(buf), "Calibration fill: %.1fms (%s)",
-                          *act.e_offset, act.is_E0() ? "required" : "optional");
-            av.calibration = buf;
+            // Positive = hit early, the same sign as the header and the report:
+            // e_difficulty(true) is -e_offset for every E-critical activation.
+            av.calibration = "Calibration fill: " +
+                             format_ms(*act.e_difficulty(/*verbose=*/true)) +
+                             (act.is_E0() ? " (required)" : " (optional)");
         }
 
         av.frontend =
@@ -307,14 +310,8 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
 
 std::vector<std::string> build_score_breakdown(const Path& path) {
     std::vector<std::string> lines;
-    // hydra_app.py:1044 formats the average as (str(avg_mult()) + "000")[:5]
-    // -- a string slice, which TRUNCATES to three decimals rather than
-    // rounding (%.3f would round). %.10f gives a long-enough decimal
-    // expansion; slicing its first five chars reproduces Python exactly.
-    char avgbuf[32];
-    std::snprintf(avgbuf, sizeof(avgbuf), "%.10f", path.avg_mult());
-    std::string avgs = (std::string(avgbuf) + "000").substr(0, 5);
-    lines.push_back("Avg. Multiplier:      " + avgs + "x");
+    // Rounded, not truncated, so it matches the report's mult column.
+    lines.push_back("Avg. Multiplier:      " + format_avg_mult(path.avg_mult()) + "x");
 
     // Leading '\n' on Notes and Total Score reproduces the blank lines
     // hydra_app.py:1046,1058 add; Python uses no separator between them.

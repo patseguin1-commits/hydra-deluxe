@@ -7,6 +7,7 @@
 #include <cstring>
 #include <filesystem>
 
+#include "app/display_format.h"
 #include "app/html_page.h"
 #include "core/squeeze_rating.h"
 
@@ -272,15 +273,6 @@ std::string py_repr(double v) {
         s.find_first_of("0123456789") != std::string::npos)
         s += ".0";
     return s;
-}
-
-double py_round3(double v) {
-    // Python's round(x, 3) rounds the exact binary value to 3 decimal places,
-    // ties-to-even. MSVC's printf does the same correctly-rounded conversion,
-    // so format-and-reparse reproduces it.
-    char buf[64];
-    std::snprintf(buf, sizeof(buf), "%.3f", v);
-    return std::strtod(buf, nullptr);
 }
 
 std::string plain(const std::string& text) {
