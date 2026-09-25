@@ -909,3 +909,44 @@ TEST_CASE("path_overlay_key: no overlay, the same path, and a changed path") {
         CHECK(path_overlay_key(&first) != path_overlay_key(&trimmed));
     }
 }
+
+TEST_CASE("step_tick_ms: one tick from the tick the time box shows") {
+    // 120 BPM, 480 ticks per quarter: a tick is 500/480 ms.
+    Song song = make_hand_song();
+    PreviewScene scene = build_preview_scene(song, nullptr);
+    const MsIndex& ms = song.timing().ms_index();
+
+    // 1300 ms is the time box's own example: tick 1248, "[1:3:288]".
+    const double fwd = step_tick_ms(scene, 1300.0, 1);
+    const double back = step_tick_ms(scene, 1300.0, -1);
+    CHECK(fwd == doctest::Approx(ms.at(1249)));
+    CHECK(back == doctest::Approx(ms.at(1247)));
+    CHECK(build_time_box(scene, fwd, 5000.0).measure_beat == "[1:3:289] / [3:3:000]");
+    CHECK(build_time_box(scene, back, 5000.0).measure_beat == "[1:3:287] / [3:3:000]");
+
+    // Between ticks it steps from the rounded tick: 1300.6 ms rounds to 1249.
+    CHECK(step_tick_ms(scene, 1300.6, 1) == doctest::Approx(ms.at(1250)));
+
+    // Never before tick 0.
+    CHECK(step_tick_ms(scene, 0.0, -1) == doctest::Approx(0.0));
+    CHECK(step_tick_ms(scene, 0.5, -3) == doctest::Approx(0.0));
+}
+
+TEST_CASE("step_tick_ms: a tempo change moves the tick length with it") {
+    // 120 BPM until tick 1920 (2000 ms), then 240 BPM: a tick shrinks from
+    // 500/480 ms to 250/480 ms.
+    Song song = make_sp_song({}, 3840, {{1920, 240.0}});
+    PreviewScene scene = build_preview_scene(song, nullptr);
+    const MsIndex& ms = song.timing().ms_index();
+    REQUIRE(ms.at(1920) == doctest::Approx(2000.0));
+
+    CHECK(step_tick_ms(scene, 2000.0, 1) == doctest::Approx(ms.at(1921)));
+    CHECK(step_tick_ms(scene, 2000.0, -1) == doctest::Approx(ms.at(1919)));
+    CHECK(step_tick_ms(scene, 2000.0, 1) - 2000.0 == doctest::Approx(250.0 / 480.0));
+    CHECK(2000.0 - step_tick_ms(scene, 2000.0, -1) == doctest::Approx(500.0 / 480.0));
+}
+
+TEST_CASE("step_tick_ms: a scene with no song leaves the time alone") {
+    PreviewScene empty;
+    CHECK(step_tick_ms(empty, 1234.5, 1) == doctest::Approx(1234.5));
+}
