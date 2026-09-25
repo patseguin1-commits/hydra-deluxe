@@ -5,6 +5,7 @@
 
 #include "doctest.h"
 
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -56,6 +57,44 @@ TEST_CASE("squeeze symbols, timing, difficulty") {
     CHECK(sqin.timing() == 5.0);
     CHECK(std::string(sqin.type_name()) == "SqIn");
     CHECK(std::string(sqout.type_name()) == "SqOut");
+}
+
+TEST_CASE("squeeze_difficulty and is_e0: one owner for the engine and the model") {
+    CHECK(squeeze_difficulty(/*is_sqin=*/true, 3.5) == 3.5);
+    CHECK(squeeze_difficulty(/*is_sqin=*/false, -3.5) == 3.5);
+    // A SqOut at exactly 0 is +0.0, never -0.0: the "-x + 0.0" idiom stays.
+    CHECK_FALSE(std::signbit(squeeze_difficulty(false, 0.0)));
+    CHECK(SPSqueeze{SqueezeKind::SqOut, -3.5}.difficulty() == squeeze_difficulty(false, -3.5));
+
+    CHECK(is_e0(kCalibrationFillWindowMs - 0.1, 0));
+    CHECK_FALSE(is_e0(kCalibrationFillWindowMs, 0));
+    CHECK_FALSE(is_e0(10.0, 1));
+    CHECK(calibration_fill_difficulty(-4.0) == 4.0);
+    CHECK_FALSE(std::signbit(calibration_fill_difficulty(0.0)));
+
+    Activation a;
+    a.e_offset = 10.0;
+    a.skips = 0;
+    CHECK(a.is_E0() == is_e0(10.0, 0));
+    REQUIRE(a.e_difficulty().has_value());
+    CHECK(*a.e_difficulty() == calibration_fill_difficulty(10.0));
+}
+
+TEST_CASE("Path::is_difficult: past the difficult floor, not at it") {
+    Path empty;
+    CHECK_FALSE(empty.is_difficult());
+
+    Activation a;
+    a.skips = 0;
+    a.e_offset = 300.0;  // not e-critical
+    a.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -(kDifficultMs + 0.5)});
+    Path hard;
+    hard.activations.push_back(a);
+    CHECK(hard.is_difficult());
+
+    Path edge = hard;
+    edge.activations[0].sqinouts[0].offset_ms = -kDifficultMs;
+    CHECK_FALSE(edge.is_difficult());  // exactly at the floor is not past it
 }
 
 TEST_CASE("Activation notationstr: E prefix, skips, symbols") {

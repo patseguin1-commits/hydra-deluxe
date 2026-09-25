@@ -143,6 +143,10 @@ std::vector<Path> search_target(const Song& song, const SearchSettings& settings
     return paths;
 }
 
+int graph_build_cap(int sp_cap, int sp_phrase_count) {
+    return std::min(sp_cap, std::max(sp_phrase_count, 1));
+}
+
 namespace {
 
 // One pathing run with a given SP meter ceiling. build_cap, when set, is the
@@ -222,7 +226,7 @@ HydraRecord analyze_auto_cap(const Song& song, DepthMode depth_mode, int depth_v
             if (main_cb) main_cb((static_cast<float>(rung) + f) /
                                  static_cast<float>(ladder_n));
         };
-        int build_cap = std::min(sp_cap, std::max(sp_phrases, 1));
+        int build_cap = graph_build_cap(sp_cap, sp_phrases);
         HydraRecord candidate;
         try {
             candidate = analyze_at_cap(song, sp_cap, depth_mode, depth_value,
@@ -301,7 +305,7 @@ HydraRecord analyze_chart(const Song& song, const SearchSettings& settings,
     // fixed cap is the user's explicit choice, so Auto's time budget doesn't
     // apply to it.
     if (sp_cap.has_value()) {
-        int build_cap = std::min(*sp_cap, std::max(song.sp_phrase_count(), 1));
+        int build_cap = graph_build_cap(*sp_cap, song.sp_phrase_count());
         HydraRecord record =
             analyze_at_cap(song, *sp_cap, depth_mode, depth_value, ms_filter,
                            build_cap, settings.legacy_fill_deadline, settings.rules,

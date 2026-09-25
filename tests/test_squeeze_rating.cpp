@@ -756,3 +756,9 @@ TEST_CASE("rate_activation: cap_clamped flag") {
     ActivationRating r3 = rate_activation(unclamped_with_squeeze, nullptr, 85.0);
     CHECK_FALSE(r3.cap_clamped);
 }
+
+TEST_CASE("squeeze_budget_ms: identity scale is twice the hit window") {
+    // The backend tooltip's "not %.0fms" figure is this call, not 2.0 * W.
+    CHECK(squeeze_budget_ms(1.0, 85.0) == 170.0);
+    CHECK(squeeze_budget_ms(1.0, 40.0) == 80.0);
+}

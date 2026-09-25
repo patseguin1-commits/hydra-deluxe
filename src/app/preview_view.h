@@ -144,7 +144,7 @@ struct SpMeterSegment {
 // two adjacent segments, not slopes inside one.
 struct SpMeterCurve {
     std::vector<SpMeterSegment> segments;
-    int cap = 4;  // the ceiling in bars: 4 in Clone Hero
+    int cap = kCloneHeroSpCap;  // the ceiling in bars
 };
 
 // The whole chart as the Preview draws it. Notes are in tick order. Spans are
@@ -216,7 +216,7 @@ double sp_meter_bars_at(const SpMeterCurve& curve, double ms);
 // which is 4 for any normal Clone Hero run and differs only on a what-if
 // record analyzed at another cap. It scales the meter curve and nothing else;
 // no note, span or fill in the scene depends on it.
-PreviewScene build_preview_scene(const Song& song, const Path* path, int sp_cap = 4);
+PreviewScene build_preview_scene(const Song& song, const Path* path, int sp_cap = kCloneHeroSpCap);
 
 // Identity of the path an overlay was built from. Path has no operator==, so
 // callers that must notice a changed selection compare these keys instead. A
