@@ -31,6 +31,15 @@ std::string color_str(NoteColor c) {
     return "";
 }
 
+std::string dynamic_str(NoteDynamicType t) {
+    switch (t) {
+        case NoteDynamicType::Normal: return "none";
+        case NoteDynamicType::Ghost: return "ghost";
+        case NoteDynamicType::Accent: return "accent";
+    }
+    return "none";
+}
+
 std::string color_notationstr(NoteColor c) {
     switch (c) {
         case NoteColor::Kick: return "K";

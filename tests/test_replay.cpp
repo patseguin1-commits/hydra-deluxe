@@ -20,6 +20,7 @@
 #include "app/config.h"
 #include "core/model.h"
 #include "core/replay.h"
+#include "core/scoring.h"
 #include "core/timing.h"
 #include "corpus_util.h"
 #include "parse/song.h"
@@ -395,5 +396,173 @@ TEST_CASE("per-note sp points sum to the chord's sp points") {
         for (const ReplayNote& n : c.notes) sum += n.sp_points;
         CHECK(sum == c.points.sp);
         CHECK(static_cast<int>(c.notes.size()) > 0);
+    }
+}
+
+namespace {
+
+// One chord per beat at 120 BPM; chord i holds the colors listed at i.
+Song make_chord_song(const std::vector<std::vector<NoteColor>>& chords) {
+    Song song(480);
+    song.bpm_changes[0] = 120.0;
+    song.build_timing();
+    for (size_t i = 0; i < chords.size(); ++i) {
+        SongTimestamp ts;
+        ts.timecode = song.timecode(480 * static_cast<int64_t>(i));
+        for (NoteColor c : chords[i]) ts.chord.add_note(c);
+        song.sequence.push_back(ts);
+    }
+    return song;
+}
+
+// Adds a dynamic Yellow cymbal to `chord`.
+void add_dynamic_cymbal(Chord& chord, NoteDynamicType dyn) {
+    ChordNote& y = chord.add_note(NoteColor::Yellow);
+    y.cymbaltype = NoteCymbalType::Cymbal;
+    y.dynamictype = dyn;
+}
+
+}  // namespace
+
+TEST_CASE("category_scores reports the multiplier each note was paid at") {
+    Chord one;
+    one.add_note(NoteColor::Red);
+    CHECK(category_scores(one, 8).multiplier == 1);  // the 9th note: 1x
+    CHECK(category_scores(one, 9).multiplier == 2);  // the 10th note: 2x
+    CHECK(category_scores(one, 19).multiplier == 3);
+    CHECK(category_scores(one, 29).multiplier == 4);
+    CHECK(category_scores(one, 40).multiplier == 4);
+    CHECK(category_scores(one, 9).multiplier_after == 2);
+
+    // A two-note chord after 8 notes of combo straddles the step: its first
+    // note is the 9th (1x) and its second the 10th (2x).
+    Chord two;
+    two.add_note(NoteColor::Red);
+    two.add_note(NoteColor::Kick);
+    std::vector<CategoryScores> per_note;
+    const CategoryScores s = category_scores(two, 8, &per_note);
+    CHECK(s.multiplier == 1);
+    CHECK(s.multiplier_after == 2);
+    CHECK(s.combo == 50);  // only the second note earns combo points
+    REQUIRE(per_note.size() == 2);
+    CHECK(per_note[0].multiplier == 1);
+    CHECK(per_note[1].multiplier == 2);
+}
+
+TEST_CASE("category_scores prices a dynamic cymbal's bonus at its own note") {
+    // A kick and a ghost cymbal after 9 notes of combo: both notes are at 2x.
+    // The cymbal's dynamics are the pad's 50 plus the cymbal's 15, times 2.
+    // The chord's ghost category holds only the raw 50.
+    Chord chord;
+    chord.add_note(NoteColor::Kick);
+    add_dynamic_cymbal(chord, NoteDynamicType::Ghost);
+    std::vector<CategoryScores> per_note;
+    const CategoryScores s = category_scores(chord, 9, &per_note);
+    CHECK(s.ghost == 50);
+
+    const std::vector<ChordNote> order = chord.notes(true);
+    REQUIRE(order.size() == 2);
+    REQUIRE(per_note.size() == 2);
+    for (size_t k = 0; k < order.size(); ++k) {
+        if (order[k].colortype == NoteColor::Yellow) {
+            CHECK(per_note[k].dynamics_bonus == 130);  // (50 + 15) x 2
+            // Without its dynamics the cymbal pays a plain 2x cymbal: 130.
+            CHECK(per_note[k].sp - per_note[k].dynamics_bonus == 130);
+        } else {
+            CHECK(per_note[k].dynamics_bonus == 0);
+        }
+    }
+}
+
+TEST_CASE("replay reports the multipliers category_scores applied") {
+    // Eight Red singles, a Red+Kick chord that straddles 10, then eleven more
+    // singles so a later chord crosses 20 on its own. The audit's Evans Blue,
+    // Beg case is the single-note crossing: paid at 2x, reported as 1.
+    std::vector<std::vector<NoteColor>> chords(8, {NoteColor::Red});
+    chords.push_back({NoteColor::Red, NoteColor::Kick});
+    for (int i = 0; i < 11; ++i) chords.push_back({NoteColor::Red});
+    const ReplayResult r = replay_path(make_chord_song(chords), {});
+    REQUIRE(r.chords.size() == 20);
+
+    // The straddling chord: first note 1x, second note 2x.
+    const ReplayChord& straddle = r.chords[8];
+    CHECK(straddle.combo_before == 8);
+    CHECK(straddle.multiplier == 1);
+    CHECK(straddle.multiplier_after == 2);
+    CHECK(straddle.points.combo == 50);
+    REQUIRE(straddle.notes.size() == 2);
+    CHECK(straddle.notes[0].multiplier == 1);
+    CHECK(straddle.notes[1].multiplier == 2);
+
+    // The chord before it leaves the disc at 1x.
+    CHECK(r.chords[7].multiplier_after == 1);
+
+    // A single note that is the 20th: paid at 3x. The old field said 2.
+    const ReplayChord& third = r.chords[18];
+    CHECK(third.combo_before == 19);
+    CHECK(third.multiplier == 3);
+    CHECK(third.multiplier_after == 3);
+    CHECK(third.notes[0].multiplier == 3);
+    CHECK(third.points.combo == 100);  // 50 base x (3 - 1)
+    CHECK(r.chords[17].multiplier_after == 2);
+}
+
+TEST_CASE("replay copies each note's dynamics bonus") {
+    Song song = make_chord_song({{NoteColor::Red}});
+    add_dynamic_cymbal(song.sequence[0].chord, NoteDynamicType::Accent);
+    const ReplayResult r = replay_path(song, {});
+    REQUIRE(r.chords.size() == 1);
+    REQUIRE(r.chords[0].notes.size() == 2);
+    for (const ReplayNote& n : r.chords[0].notes)
+        CHECK(n.dynamics_bonus == (n.color == NoteColor::Yellow ? 65 : 0));
+    // The accent category holds only the pad part; the note field holds all.
+    CHECK(r.chords[0].points.accent == 50);
+}
+
+TEST_CASE("replay names each note's dynamic") {
+    // A kick, a ghost Red pad and an accent Yellow cymbal in one chord: each
+    // note reports its own kind, so a mixed chord can be worded per note.
+    Song song = make_chord_song({{NoteColor::Kick}});
+    Chord& chord = song.sequence[0].chord;
+    chord.add_note(NoteColor::Red).dynamictype = NoteDynamicType::Ghost;
+    add_dynamic_cymbal(chord, NoteDynamicType::Accent);
+    const ReplayResult r = replay_path(song, {});
+    REQUIRE(r.chords.size() == 1);
+    REQUIRE(r.chords[0].notes.size() == 3);
+    for (const ReplayNote& n : r.chords[0].notes) {
+        if (n.color == NoteColor::Red)
+            CHECK(n.dynamic == NoteDynamicType::Ghost);
+        else if (n.color == NoteColor::Yellow)
+            CHECK(n.dynamic == NoteDynamicType::Accent);
+        else
+            CHECK(n.dynamic == NoteDynamicType::Normal);
+    }
+    CHECK(dynamic_str(NoteDynamicType::Ghost) == "ghost");
+    CHECK(dynamic_str(NoteDynamicType::Accent) == "accent");
+    CHECK(dynamic_str(NoteDynamicType::Normal) == "none");
+}
+
+TEST_CASE("replay multipliers agree with the combo on every corpus chord") {
+    Song song = load_songpath(corpus::first_chart_with_suffix(".mid"), true, true);
+    REQUIRE_FALSE(song.is_empty());
+    const ReplayResult r = replay_path(song, {});
+
+    for (size_t i = 0; i < r.chords.size(); ++i) {
+        const ReplayChord& c = r.chords[i];
+        REQUIRE_FALSE(c.notes.empty());
+        // The chord's multiplier is its first note's; multiplier_after is its
+        // last note's.
+        CHECK(c.multiplier == c.notes.front().multiplier);
+        CHECK(c.multiplier_after == c.notes.back().multiplier);
+        CHECK(c.multiplier == to_multiplier(c.combo_before + 1));
+        // What the disc shows after this chord is what the next chord starts
+        // from: the old field's value on the next chord.
+        if (i + 1 < r.chords.size())
+            CHECK(c.multiplier_after == to_multiplier(r.chords[i + 1].combo_before));
+        // A note's dynamics bonus is part of what it pays, never more.
+        for (const ReplayNote& n : c.notes) {
+            CHECK(n.dynamics_bonus >= 0);
+            CHECK(n.dynamics_bonus < n.sp_points);
+        }
     }
 }

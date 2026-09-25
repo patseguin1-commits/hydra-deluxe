@@ -88,6 +88,15 @@ struct ReplayNote {
     NoteColor color = NoteColor::Kick;
     bool cymbal = false;
     int sp_points = 0;
+    // The combo multiplier this note was paid at, as category_scores applied
+    // it. Notes of one chord differ when the chord straddles 10, 20 or 30.
+    int multiplier = 1;
+    // What this note's ghost or accent earned, multiplier included
+    // (CategoryScores::dynamics_bonus); 0 for a plain note. A mis-hit dynamic
+    // note pays sp_points minus this.
+    int dynamics_bonus = 0;
+    // Ghost, accent or neither, copied from ChordNote::dynamictype.
+    NoteDynamicType dynamic = NoteDynamicType::Normal;
 };
 
 // One scored chord.
@@ -107,7 +116,11 @@ struct ReplayChord {
     bool is_sp_phrase_end = false;  // the chord ends an SP phrase
 
     int combo_before = 0;
+    // What category_scores applied to the chord's first note (base-sorted).
     int multiplier = 1;
+    // What category_scores applied to the chord's last note: the multiplier
+    // the game's disc shows once this chord is hit.
+    int multiplier_after = 1;
     bool in_sp = false;
 
     ReplayScore points;
