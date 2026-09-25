@@ -520,12 +520,17 @@ RecordStore::RecordStore(const std::string& dbpath, uint64_t rules_fingerprint)
         "  value TEXT"
         ");"
         "CREATE TABLE IF NOT EXISTS dynamics ("
-        "  md5        TEXT NOT NULL,"
-        "  difficulty TEXT NOT NULL,"
-        "  pro        INTEGER NOT NULL,"
-        "  blob       BLOB NOT NULL,"
+        "  md5           TEXT NOT NULL,"
+        "  difficulty    TEXT NOT NULL,"
+        "  pro           INTEGER NOT NULL,"
+        "  blob          BLOB NOT NULL,"
+        "  count_version INTEGER NOT NULL DEFAULT 0,"
         "  PRIMARY KEY (md5, difficulty, pro)"
         ");");
+    // A dynamics table from before the stamp gets the column. Its rows read
+    // 0, which matches no real stamp, so each is recounted once.
+    if (!has_column("dynamics", "count_version"))
+        exec("ALTER TABLE dynamics ADD COLUMN count_version INTEGER NOT NULL DEFAULT 0");
     // A pre-1.6 or 1.6 file still has the old single-blob `records` table.
     // Bring it to the v1 shape (keyed by cap) first, then fold it into the
     // three v2 tables. A fresh db skips both and is born at v2.
@@ -598,25 +603,32 @@ void RecordStore::set_engine_mode(const std::string& mode) {
     meta_set("engine_mode", mode);
 }
 
-void RecordStore::put_dynamics(const DynamicsKey& key, const std::vector<uint8_t>& blob) {
+void RecordStore::put_dynamics(const DynamicsKey& key, const std::vector<uint8_t>& blob,
+                               int count_version) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     Stmt s = prepare(db_,
-        "INSERT OR REPLACE INTO dynamics (md5, difficulty, pro, blob) VALUES (?,?,?,?)");
+        "INSERT OR REPLACE INTO dynamics (md5, difficulty, pro, blob, count_version)"
+        " VALUES (?,?,?,?,?)");
     bind_text(s, 1, key.md5);
     bind_text(s, 2, key.difficulty);
     sqlite3_bind_int(s, 3, key.pro ? 1 : 0);
     bind_blob(s, 4, blob);
+    sqlite3_bind_int(s, 5, count_version);
     if (sqlite3_step(s) != SQLITE_DONE)
         throw std::runtime_error(std::string("put_dynamics failed: ") + sqlite3_errmsg(db_));
 }
 
-std::optional<std::vector<uint8_t>> RecordStore::get_dynamics(const DynamicsKey& key) {
+std::optional<std::vector<uint8_t>> RecordStore::get_dynamics(const DynamicsKey& key,
+                                                               int count_version) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
+    // A row with another stamp reads as missing, so the caller recounts it
+    // and put_dynamics restamps it.
     Stmt s = prepare(db_,
-        "SELECT blob FROM dynamics WHERE md5=? AND difficulty=? AND pro=?");
+        "SELECT blob FROM dynamics WHERE md5=? AND difficulty=? AND pro=? AND count_version=?");
     bind_text(s, 1, key.md5);
     bind_text(s, 2, key.difficulty);
     sqlite3_bind_int(s, 3, key.pro ? 1 : 0);
+    sqlite3_bind_int(s, 4, count_version);
     if (sqlite3_step(s) != SQLITE_ROW) return std::nullopt;
     return column_blob(s, 0);
 }

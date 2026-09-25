@@ -8,6 +8,8 @@
 #endif
 #include <windows.h>
 
+#include <sqlite3.h>
+
 #include <cstdio>
 #include <cstdint>
 #include <optional>
@@ -15,6 +17,8 @@
 #include <vector>
 
 #include "app/dynamics_breakdown.h"
+#include "midi_util.h"
+#include "parse/song.h"
 #include "store/record_store.h"
 
 using namespace hydra::app;
@@ -110,51 +114,130 @@ TEST_CASE("RecordStore dynamics put/get") {
 
         // Missing key returns nullopt.
         DynamicsKey key{"abc123", "Expert", false};
-        CHECK_FALSE(store.get_dynamics(key).has_value());
+        CHECK_FALSE(store.get_dynamics(key, kDynamicsCountVersion).has_value());
 
         // Put then get returns the same bytes.
-        store.put_dynamics(key, blob);
-        auto got = store.get_dynamics(key);
+        store.put_dynamics(key, blob, kDynamicsCountVersion);
+        auto got = store.get_dynamics(key, kDynamicsCountVersion);
         REQUIRE(got.has_value());
         CHECK(*got == blob);
 
         // Put again replaces (different blob).
         const DynamicsBreakdown bd2 = make_full_breakdown(false);
         const std::vector<uint8_t> blob2 = encode_dynamics(bd2);
-        store.put_dynamics(key, blob2);
-        got = store.get_dynamics(key);
+        store.put_dynamics(key, blob2, kDynamicsCountVersion);
+        got = store.get_dynamics(key, kDynamicsCountVersion);
         REQUIRE(got.has_value());
         CHECK(*got == blob2);
 
         // A key differing only in pro is a separate row.
         DynamicsKey key_pro{"abc123", "Expert", true};
-        CHECK_FALSE(store.get_dynamics(key_pro).has_value());
-        store.put_dynamics(key_pro, blob);
-        CHECK(store.get_dynamics(key_pro).has_value());
+        CHECK_FALSE(store.get_dynamics(key_pro, kDynamicsCountVersion).has_value());
+        store.put_dynamics(key_pro, blob, kDynamicsCountVersion);
+        CHECK(store.get_dynamics(key_pro, kDynamicsCountVersion).has_value());
         // The non-pro row is still the replaced blob2.
-        CHECK(*store.get_dynamics(key) == blob2);
+        CHECK(*store.get_dynamics(key, kDynamicsCountVersion) == blob2);
 
         // A key differing only in difficulty is a separate row.
         DynamicsKey key_hard{"abc123", "Hard", false};
-        CHECK_FALSE(store.get_dynamics(key_hard).has_value());
-        store.put_dynamics(key_hard, blob);
-        CHECK(store.get_dynamics(key_hard).has_value());
+        CHECK_FALSE(store.get_dynamics(key_hard, kDynamicsCountVersion).has_value());
+        store.put_dynamics(key_hard, blob, kDynamicsCountVersion);
+        CHECK(store.get_dynamics(key_hard, kDynamicsCountVersion).has_value());
     }
 
     // Test 4: Reopen the same db file and the rows are still there.
     {
         RecordStore store2(tmp.path);
         DynamicsKey key{"abc123", "Expert", false};
-        auto got = store2.get_dynamics(key);
+        auto got = store2.get_dynamics(key, kDynamicsCountVersion);
         REQUIRE(got.has_value());
         // Should be blob2 (the replaced value).
         const DynamicsBreakdown bd2 = make_full_breakdown(false);
         CHECK(*got == encode_dynamics(bd2));
 
         DynamicsKey key_pro{"abc123", "Expert", true};
-        CHECK(store2.get_dynamics(key_pro).has_value());
+        CHECK(store2.get_dynamics(key_pro, kDynamicsCountVersion).has_value());
 
         DynamicsKey key_hard{"abc123", "Hard", false};
-        CHECK(store2.get_dynamics(key_hard).has_value());
+        CHECK(store2.get_dynamics(key_hard, kDynamicsCountVersion).has_value());
     }
+}
+
+TEST_CASE("dynamics keys come from one place") {
+    CHECK(dynamics_cache_key("C:\\songs\\a\\notes.mid", true, hydra::Difficulty::Expert) ==
+          "C:\\songs\\a\\notes.mid|pro|Expert");
+    CHECK(dynamics_cache_key("x.chart", false, hydra::Difficulty::Hard) == "x.chart|std|Hard");
+
+    DynamicsKey k = dynamics_store_key("abc123", hydra::Difficulty::Medium, true);
+    CHECK(k.md5 == "abc123");
+    CHECK(k.difficulty == "Medium");
+    CHECK(k.pro);
+
+    // The background count always parses with 2x kicks kept.
+    CHECK(kDynamicsParseBass2x);
+}
+
+TEST_CASE("store_dynamics_from_analysis stores only when the parse kept 2x kicks") {
+    TempFile tmp;
+    RecordStore store(tmp.path);
+    hydra::Song song = hydra::load_songbytes_mid(
+        testmidi::smf(testmidi::concat({testmidi::track_name("PART DRUMS"), testmidi::set_tempo(),
+                                        testmidi::note_on(96, 100), testmidi::end_of_track()})),
+        true, true);
+
+    store_dynamics_from_analysis(store, "nokicks", song, /*bass2x=*/false,
+                                 hydra::Difficulty::Expert, true);
+    CHECK_FALSE(store.get_dynamics(dynamics_store_key("nokicks", hydra::Difficulty::Expert, true),
+                                   kDynamicsCountVersion)
+                    .has_value());
+
+    store_dynamics_from_analysis(store, "withkicks", song, /*bass2x=*/true,
+                                 hydra::Difficulty::Expert, true);
+    auto blob = store.get_dynamics(dynamics_store_key("withkicks", hydra::Difficulty::Expert, true),
+                                   kDynamicsCountVersion);
+    REQUIRE(blob.has_value());
+    auto bd = decode_dynamics(*blob);
+    REQUIRE(bd.has_value());
+    CHECK(bd->row(DynamicsRow::Kick).all() == 1);
+}
+
+TEST_CASE("RecordStore dynamics rows from before the stamp read as missing") {
+    TempFile tmp;
+    {  // A file from before the stamp: the dynamics table has no count_version column.
+        sqlite3* db = nullptr;
+        REQUIRE(sqlite3_open(tmp.path.c_str(), &db) == SQLITE_OK);
+        REQUIRE(sqlite3_exec(db,
+                             "CREATE TABLE dynamics (md5 TEXT NOT NULL, difficulty TEXT NOT NULL,"
+                             " pro INTEGER NOT NULL, blob BLOB NOT NULL,"
+                             " PRIMARY KEY (md5, difficulty, pro));"
+                             "INSERT INTO dynamics VALUES ('old', 'Expert', 0, x'01');",
+                             nullptr, nullptr, nullptr) == SQLITE_OK);
+        sqlite3_close(db);
+    }
+    RecordStore store(tmp.path);
+    DynamicsKey key{"old", "Expert", false};
+    CHECK_FALSE(store.get_dynamics(key, kDynamicsCountVersion).has_value());  // count again
+    CHECK(store.get_dynamics(key, 0).has_value());  // the old row is kept, stamped 0
+
+    const std::vector<uint8_t> blob = encode_dynamics(make_full_breakdown(true));
+    store.put_dynamics(key, blob, kDynamicsCountVersion);
+    auto got = store.get_dynamics(key, kDynamicsCountVersion);
+    REQUIRE(got.has_value());
+    CHECK(*got == blob);
+}
+
+TEST_CASE("RecordStore dynamics rows with another count stamp read as missing") {
+    TempFile tmp;
+    RecordStore store(tmp.path);
+    DynamicsKey key{"abc123", "Expert", false};
+    const std::vector<uint8_t> blob = encode_dynamics(make_full_breakdown(true));
+
+    store.put_dynamics(key, blob, 1);
+    CHECK(store.get_dynamics(key, 1).has_value());
+    CHECK_FALSE(store.get_dynamics(key, 2).has_value());  // someone bumped the counter
+
+    // The recount under the new stamp replaces the row; the old stamp is gone.
+    store.put_dynamics(key, blob, 2);
+    CHECK(store.get_dynamics(key, 2).has_value());
+    CHECK_FALSE(store.get_dynamics(key, 1).has_value());
 }

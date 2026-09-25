@@ -694,21 +694,9 @@ void run_batch(const std::vector<ScanItem>& items, const std::string& chartmode,
             store.add_song(wr.item.md5, wr.item.title, wr.item.artist, wr.item.charter,
                            wr.analysis->song);
             store.add_row(*wr.row);
-            // Store the dynamics breakdown as a free by-product: the chart
-            // is already parsed, so counting costs almost nothing. Only when
-            // bass2x is on, because with it off the 2x kicks were dropped.
-            if (settings.bass2x) {
-                try {
-                    auto bd = count_dynamics(wr.analysis->song);
-                    auto blob = encode_dynamics(bd);
-                    store::DynamicsKey dk{wr.item.md5,
-                                          difficulty_name(settings.difficulty),
-                                          settings.prodrums};
-                    store.put_dynamics(dk, blob);
-                } catch (...) {
-                    // Best effort: never block the analysis record.
-                }
-            }
+            store_dynamics_from_analysis(store, wr.item.md5, wr.analysis->song,
+                                         settings.bass2x, settings.difficulty,
+                                         settings.prodrums);
             if (on_result) on_result(wr.item, *wr.row);
         }
 
