@@ -30,7 +30,9 @@ bindings so the two layers stay independent.
 from __future__ import annotations
 
 import ctypes
+import ctypes.wintypes  # _Win32 uses it; don't rely on another module importing it
 import struct
+import time
 from typing import Callable, Dict, Optional
 
 
@@ -151,6 +153,10 @@ class BreakpointTable:
         if bp.armed:
             self.disarm(addr)
         del self._bps[addr]
+
+    def addresses(self) -> list:
+        """Every registered breakpoint address, armed or not."""
+        return list(self._bps)
 
     # --- read-only queries, handy for the pump and the tests ---------------
 
@@ -390,6 +396,9 @@ class _Win32:
         k32.DebugActiveProcessStop.argtypes = [wintypes.DWORD]
         k32.DebugActiveProcessStop.restype = wintypes.BOOL
 
+        k32.DebugSetProcessKillOnExit.argtypes = [wintypes.BOOL]
+        k32.DebugSetProcessKillOnExit.restype = wintypes.BOOL
+
         k32.WaitForDebugEvent.argtypes = [ctypes.POINTER(DEBUG_EVENT), wintypes.DWORD]
         k32.WaitForDebugEvent.restype = wintypes.BOOL
 
@@ -449,35 +458,93 @@ class Debugger:
         self._pending_rearm: Dict[int, int] = {}
         self._seen_initial = False   # swallow the one system breakpoint on attach
         self._stopped = False
+        # Breakpoints stop() has removed. A hit on one may already be queued.
+        self._removed: set = set()
 
     # --- attach / detach ---------------------------------------------------
 
     def attach(self, pid: int) -> None:
-        """Attach to a running process by id. LIVE-ONLY."""
+        """Attach to a running process by id. LIVE-ONLY.
+
+        Right after attaching, turn kill-on-exit off. Windows' default kills
+        every process a debugger thread is attached to when that thread exits,
+        so a Python crash or Ctrl+C would take Clone Hero down too. With it
+        off, the thread detaches instead. The call needs the debugging
+        connection to exist first, so it comes after DebugActiveProcess:
+        https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-debugsetprocesskillonexit
+        """
         self._win32 = _Win32()
         self._pid = pid
-        if not self._win32.k32.DebugActiveProcess(pid):
+        k32 = self._win32.k32
+        if not k32.DebugActiveProcess(pid):
             raise ctypes.WinError(ctypes.get_last_error())
-        self._proc_handle = self._win32.k32.OpenProcess(PROCESS_ALL_ACCESS, False, pid)
+        if not k32.DebugSetProcessKillOnExit(False):
+            err = ctypes.get_last_error()
+            k32.DebugActiveProcessStop(pid)   # never stay attached with kill-on-exit on
+            raise ctypes.WinError(err)
+        self._proc_handle = k32.OpenProcess(PROCESS_ALL_ACCESS, False, pid)
         if not self._proc_handle:
             raise ctypes.WinError(ctypes.get_last_error())
         self._stopped = False
         self._seen_initial = False
 
     def stop(self) -> None:
-        """Detach and let the process run free. LIVE-ONLY."""
+        """Detach and let the process run free. LIVE-ONLY.
+
+        Call it from the thread that attached; only that thread gets debug
+        events. Order matters, because a 0xCC or a single-step trap left for
+        the game after we detach would crash it:
+          1. Put every patched byte back and forget the breakpoints.
+          2. Answer queued debug events until none is left and no thread is
+             still mid-step over a breakpoint (at most one second).
+          3. Detach.
+        """
         self._stopped = True
         if self._win32 and self._pid is not None:
-            # Restore every patched byte before we walk away.
-            for addr in list(self._table.armed_originals().keys()):
+            for addr in self._table.addresses():
                 try:
-                    self._table.disarm(addr)
+                    self._table.remove(addr)
                 except Exception:
                     pass
+                self._removed.add(addr)
+            self._drain(timeout_s=1.0)
             self._win32.k32.DebugActiveProcessStop(self._pid)
         if self._win32 and self._proc_handle:
             self._win32.k32.CloseHandle(self._proc_handle)
             self._proc_handle = None
+
+    def _drain(self, timeout_s: float) -> None:
+        """Answer queued debug events until the queue is empty and no thread
+        is mid-step, or until timeout_s passes. LIVE-ONLY."""
+        ev = DEBUG_EVENT()
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if not self._win32.k32.WaitForDebugEvent(ctypes.byref(ev), 50):
+                if not self._pending_rearm:
+                    return
+                continue
+            status = DBG_CONTINUE
+            if ev.dwDebugEventCode == EXCEPTION_DEBUG_EVENT:
+                status = self._handle_exception(ev)
+            self._win32.k32.ContinueDebugEvent(
+                ev.dwProcessId, ev.dwThreadId, status)
+
+    def _rewind_rip(self, tid: int) -> None:
+        """Move one thread's rip back one byte, onto the instruction our 0xCC
+        had replaced (its real byte is back now). LIVE-ONLY."""
+        handle = self._win32.k32.OpenThread(THREAD_ALL_ACCESS, False, tid)
+        if not handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            ctx = CONTEXT()
+            ctx.ContextFlags = CONTEXT_ALL
+            if not self._win32.k32.GetThreadContext(handle, ctypes.byref(ctx)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            ctx.Rip = adjust_rip_after_int3(ctx.Rip)
+            if not self._win32.k32.SetThreadContext(handle, ctypes.byref(ctx)):
+                raise ctypes.WinError(ctypes.get_last_error())
+        finally:
+            self._win32.k32.CloseHandle(handle)
 
     # --- breakpoints -------------------------------------------------------
 
@@ -597,6 +664,12 @@ class Debugger:
             if self._table.is_armed(addr):
                 self._on_our_breakpoint(addr, tid)
                 return DBG_CONTINUE
+            if addr in self._removed:
+                # A thread reached one of our 0xCC bytes just before stop()
+                # put the real byte back; its event was already queued. Step
+                # rip back onto the restored instruction so it runs normally.
+                self._rewind_rip(tid)
+                return DBG_CONTINUE
             if not self._seen_initial:
                 # The system fires one breakpoint right after attach. Swallow it.
                 self._seen_initial = True
@@ -606,8 +679,10 @@ class Debugger:
         if code == EXCEPTION_SINGLE_STEP:
             addr_to_rearm = self._pending_rearm.pop(tid, None)
             if addr_to_rearm is not None:
-                # We stepped over the restored instruction; put 0xCC back.
-                self._table.arm(addr_to_rearm)
+                # We stepped over the restored instruction; put 0xCC back,
+                # unless stop() has removed that breakpoint meanwhile.
+                if self._table.has(addr_to_rearm):
+                    self._table.arm(addr_to_rearm)
                 return DBG_CONTINUE
             return DBG_EXCEPTION_NOT_HANDLED
 
