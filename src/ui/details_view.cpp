@@ -118,9 +118,11 @@ void render_controls(AppState& app) {
     ImGui::TextUnformatted("Score range:");
     ImGui::SameLine(px(100));
     ImGui::SetNextItemWidth(px(140));
+    // The three number boxes apply every step live but save the INI once the
+    // edit ends (AppState::edit_settings, flushed by run_frame).
     if (ImGui::InputInt("##depthvalue", &app.settings.depth_value)) {
         if (app.settings.depth_value < 0) app.settings.depth_value = 0;
-        app.commit_settings();
+        app.edit_settings();
     }
     ImGui::SameLine();
     ImGui::SetNextItemWidth(px(80));
@@ -140,7 +142,7 @@ void render_controls(AppState& app) {
     ImGui::SetNextItemWidth(px(100));
     if (ImGui::InputInt("##mslimitvalue", &app.settings.mslimit_value)) {
         app.settings.mslimit_value = std::clamp(app.settings.mslimit_value, -500, 500);
-        app.commit_settings();
+        app.edit_settings();
     }
     ImGui::SameLine();
     // "mslimit_mstext" binds disabled_text ((50,50,50), same gray as the
@@ -186,7 +188,7 @@ void render_controls(AppState& app) {
         if (ImGui::InputInt("##spcapvalue", &last_cap)) {
             if (last_cap < 1) last_cap = 1;
             app.settings.sp_cap = last_cap;
-            app.commit_settings();
+            app.edit_settings();
         }
         ImGui::SameLine();
         ImGui::TextUnformatted("bars");

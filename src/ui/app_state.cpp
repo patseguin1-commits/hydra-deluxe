@@ -4,6 +4,7 @@
 
 #include "app/config.h"
 #include "app/rules_file.h"
+#include "app/report_files.h"
 #include "core/winstr.h"
 #include "ui/preview_controller.h"
 
@@ -50,7 +51,7 @@ AppState::AppState(app::Settings initial_settings,
 
 // Out-of-line so the unique_ptr<PreviewController> can be a forward declaration
 // in the header (its destructor needs the full type, which lives here).
-AppState::~AppState() = default;
+AppState::~AppState() { flush_settings(); }  // an edit in progress still lands
 
 void AppState::set_render_device(ID3D11Device* device, ID3D11DeviceContext* context) {
     render_device_ = device;
@@ -76,7 +77,13 @@ void AppState::refresh_page() {
 
     current_page.rows =
         store->list_chart_library(search_opt, table_viewpage * rows_per_page, rows_per_page);
+    refresh_summaries();
 
+    library_total =
+        search.empty() ? current_page.total_count : store->chart_library_count(std::nullopt);
+}
+
+void AppState::refresh_summaries() {
     // Resolve each row's Best Path summary once here instead of per row per
     // frame in the render loop (a SQLite query at 60fps x 200 rows, on the
     // render thread, against the same mutex the batch workers hold).
@@ -89,9 +96,6 @@ void AppState::refresh_page() {
         rs.bestpath = std::move(summary.bestpath);
         current_page.summaries.push_back(std::move(rs));
     }
-
-    library_total =
-        search.empty() ? current_page.total_count : store->chart_library_count(std::nullopt);
 }
 
 void AppState::set_rows_per_page(int rows) {
@@ -105,6 +109,7 @@ void AppState::select(const store::ChartLibraryEntry& entry) {
     // clicked while the window is closed, when this already ran, so it is a
     // no-op in the app; it matters for callers that select directly.
     close_details();
+    parked_lookups_.clear();  // a new chart: nothing parked applies
     selected = entry;
     show_details = true;
     refresh_viewed_record();
@@ -145,10 +150,54 @@ bool AppState::selected_file_ok(double now) {
 void AppState::refresh_viewed_record() {
     if (!selected) {
         viewed = store::RecordLookup{};
+        viewed_key_.reset();
         return;
     }
-    viewed = store->get_record(settings.record_key(selected->md5));
+    store::RecordKey key = settings.record_key(selected->md5);
+    viewed = store->get_record(key);
+    viewed_key_ = std::move(key);
     record_generation.bump();
+}
+
+void AppState::show_record_for_settings() {
+    if (!selected) {
+        refresh_viewed_record();
+        return;
+    }
+    store::RecordKey key = settings.record_key(selected->md5);
+    if (viewed_key_ && *viewed_key_ == key) return;
+
+    std::optional<store::RecordLookup> found;
+    for (auto it = parked_lookups_.begin(); it != parked_lookups_.end(); ++it) {
+        if (it->first == key) {
+            found = std::move(it->second);
+            parked_lookups_.erase(it);
+            break;
+        }
+    }
+    // Park what is showing now. Moves, not copies: the decoded record changes
+    // hands without being copied.
+    if (viewed_key_) {
+        parked_lookups_.emplace_back(std::move(*viewed_key_), std::move(viewed));
+        if (parked_lookups_.size() > kParkedLookups)
+            parked_lookups_.erase(parked_lookups_.begin());
+    }
+    if (found) {
+        viewed = std::move(*found);
+        viewed_key_ = std::move(key);
+        record_generation.bump();  // selected_path must re-sync, as after a read
+    } else {
+        refresh_viewed_record();
+    }
+}
+
+bool AppState::report_file_shown(double now) {
+    if (library_ui.report_checked_at < 0.0 ||
+        now - library_ui.report_checked_at >= kReportCheckSeconds) {
+        library_ui.report_exists = app::report_file_exists();
+        library_ui.report_checked_at = now;
+    }
+    return library_ui.report_exists;
 }
 
 void AppState::update_dynamics() {
@@ -258,6 +307,7 @@ std::string AppState::store_finished_analysis() {
         const app::AnalysisSettings& as = analyze_job->settings();
         app::store_dynamics_from_analysis(*store, song.md5, result.song, as.bass2x,
                                           as.difficulty, as.prodrums);
+        parked_lookups_.clear();  // a record just changed
         refresh_viewed_record();
         refresh_page();  // the library row's Best Path cell is cached per page
         return "";
@@ -291,10 +341,27 @@ void AppState::set_status(std::string message) {
 }
 
 void AppState::commit_settings() {
+    save_settings();
+    apply_settings();
+}
+
+void AppState::edit_settings() {
+    settings_unsaved_ = true;
+    apply_settings();
+}
+
+void AppState::flush_settings() {
+    if (settings_unsaved_) save_settings();
+}
+
+void AppState::save_settings() {
+    settings_unsaved_ = false;
     if (!settings.save())
         set_status("Settings could not be saved — " + app::ini_path() +
                    " is not writable.");
+}
 
+void AppState::apply_settings() {
     // Which record a chart shows is (chart, chart mode, SP cap, lens). When
     // any of the last three moves, every cached lookup is answering the old
     // question and has to be re-asked.
@@ -310,9 +377,10 @@ void AppState::commit_settings() {
     } else if (cap != committed_cap_ || lens != committed_lens_) {
         // The cap box and the search controls live in the details modal.
         // Resetting the page here would yank the library out from under a
-        // user who never touched it.
-        refresh_page();
-        refresh_viewed_record();
+        // user who never touched it. The page's rows and counts do not depend
+        // on the cap or lens, so only the Best Path summaries are asked again.
+        refresh_summaries();
+        show_record_for_settings();
     }
     committed_chartmode_ = std::move(chartmode);
     committed_cap_ = cap;

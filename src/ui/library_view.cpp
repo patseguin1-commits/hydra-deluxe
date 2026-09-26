@@ -26,13 +26,10 @@ HWND main_hwnd() {
 // seconds after the message changes. same_line appends it to the current
 // row (the main action bar); the folder manager renders it on its own line.
 void render_status_line(AppState& app, bool same_line) {
-    // seen starts at 0 (the first AppState's initial counter value), not the
-    // watcher's default -1: app startup must not count as a change and start
-    // a fade. A later AppState in the same process (UI test runner) starts
-    // higher and does register once, which the empty-message check below
-    // turns into a no-op.
-    static GenerationWatcher generation{/*seen=*/0};
-    static double shown_at = -1.0;
+    // Lives on the AppState (LibraryViewState); the watcher starts at "seen"
+    // for this app's counter, so startup does not start a fade.
+    GenerationWatcher& generation = app.library_ui.status_watcher;
+    double& shown_at = app.library_ui.status_shown_at;
     if (generation.changed(app.status_generation)) shown_at = ImGui::GetTime();
     if (shown_at < 0.0 || app.status_message.empty()) return;
     if (ImGui::GetTime() - shown_at > 6.0) return;
@@ -47,7 +44,7 @@ void render_status_line(AppState& app, bool same_line) {
 void render_folder_manager(AppState& app) {
     // Folder pending removal, confirmed through the nested popup below —
     // deleting a library source was previously a single un-undoable click.
-    static std::optional<size_t> confirm_remove;
+    std::optional<size_t>& confirm_remove = app.library_ui.confirm_remove;
 
     if (!ImGui::BeginPopupModal("Song folders", nullptr,
                                 ImGuiWindowFlags_AlwaysAutoResize)) {
@@ -269,9 +266,9 @@ void render_view_controls(AppState& app) {
 }
 
 void render_search_box(AppState& app) {
-    static char buf[256] = "";
-    static bool synced = false;
-    static double edited_at = -1.0;
+    char (&buf)[256] = app.library_ui.search_buf;
+    bool& synced = app.library_ui.search_synced;
+    double& edited_at = app.library_ui.search_edited_at;
     if (!synced) {
         std::snprintf(buf, sizeof(buf), "%s", app.search.c_str());
         synced = true;
@@ -657,7 +654,7 @@ void render_dm_picker_modal(AppState& app) {
 
     // Stage 1: choose a player.
     ImGui::TextUnformatted("Pick a player to compare against your library:");
-    static char filter[128] = "";
+    char (&filter)[128] = app.library_ui.dm_filter;
     ImGui::SetNextItemWidth(px(380));
     ImGui::InputTextWithHint("##dmfilter", "filter by name", filter, sizeof(filter));
 
@@ -718,6 +715,7 @@ void render_main_window(AppState& app) {
     // A finished report job has nothing left to show once the batch modal is
     // gone (its status lines live there); reclaim the thread.
     if (!app.batch_job && app.report_job && app.report_job->finished()) {
+        app.library_ui.report_checked_at = -1.0;  // a new report: look at once
         // You clicked Continue while the report was still building, so the
         // modal never showed how it ended. Say so here instead. A cancelled
         // job says nothing -- you asked for it to stop.
@@ -776,7 +774,7 @@ void render_main_window(AppState& app) {
         begin_disabled_button(true);
         ImGui::Button("Building path report...");
         end_disabled_button(true);
-    } else if (app::report_file_exists()) {
+    } else if (app.report_file_shown(ImGui::GetTime())) {
         ImGui::SameLine();
         if (ImGui::Button("Open path report") && !app::open_report_in_browser())
             app.set_status("The path report could not be opened.");

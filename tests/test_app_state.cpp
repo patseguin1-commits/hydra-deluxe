@@ -11,6 +11,7 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <string>
@@ -18,6 +19,7 @@
 
 #include "app/config.h"
 #include "app/dynamics_breakdown.h"
+#include "app/report_files.h"
 #include "core/model.h"
 #include "core/winstr.h"
 #include "corpus_util.h"
@@ -362,4 +364,66 @@ TEST_CASE("the chart-file check runs on open and then every two seconds") {
     app->close_details();                      // the next open looks at once
     CHECK(app->selected_file_ok(12.6));
     std::remove(chart.c_str());
+}
+
+// The number boxes apply each step at once (the shown record follows live)
+// but leave the INI until the edit ends: holding +/- used to rewrite the
+// file every frame.
+TEST_CASE("number boxes apply at once but write the INI only on flush") {
+    ScratchPaths paths("appstate_flush");
+    std::unique_ptr<AppState> app = app_on(paths);
+    const int seeded_depth = app->settings.depth_value;
+
+    app->settings.depth_value = seeded_depth + 3;
+    app->edit_settings();
+    CHECK(app->viewed.status == RecordStatus::NotAnalyzed);  // applied live
+    CHECK(Settings::load_file(paths.ini).depth_value == seeded_depth);  // not saved yet
+
+    app->flush_settings();  // the edit ended
+    CHECK(Settings::load_file(paths.ini).depth_value == seeded_depth + 3);
+}
+
+// Stepping away and back re-shows a lookup already made, without asking the
+// store again (a big record's decode is the expensive part).
+TEST_CASE("stepping a number box back reuses the lookup it already made") {
+    ScratchPaths paths("appstate_parked");
+    std::unique_ptr<AppState> app = app_on(paths);
+
+    app->settings.sp_cap = 8;
+    app->edit_settings();
+    CHECK(app->viewed.status == RecordStatus::NotAnalyzed);
+    app->settings.sp_cap = kSeededCap;
+    app->edit_settings();
+    CHECK(app->viewed.status == RecordStatus::Ready);
+
+    // A cap-8 record appears behind the cache's back. Stepping to 8 shows the
+    // parked "not analyzed" answer: proof the store was not asked again.
+    HydraRecord at8;
+    at8.sp_cap = 8;
+    at8.ms_limit = Settings{}.mslimit_value;
+    app->store->add_record(
+        RecordKey{library_entry(0).md5, kChartMode, CapQuery::at(8), Settings{}.lens()}, at8);
+    app->settings.sp_cap = 8;
+    app->edit_settings();
+    CHECK(app->viewed.status == RecordStatus::NotAnalyzed);
+
+    // A new selection drops every parked lookup, so the store is asked again.
+    app->select(library_entry(0));
+    CHECK(app->viewed.status == RecordStatus::Ready);
+}
+
+// The main window's "Open path report" button looks for the file every two
+// seconds, not on every frame.
+TEST_CASE("the report-file check is cached for two seconds") {
+    ScratchPaths paths("appstate_report");
+    std::unique_ptr<AppState> app = app_on(paths);
+    const std::filesystem::path report(hydra::app::report_html_path());
+    std::error_code ec;
+    std::filesystem::remove(report, ec);
+
+    CHECK_FALSE(app->report_file_shown(10.0));
+    hydra::app::write_report_file(report, "<html></html>");
+    CHECK_FALSE(app->report_file_shown(11.0));  // one second later: not asked
+    CHECK(app->report_file_shown(12.5));        // two seconds on: asked, found
+    std::filesystem::remove(report, ec);
 }

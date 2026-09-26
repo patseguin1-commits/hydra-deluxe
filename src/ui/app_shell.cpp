@@ -96,6 +96,10 @@ void run_frame(AppState& app, FrameText* capture) {
 
     render_main_window(app);
     render_details_modal(app);
+    // The number boxes apply edits live but leave the INI until the edit
+    // ends (AppState::edit_settings). An edit has ended once no widget is
+    // active: the +/- button is released, or the text box lost focus.
+    if (!ImGui::IsAnyItemActive()) app.flush_settings();
 
     if (capturing) {
         ImGuiContext& g = *ImGui::GetCurrentContext();
