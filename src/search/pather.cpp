@@ -292,21 +292,13 @@ HydraRecord analyze_chart(const Song& song, const SearchSettings& settings,
     const int depth_value = settings.depth_value;
     const std::optional<double> ms_filter = settings.ms_filter;
 
-    // Clone Hero's 4-bar rule is the classic single pass, kept exactly as it
-    // always was so a fresh 4-bar record matches every stored one.
-    if (sp_cap == kCloneHeroSpCap) {
-        HydraRecord record =
-            analyze_at_cap(song, kCloneHeroSpCap, depth_mode, depth_value, ms_filter,
-                           std::nullopt, settings.legacy_fill_deadline, settings.rules,
-                           /*want_allzero=*/true, on_progress);
-        record.rules_fingerprint = settings.rules.fingerprint();
-        return record;
-    }
-    // Any other fixed cap runs a single pass at that ceiling. The graph is
-    // still only built as tall as the song has phrases to bank -- no run can
-    // exceed that -- so a huge cap on a short song stays cheap and exact. A
-    // fixed cap is the user's explicit choice, so Auto's time budget doesn't
-    // apply to it.
+    // A fixed cap, Clone Hero's 4 bars included, runs a single pass at that
+    // ceiling. The graph is only built as tall as the song has phrases to
+    // bank -- no run can exceed that -- so a huge cap on a short song stays
+    // cheap, and a 4-bar graph built lower stores the same bytes (test "a
+    // 4-bar graph built at the song's phrase count stores the same paths").
+    // A fixed cap is the user's explicit choice, so Auto's time budget
+    // doesn't apply to it.
     if (sp_cap.has_value()) {
         int build_cap = graph_build_cap(*sp_cap, song.sp_phrase_count());
         HydraRecord record =

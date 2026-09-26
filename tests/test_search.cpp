@@ -564,6 +564,60 @@ TEST_CASE("run_search: EngineOptions carries each knob to the engine") {
     CHECK(again.front().totalscore() == best.front().totalscore());
 }
 
+// analyze_chart used to run Clone Hero's 4 bars down its own branch, with the
+// graph built a flat 4 bars tall. Every other fixed cap builds the graph only
+// as tall as the song has phrases (graph_build_cap). Both give the same
+// answer: a song with p phrases never holds more than p bars, so a p-bar
+// ceiling clamps nothing a 4-bar ceiling would not. This pins it byte for
+// byte through the store's own writer before the branches fold into one.
+TEST_CASE("a 4-bar graph built at the song's phrase count stores the same paths") {
+    std::vector<Song> songs;
+    // Hand-built, three phrases, one of them collected mid-SP.
+    songs.push_back(build_tail_song({{0, true, false},
+                                     {768, true, false},
+                                     {1536},
+                                     {2304, false, true},
+                                     {3072},
+                                     {3840, true, false},
+                                     {4608},
+                                     {5376},
+                                     {6144},
+                                     {6720},
+                                     {6816}}));
+    for (const std::string& path : corpus::chart_paths()) {
+        Song s = load_songpath(path, true, true);
+        if (!s.is_empty() && s.sp_phrase_count() < kCloneHeroSpCap)
+            songs.push_back(std::move(s));
+    }
+
+    int compared = 0;
+    for (const Song& song : songs) {
+        const int build_cap = graph_build_cap(kCloneHeroSpCap, song.sp_phrase_count());
+        REQUIRE(build_cap < kCloneHeroSpCap);
+
+        ScoreGraph g_tall(song, kCloneHeroSpCap);
+        ScoreGraph g_built(song, build_cap);
+        EngineOptions options;
+        options.depth_value = 4;
+        HydraRecord tall, built;
+        tall.sp_cap = kCloneHeroSpCap;
+        built.sp_cap = kCloneHeroSpCap;
+        tall.paths = run_search(g_tall, options);
+        built.paths = run_search(g_built, options);
+        tall.allzero_paths = search_allzero(g_tall);
+        built.allzero_paths = search_allzero(g_built);
+
+        const store::FlatRecord a = store::flatten_record(tall);
+        const store::FlatRecord b = store::flatten_record(built);
+        bool same = a.structure == b.structure && a.nodes.size() == b.nodes.size();
+        for (size_t i = 0; same && i < a.nodes.size(); ++i)
+            same = a.nodes[i].payload == b.nodes[i].payload;
+        CHECK_MESSAGE(same, "a song with " << song.sp_phrase_count() << " phrases");
+        ++compared;
+    }
+    MESSAGE("compared " << compared << " songs with fewer than 4 phrases");
+}
+
 // ---- SP cap overfill: a phrase collected mid-SP can clamp the end ------
 //
 // The meter holds a fixed number of bars. Once it's full, a phrase you
