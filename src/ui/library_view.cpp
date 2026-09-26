@@ -1,6 +1,7 @@
 #include "ui/library_view.h"
 
 #include "app/report_files.h"
+#include "core/strutil.h"
 #include "imgui.h"
 #include "store/record_store.h"
 #include "ui/fonts.h"
@@ -658,21 +659,16 @@ void render_dm_picker_modal(AppState& app) {
     ImGui::SetNextItemWidth(px(380));
     ImGui::InputTextWithHint("##dmfilter", "filter by name", filter, sizeof(filter));
 
-    std::string needle = filter;
-    std::transform(needle.begin(), needle.end(), needle.begin(),
-                   [](unsigned char c) { return (char)std::tolower(c); });
+    const std::string needle = to_lower_ascii(filter);
 
     ImGui::BeginChild("dmusers", ImVec2(px(480), px(320)), ImGuiChildFlags_Borders);
     if (app.dm_users.empty()) {
         ImGui::TextDisabled("(No users found.)");
     } else {
         for (const net::DmUser& u : app.dm_users) {
-            if (!needle.empty()) {
-                std::string name = u.username;
-                std::transform(name.begin(), name.end(), name.begin(),
-                               [](unsigned char c) { return (char)std::tolower(c); });
-                if (name.find(needle) == std::string::npos) continue;
-            }
+            if (!needle.empty() &&
+                to_lower_ascii(u.username).find(needle) == std::string::npos)
+                continue;
             char label[256];
             if (u.elo)
                 std::snprintf(label, sizeof(label), "%s  (%d scores, elo %d)###%s",

@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "core/model.h"
+#include "core/strutil.h"
 #include "corpus_util.h"
 #include "midi_util.h"
 #include "multidiff_chart.h"
@@ -45,12 +46,6 @@ void check_invariants(const Song& song, const std::string& what) {
     CHECK_MESSAGE(ticks_ok, what << ": ticks not strictly increasing");
     CHECK_MESSAGE(codes_ok, what << ": chord code round-trip");
     CHECK_MESSAGE(fills_ok, what << ": non-positive activation fill");
-}
-
-bool ends_with(const std::string& s, const char* suffix) {
-    std::string suf(suffix);
-    return s.size() >= suf.size() &&
-           s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
 }
 
 }  // namespace

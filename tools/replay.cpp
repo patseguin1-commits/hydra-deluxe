@@ -49,6 +49,7 @@
 #include "app/rules_file.h"
 #include "core/replay.h"
 #include "core/squeeze_rating.h"
+#include "core/strutil.h"
 #include "replay_json.h"
 #include "corpus_util.h"
 #include "parse/song.h"
@@ -168,20 +169,13 @@ void emit(const json& j, const std::string& out, bool pretty) {
 
 // ---- score ---------------------------------------------------------------
 
-std::string trimmed(const std::string& s) {
-    size_t b = 0, e = s.size();
-    while (b < e && (s[b] == ' ' || s[b] == '\t')) ++b;
-    while (e > b && (s[e - 1] == ' ' || s[e - 1] == '\t')) --e;
-    return s.substr(b, e - b);
-}
-
 // A strict, whole-string std::strtoll: no leading/trailing junk, no empty
 // field. `what` and `item` name the offending piece in the exception, so a
 // typo in --acts says exactly which field and which item it broke on rather
 // than printing a silently wrong score.
 int64_t strict_ll(const std::string& field, const std::string& what,
                   const std::string& item) {
-    const std::string t = trimmed(field);
+    const std::string t = trim(field);
     if (t.empty())
         throw std::runtime_error("--acts item '" + item + "' has an empty " +
                                  what);
@@ -196,7 +190,7 @@ int64_t strict_ll(const std::string& field, const std::string& what,
 
 double strict_d(const std::string& field, const std::string& what,
                 const std::string& item) {
-    const std::string t = trimmed(field);
+    const std::string t = trim(field);
     if (t.empty())
         throw std::runtime_error("--acts item '" + item + "' has an empty " +
                                  what);
@@ -223,7 +217,7 @@ std::vector<ReplayWindow> parse_acts(const std::string& spec) {
         if (comma == std::string::npos) comma = spec.size();
         std::string item = spec.substr(i, comma - i);
         i = comma + 1;
-        item = trimmed(item);
+        item = trim(item);
         if (item.empty()) continue;
 
         const size_t colon = item.find(':');
@@ -259,7 +253,7 @@ std::vector<ReplayWindow> parse_acts(const std::string& spec) {
 // --index, whole-string. std::atoi would turn "1x" or "one" into 0 and price
 // the first path as if that were what was asked for.
 int parse_index(const std::string& v) {
-    const std::string t = trimmed(v);
+    const std::string t = trim(v);
     char* end = nullptr;
     errno = 0;
     const long long n = std::strtoll(t.c_str(), &end, 10);
@@ -610,7 +604,7 @@ std::vector<int64_t> parse_ticks(const std::string& spec) {
     while (i < spec.size()) {
         size_t comma = spec.find(',', i);
         if (comma == std::string::npos) comma = spec.size();
-        std::string item = trimmed(spec.substr(i, comma - i));
+        std::string item = trim(spec.substr(i, comma - i));
         i = comma + 1;
         if (item.empty()) continue;
         const int64_t t = strict_ll(item, "tick", item);

@@ -19,6 +19,7 @@
 
 #include "app/dynamics_breakdown.h"
 #include "app/work_pool.h"
+#include "core/strutil.h"
 #include "core/winstr.h"
 #include "parse/srb.h"
 #include "parse/chart_files.h"
@@ -87,25 +88,6 @@ std::string relpath(const std::string& target, const std::string& base) {
         (t[b.size()] == '\\' || t[b.size()] == '/'))
         return t.substr(b.size() + 1);
     return t;
-}
-
-std::string lower(const std::string& s) {
-    std::string out = s;
-    for (char& c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return out;
-}
-
-// Case-insensitive suffix check without the per-call allocations the old
-// lowercase-both-strings version paid on every file in every folder.
-bool ends_with_ci(const std::string& s, const char* suffix) {
-    size_t n = std::strlen(suffix);
-    if (s.size() < n) return false;
-    for (size_t i = 0; i < n; ++i) {
-        unsigned char a = static_cast<unsigned char>(s[s.size() - n + i]);
-        unsigned char b = static_cast<unsigned char>(suffix[i]);
-        if (std::tolower(a) != std::tolower(b)) return false;
-    }
-    return true;
 }
 
 // ---- MD5 (Windows CNG), mirroring hashlib.file_digest(f, "md5") ----------
@@ -220,7 +202,7 @@ std::tuple<std::string, std::string, std::string> parse_sng_metadata(
     std::string charter = "<unknown charter>";
 
     for (const auto& [raw_key, value] : sng_read_metadata(buf)) {
-        const std::string key = lower(raw_key);
+        const std::string key = to_lower_ascii(raw_key);
         if (key == "name") title = value;
         else if (key == "artist") artist = value;
         else if (key == "charter") charter = value;
@@ -317,7 +299,7 @@ std::map<std::string, std::string> read_song_ini_keys(const std::string& path) {
         if (line.empty() || line[0] == ';' || line[0] == '#') continue;
 
         if (line.front() == '[' && line.back() == ']') {
-            std::string section = lower(line.substr(1, line.size() - 2));
+            std::string section = to_lower_ascii(line.substr(1, line.size() - 2));
             in_song_section = (section == "song");
             continue;
         }
@@ -325,7 +307,7 @@ std::map<std::string, std::string> read_song_ini_keys(const std::string& path) {
 
         size_t eq = line.find('=');
         if (eq == std::string::npos) continue;
-        std::string key = lower(line.substr(0, eq));
+        std::string key = to_lower_ascii(line.substr(0, eq));
         while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) key.pop_back();
         std::string value = line.substr(eq + 1);
         size_t vb = value.find_first_not_of(" \t");

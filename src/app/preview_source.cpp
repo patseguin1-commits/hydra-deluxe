@@ -16,6 +16,7 @@
 #include <optional>
 
 #include "app/analysis.h"
+#include "core/strutil.h"
 #include "core/winstr.h"
 #include "parse/chart_files.h"
 #include "parse/srb.h"
@@ -24,17 +25,6 @@
 namespace hydra::app {
 
 namespace {
-
-std::string to_lower(std::string s) {
-    for (char& c : s)
-        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
-    return s;
-}
-
-bool ends_with_ci(const std::string& s, const std::string& suffix) {
-    if (s.size() < suffix.size()) return false;
-    return to_lower(s.substr(s.size() - suffix.size())) == to_lower(suffix);
-}
 
 // Filename after the last '/' or '\\'.
 std::string base_name(const std::string& path) {
@@ -213,7 +203,7 @@ std::vector<PreviewAudioStem> find_loose_audio(const std::string& folder) {
         if (!is_audio_filename(name)) continue;
         std::string stem = stem_of(name);
         // "preview.*" is a short clip, not part of the song mix.
-        if (to_lower(stem) == "preview") continue;
+        if (to_lower_ascii(stem) == "preview") continue;
         PreviewAudioStem s;
         s.label = stem;
         s.path = folder + "\\" + name;
@@ -234,7 +224,7 @@ std::vector<PreviewAudioStem> extract_sng_audio(const std::string& path) {
 std::optional<double> sng_delay_ms(const std::vector<uint8_t>& sng_bytes) {
     std::optional<double> delay;
     for (const auto& [key, value] : sng_read_metadata(sng_bytes))
-        if (to_lower(key) == "delay") delay = parse_delay_ms(value);
+        if (to_lower_ascii(key) == "delay") delay = parse_delay_ms(value);
     return delay;
 }
 

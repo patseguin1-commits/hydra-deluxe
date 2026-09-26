@@ -7,18 +7,14 @@
 #include <sstream>
 #include <string>
 
+#include "core/strutil.h"
 #include "uitest_harness.h"
 
 namespace uitest {
 
 namespace {
 
-std::string trim(const std::string& s) {
-    size_t a = s.find_first_not_of(" \t\r\n");
-    if (a == std::string::npos) return "";
-    size_t b = s.find_last_not_of(" \t\r\n");
-    return s.substr(a, b - a + 1);
-}
+using hydra::trim;
 
 // Split "verb rest-of-line" at the first blank.
 void split_verb(const std::string& line, std::string& verb, std::string& rest) {
