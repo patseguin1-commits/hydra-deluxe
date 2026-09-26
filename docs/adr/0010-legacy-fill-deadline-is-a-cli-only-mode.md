@@ -15,6 +15,12 @@ not in that key. So a legacy run must be given its own database file with
 `--db`, and `hydra_batch` refuses to run `--legacy-fills` against the database
 the app itself reads.
 
+Each database carries a stamp of the rule that filled it. `hydra_batch`
+refuses (exit code 2) a run whose rule disagrees with that stamp, so one file
+never mixes the two, and `--reindex` never changes it. A file with results but
+no stamp was written before stamping existed, by the 1.1 rule, and counts as
+1.1.
+
 `hydra_fillcompare --old <ch10.db> --new <ch11.db>` joins two such files by
 chart hash and reports where the two rules disagree.
 

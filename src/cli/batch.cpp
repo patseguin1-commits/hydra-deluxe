@@ -10,8 +10,10 @@
 //     hydra_batch --rules <path>     # rule choices from this file, not the exe's hydra_rules.ini
 //
 // --legacy-fills needs its own --db: the rule is not recorded on a row, so
-// 1.0 and 1.1 results must not share a file (docs/adr/0010). Compare two such
-// databases with hydra_fillcompare.
+// 1.0 and 1.1 results must not share a file (docs/adr/0010). Each run stamps
+// its database with the rule it used, and a run whose rule disagrees with an
+// existing stamp exits 2 without writing. --reindex never stamps. Compare two
+// such databases with hydra_fillcompare.
 //
 // Reads difficulty / pro drums / 2x bass / depth / SP cap from the app's
 // settings INI (app/config.h), so results match what the app would produce
@@ -134,17 +136,42 @@ int main(int argc, char** argv) {
     std::unique_ptr<hydra::store::RecordStore> store_ptr = hydra::app::open_store(db, settings.rules.fingerprint());
     hydra::store::RecordStore& store = *store_ptr;
 
-    // Stamp the file with the rule this run used, every run, so hydra_fillcompare
-    // can tell a 1.0 database from a 1.1 one.
-    store.set_engine_mode(hydra::engine_mode_stamp(
-        legacy_fills ? hydra::FillDeadlineRule::Ch10 : hydra::FillDeadlineRule::Ch11));
-
+    // Reindexing only re-reads stored rows. It scores nothing, so it must not
+    // relabel the file: a Clone Hero 1.0 database stays stamped ch10.
     if (reindex_only) {
         std::printf("Rebuilding sort columns from stored records...\n");
         int n = store.reindex();
         std::printf("Reindexed %d records.\n", n);
         return 0;
     }
+
+    // One database holds one fill rule (docs/adr/0010). A file with results
+    // but no stamp was written before hydra_batch stamped, by the normal rule;
+    // hydra_fillcompare reads it the same way. A file with neither is new.
+    const char* ch10 = hydra::engine_mode_stamp(hydra::FillDeadlineRule::Ch10);
+    const char* ch11 = hydra::engine_mode_stamp(hydra::FillDeadlineRule::Ch11);
+    const std::string run_mode = legacy_fills ? ch10 : ch11;
+    std::optional<std::string> file_mode = store.engine_mode();
+    if (!file_mode && store.counts().second > 0) file_mode = ch11;
+    if (file_mode && *file_mode != run_mode) {
+        auto rule_name = [&](const std::string& mode) {
+            return mode == ch10 ? "Clone Hero 1.0" : mode == ch11 ? "Clone Hero 1.1"
+                                                                  : "unknown";
+        };
+        std::fprintf(stderr,
+                     "This database holds results scored by the %s fill rule "
+                     "(engine_mode=%s):\n  %s\n"
+                     "This run scores by the %s rule. The rule is not stored on each "
+                     "result, so the two cannot share a file.\n"
+                     "%s --legacy-fills to write into this database, or give this run "
+                     "its own database with --db.\n",
+                     rule_name(*file_mode), file_mode->c_str(), db.c_str(),
+                     rule_name(run_mode), legacy_fills ? "Drop" : "Add");
+        return 2;
+    }
+    // Stamp the file with the rule this run used, so hydra_fillcompare can tell
+    // a 1.0 database from a 1.1 one.
+    store.set_engine_mode(run_mode);
 
     std::vector<std::string> folders =
         folder_args.empty() ? settings.chartfolders : folder_args;
@@ -174,7 +201,18 @@ int main(int argc, char** argv) {
     for (const std::string& f : folders) std::printf("    %s\n", f.c_str());
 
     std::printf("\nDiscovering charts...\n");
-    auto [scanitems, folder_errors] = hydra::app::discover_charts(folders);
+    // The GUI's last library scan, if this database has one. A chart whose
+    // files are unchanged (size and modified time) reuses its hash and song
+    // fields instead of being read again. hydra_batch only reads this cache;
+    // it never rewrites the GUI's library.
+    hydra::store::ChartLibraryCache cache;
+    try {
+        cache = store.chart_library_cache();
+    } catch (const std::exception&) {
+        // No cache is only a slower scan.
+    }
+    auto [scanitems, folder_errors] = hydra::app::discover_charts(
+        folders, hydra::app::ScanCallbacks{}, cache.empty() ? nullptr : &cache);
     for (const std::string& err : folder_errors) std::printf("  ! %s\n", err.c_str());
     std::printf("Found %zu charts.\n\n", scanitems.size());
 

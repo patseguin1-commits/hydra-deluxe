@@ -418,3 +418,24 @@ target_include_directories(hydra_replay PRIVATE tests third_party/json)
 target_compile_definitions(hydra_replay PRIVATE
     HYDRA_INPUT_DIR="${CMAKE_SOURCE_DIR}/testdata/input"
 )
+
+# ---- CLI end-to-end tests ------------------------------------------------
+# tests/test_cli.cpp runs the three console tools as real processes, so
+# building the tests builds the tools first and tells the tests where they are.
+target_sources(hydra_tests PRIVATE tests/test_cli.cpp)
+add_dependencies(hydra_tests hydra_batch hydra_report hydra_fillcompare)
+target_compile_definitions(hydra_tests PRIVATE
+    HYDRA_BATCH_EXE="$<TARGET_FILE:hydra_batch>"
+    HYDRA_REPORT_EXE="$<TARGET_FILE:hydra_report>"
+    HYDRA_FILLCOMPARE_EXE="$<TARGET_FILE:hydra_fillcompare>"
+)
+
+# ---- hydra_replay_json: the dump/target JSON shapes (tools only) ----------
+# hydra_replay writes and reads these, and tests/test_replay pins them. The
+# app never reads a path as JSON, so this stays out of hydra_core, and core/
+# stays free of the JSON library.
+add_library(hydra_replay_json STATIC tools/replay_json.cpp)
+target_include_directories(hydra_replay_json PUBLIC tools third_party/json)
+target_link_libraries(hydra_replay_json PUBLIC hydra_core PRIVATE hydra_warnings)
+target_link_libraries(hydra_replay PRIVATE hydra_replay_json)
+target_link_libraries(hydra_tests PRIVATE hydra_replay_json)

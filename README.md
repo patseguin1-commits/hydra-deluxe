@@ -37,8 +37,9 @@ you really want them gone. Moving from a zip install? Copy your old
 
 ## Command line tools
 
-Two console tools ship next to the app and share its settings and database
-(they read the same `hydra_settings.ini` / `hydra.db` beside the executable):
+Three console tools ship next to the app. They share its settings, rules and
+database: they read the same `hydra_settings.ini`, `hydra_rules.ini` and
+`hydra.db` beside the executable.
 
 ```
 hydra_batch                    Analyze every chart folder from the app's settings
@@ -46,16 +47,40 @@ hydra_batch <folder> [...]     ...or specific folders instead
 hydra_batch --redo             Re-analyze charts already stored
 hydra_batch --reindex          Only rebuild sort columns, no analysis
 hydra_batch --db <path>        Target a specific database
+hydra_batch --rules <path>     Take the rule choices from this file, not hydra_rules.ini
+hydra_batch --legacy-fills     Score fills by Clone Hero 1.0's rule (needs its own --db)
 
 hydra_report                   Sortable HTML report of stored paths (top 5 per chart)
 hydra_report --paths 20        Top 20 per chart
 hydra_report --all-paths       Everything stored
 hydra_report --out report.html
+hydra_report --db <path>       Report on a specific database
+hydra_report --rules <path>    Judge records against the rules in this file
 hydra_report --no-open         Write the file without opening the browser
+
+hydra_fillcompare --old <ch10.db> --new <ch11.db>
+                               Compare Clone Hero 1.0 and 1.1 fill results, chart by chart
+hydra_fillcompare ... --out fill_compare.html
+hydra_fillcompare ... --rules <path>
+hydra_fillcompare ... --no-open
 ```
 
-Both read the app's settings file, so they analyze and report at the same
-chart mode and SP cap the app is set to.
+All three read the app's settings file, so they analyze, report and compare
+at the same chart mode, SP cap, timing limit and score range the app is set to.
+
+Clone Hero 1.1 changed when a drum fill appears. `--legacy-fills` scores by
+the older 1.0 rule instead. The rule is not stored on each result, so a 1.0
+run needs its own database, and hydra_batch refuses to write one into Hydra's
+own `hydra.db`. Each database is stamped with the rule that filled it, and
+hydra_batch refuses (exit code 2) a run whose rule disagrees with the stamp.
+`--reindex` never changes the stamp. To see what the rule change did, fill two
+databases and compare them:
+
+```
+hydra_batch --legacy-fills --db ch10.db
+hydra_batch --db ch11.db
+hydra_fillcompare --old ch10.db --new ch11.db
+```
 
 ## Building from source
 
