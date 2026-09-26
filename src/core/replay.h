@@ -201,7 +201,7 @@ struct PathReplay {
     std::vector<ReplayWindow> windows;  // windows_for_path
     ReplayResult result;
     ReplayScore stored;                 // score_of(path)
-    size_t activations = 0;             // path.all_activations().size()
+    size_t activations = 0;             // path.walk_activations().size()
 
     // Every activation became a window.
     bool all_windows() const { return windows.size() == activations; }

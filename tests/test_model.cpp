@@ -174,6 +174,45 @@ TEST_CASE("Path pathstring and pathstring_verbose") {
           "(No mult squeezes.) | (No activations.) | Score: 0");
 }
 
+// walk_activations reads a path's activations in place: its own, then the
+// tail it shares with its parent, in that order, and copies nothing.
+TEST_CASE("Path::walk_activations: own activations then the variant tail, in place") {
+    Path p;
+    Activation a1, a2, t1;
+    a1.skips = 0;
+    a2.skips = 1;
+    t1.skips = 2;
+    p.activations = {a1, a2};
+    p.variant_tail = {t1};
+
+    const ActivationWalk walk = p.walk_activations();
+    REQUIRE(walk.size() == 3);
+    CHECK_FALSE(walk.empty());
+    // In place: each element is the very object in the path, not a copy.
+    CHECK(&walk[0] == &p.activations[0]);
+    CHECK(&walk[1] == &p.activations[1]);
+    CHECK(&walk[2] == &p.variant_tail[0]);
+    CHECK(&walk.front() == &p.activations[0]);
+    CHECK(&walk.back() == &p.variant_tail[0]);
+
+    // A range-for visits the same objects in the same order.
+    std::vector<const Activation*> seen;
+    for (const Activation& a : walk) seen.push_back(&a);
+    CHECK(seen == std::vector<const Activation*>{&p.activations[0], &p.activations[1],
+                                                 &p.variant_tail[0]});
+
+    // The same sequence the copying all_activations() hands out.
+    const std::vector<Activation> copied = p.all_activations();
+    REQUIRE(copied.size() == walk.size());
+    for (size_t i = 0; i < copied.size(); ++i) CHECK(*copied[i].skips == *walk[i].skips);
+
+    // Nothing on either side.
+    Path none;
+    const ActivationWalk nothing = none.walk_activations();
+    CHECK(nothing.empty());
+    CHECK(nothing.begin() == nothing.end());
+}
+
 // Backend rows past a squeezed-out note are impossible in game: the sqout note
 // is hit after SP ends, so every note after it is hit outside SP too. The
 // engine trims them at record build; this pins the display-layer guard that

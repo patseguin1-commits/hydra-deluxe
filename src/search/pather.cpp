@@ -138,7 +138,7 @@ std::vector<Path> search_target(const Song& song, const SearchSettings& settings
     // activations than asked for. That is still an unrealizable set, so it
     // reports as one.
     for (const Path& p : paths) {
-        const std::vector<Activation> acts = p.all_activations();
+        const ActivationWalk acts = p.walk_activations();
         if (acts.size() != ticks.size()) return {};
         for (size_t i = 0; i < acts.size(); ++i) {
             if (!acts[i].timecode || acts[i].timecode->ticks() != ticks[i])

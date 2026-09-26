@@ -416,7 +416,7 @@ bool ends_with(const std::string& s, const std::string& suffix) {
 
 PathSummary summarize_path(const Path& path) {
     PathSummary s;
-    std::vector<Activation> acts = path.all_activations();
+    const ActivationWalk acts = path.walk_activations();
 
     s.score = path.totalscore();
     s.actcount = static_cast<int>(acts.size());
