@@ -32,6 +32,7 @@
 #include <mutex>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <string>
 #include <vector>
@@ -234,6 +235,15 @@ struct DynamicsKey {
     bool pro = false;
 };
 
+// One dynamics count ready to store: its key, its encoded blob and its count
+// stamp (app::kDynamicsCountVersion). Built off the store by
+// app::dynamics_entry_from_analysis, saved by RecordStore::save_analysis.
+struct DynamicsEntry {
+    DynamicsKey key;
+    std::vector<uint8_t> blob;
+    int count_version = 0;
+};
+
 class RecordStore {
 public:
     // dbpath may be ":memory:" for an ephemeral store (used by tests). A db
@@ -262,6 +272,15 @@ public:
     void add_record(const RecordKey& key, const HydraRecord& record);
     void add_row(const PreparedRow& row);
 
+    // One analyzed chart, saved in one transaction: the song's row (as
+    // add_song), the result (as add_row) and, when given, its dynamics count
+    // (as put_dynamics). A failure in the first two rolls all of it back. A
+    // failed dynamics write is dropped on its own and never blocks the result.
+    void save_analysis(const std::string& hyhash, const std::string& ref_name,
+                       const std::string& ref_artist, const std::string& ref_charter,
+                       const Song& song, const PreparedRow& row,
+                       const std::optional<DynamicsEntry>& dynamics);
+
     // Stores a dynamics-breakdown blob (INSERT OR REPLACE) under the caller's
     // count stamp (app::kDynamicsCountVersion; go through app::save_dynamics).
     void put_dynamics(const DynamicsKey& key, const std::vector<uint8_t>& blob,
@@ -276,6 +295,13 @@ public:
     // The row's status and best-path string, without touching the blob.
     // Always returns a value; bestpath is set only when status is Ready.
     SummaryLookup get_summary(const RecordKey& key);
+
+    // get_summary for many charts at once, in one query: one answer per
+    // entry of `hyhashes`, in the same order (a repeated hash gets the same
+    // answer twice). What a library page asks for.
+    std::vector<SummaryLookup> get_summaries(const std::vector<std::string>& hyhashes,
+                                             const std::string& chartmode,
+                                             const CapQuery& cap, const Lens& lens);
 
     // The row's status and, when Ready, the full record -- inflated and with
     // its timecodes restored against the song's tempo map, which comes back
@@ -292,6 +318,11 @@ public:
     // lens both -- the "skip, already analyzed" test for a batch run. Stale
     // rows don't count, and neither does a result from different settings.
     bool has_record(const RecordKey& key);
+
+    // Every chart has_record would say yes to, for one chart mode, cap and
+    // lens, in one query: the batch's skip list for the whole library.
+    std::unordered_set<std::string> analyzed_hashes(const std::string& chartmode,
+                                                    const CapQuery& cap, const Lens& lens);
 
     // One record's song identity, as yielded by for_each_blob: the song's
     // metadata row, plus the row's
@@ -397,6 +428,14 @@ private:
     // The song's raw tempomap blob, read under the lock; the caller decodes it
     // with no lock held. nullopt if the song isn't registered.
     std::optional<std::vector<uint8_t>> read_tempomap(const std::string& hyhash);
+    // The bodies of add_song, add_row and put_dynamics. The caller holds the
+    // lock; write_row also needs an open transaction.
+    void upsert_song(const std::string& hyhash, const std::string& ref_name,
+                     const std::string& ref_artist, const std::string& ref_charter,
+                     const std::vector<uint8_t>& tempomap);
+    void write_row(const PreparedRow& row);
+    void insert_dynamics(const DynamicsKey& key, const std::vector<uint8_t>& blob,
+                         int count_version);
     // Every path node one result references, keyed by hash — what
     // path_codec::rebuild_record's lookup closure reads. The `stmt` overload
     // reads through a statement its caller compiled: for_each_blob prepares one

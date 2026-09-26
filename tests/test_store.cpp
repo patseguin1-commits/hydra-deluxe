@@ -22,6 +22,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "core/model.h"
@@ -1588,4 +1589,124 @@ TEST_CASE("has_record and a lookup agree on which rows are readable") {
 // "SQLITE_ENABLE_FTS5=0" compiled full-text search in. Hydra never uses it.
 TEST_CASE("the vendored SQLite is built without FTS5") {
     CHECK(sqlite3_compileoption_used("ENABLE_FTS5") == 0);
+}
+
+// ---- store speed (2026-09-26 audit, Task 9) --------------------------------
+
+TEST_CASE("a file store runs in WAL mode with an index on chart names") {
+    // WAL: a commit appends to a log instead of rewriting the file in place,
+    // so it costs far fewer disk syncs (https://www.sqlite.org/wal.html).
+    // The journal mode is stored in the file, so a fresh connection sees it.
+    const std::string path = temp_db("wal");
+    std::remove(path.c_str());
+    { RecordStore store(path); }
+    sqlite3* db = nullptr;
+    REQUIRE(sqlite3_open(path.c_str(), &db) == SQLITE_OK);
+    sqlite3_stmt* s = nullptr;
+    REQUIRE(sqlite3_prepare_v2(db, "PRAGMA journal_mode", -1, &s, nullptr) == SQLITE_OK);
+    REQUIRE(sqlite3_step(s) == SQLITE_ROW);
+    const std::string mode = reinterpret_cast<const char*>(sqlite3_column_text(s, 0));
+    sqlite3_finalize(s);
+    sqlite3_close(db);
+    CHECK(mode == "wal");
+    CHECK(scalar(path, "SELECT COUNT(*) FROM sqlite_master"
+                       " WHERE type='index' AND name='charts_by_name'") == 1);
+    std::remove(path.c_str());
+}
+
+TEST_CASE("save_analysis writes the song, the result and the count together") {
+    RecordStore store(":memory:");
+    const RecordKey key{"h", "mode", CapQuery::at(4)};
+    const DynamicsEntry count{DynamicsKey{"h", "Expert", true}, {1, 2, 3}, 7};
+    store.save_analysis("h", "Song", "Artist", "Charter", fixture().song,
+                        prepare_row(key, at_cap(4)), count);
+    CHECK(store.counts() == std::pair<int64_t, int64_t>{1, 1});
+    CHECK(store.get_record(key).status == RecordStatus::Ready);
+    CHECK(store.get_dynamics(count.key, 7) == std::optional<std::vector<uint8_t>>(count.blob));
+
+    // No count (the parse dropped the 2x kicks): the song and result still land.
+    const RecordKey key2{"h2", "mode", CapQuery::at(4)};
+    store.save_analysis("h2", "Song 2", "Artist", "Charter", fixture().song,
+                        prepare_row(key2, at_cap(4)), std::nullopt);
+    CHECK(store.get_record(key2).status == RecordStatus::Ready);
+    CHECK(store.counts().first == 2);
+}
+
+TEST_CASE("a save_analysis that fails leaves nothing behind") {
+    // A trigger that refuses one chart's result makes the save fail after
+    // the song row went in. One transaction means the song row goes back out.
+    const std::string path = temp_db("save_fail");
+    std::remove(path.c_str());
+    { RecordStore store(path); }
+    exec_on_file(path,
+                 "CREATE TRIGGER refuse_boom BEFORE INSERT ON results WHEN NEW.hyhash = 'boom'"
+                 " BEGIN SELECT RAISE(ABORT, 'boom'); END;");
+    {
+        RecordStore store(path);
+        const RecordKey boom{"boom", "mode", CapQuery::at(4)};
+        CHECK_THROWS(store.save_analysis("boom", "Song", "Artist", "Charter", fixture().song,
+                                         prepare_row(boom, at_cap(4)), std::nullopt));
+        CHECK(store.counts().first == 0);
+        // The store is still usable: no transaction was left open.
+        const RecordKey ok{"ok", "mode", CapQuery::at(4)};
+        store.save_analysis("ok", "Song", "Artist", "Charter", fixture().song,
+                            prepare_row(ok, at_cap(4)), std::nullopt);
+        CHECK(store.get_record(ok).status == RecordStatus::Ready);
+    }
+    std::remove(path.c_str());
+}
+
+TEST_CASE("analyzed_hashes names exactly the charts has_record would skip") {
+    RecordStore store(":memory:");
+    const std::vector<const char*> charts = {"ready", "stale", "other_lens", "other_cap",
+                                             "other_mode"};
+    for (const char* h : charts) store.add_song(h, h, "Artist", "Charter", fixture().song);
+    store.add_record(RecordKey{"ready", "mode", CapQuery::at(4)}, at_cap(4));
+    PreparedRow stale = prepare_row(RecordKey{"stale", "mode", CapQuery::at(4)}, at_cap(4));
+    stale.hyversion = "0.0.0";
+    store.add_row(stale);
+    store.add_record(RecordKey{"other_lens", "mode", CapQuery::at(4), kLensB}, at_cap(4));
+    store.add_record(RecordKey{"other_cap", "mode", CapQuery::at(8)}, at_cap(8));
+    store.add_record(RecordKey{"other_mode", "other", CapQuery::at(4)}, at_cap(4));
+
+    for (const CapQuery& cap : {CapQuery::at(4), CapQuery::at(8), CapQuery::automatic()}) {
+        const std::unordered_set<std::string> got = store.analyzed_hashes("mode", cap, Lens{});
+        for (const char* h : charts) {
+            INFO(h);
+            CHECK((got.count(h) == 1) == store.has_record(RecordKey{h, "mode", cap}));
+        }
+    }
+    CHECK(store.analyzed_hashes("mode", CapQuery::at(4), Lens{}) ==
+          std::unordered_set<std::string>{"ready"});
+}
+
+TEST_CASE("get_summaries answers a page the same as get_summary row by row") {
+    RecordStore store(":memory:");
+    for (const char* h : {"ready", "stale", "none", "two_caps"})
+        store.add_song(h, h, "Artist", "Charter", fixture().song);
+    store.add_record(RecordKey{"ready", "mode", CapQuery::at(4)}, at_cap(4));
+    PreparedRow stale = prepare_row(RecordKey{"stale", "mode", CapQuery::at(4)}, at_cap(4));
+    stale.hyversion = "0.0.0";
+    store.add_row(stale);
+    store.add_record(RecordKey{"two_caps", "mode", CapQuery::at(32)}, at_cap(32));
+    store.add_record(RecordKey{"two_caps", "mode", CapQuery::at(16)}, at_cap(16));
+
+    // "ready" twice: a page can list the same chart from two folders.
+    const std::vector<std::string> page = {"ready", "stale", "none", "two_caps", "ready"};
+    for (const CapQuery& cap : {CapQuery::at(4), CapQuery::automatic()}) {
+        const std::vector<SummaryLookup> got = store.get_summaries(page, "mode", cap, Lens{});
+        REQUIRE(got.size() == page.size());
+        for (size_t i = 0; i < page.size(); ++i) {
+            INFO(page[i]);
+            // Compared with get_record, not get_summary, which this task
+            // rebuilds on top of get_summaries. Every Ready row here holds
+            // the fixture's paths, so its best path is the fixture's.
+            const RecordLookup one = store.get_record(RecordKey{page[i], "mode", cap});
+            CHECK(got[i].status == one.status);
+            CHECK(got[i].bestpath == (one.status == RecordStatus::Ready
+                                          ? fixture().record.best_path().pathstring()
+                                          : std::string()));
+        }
+    }
+    CHECK(store.get_summaries({}, "mode", CapQuery::at(4), Lens{}).empty());
 }

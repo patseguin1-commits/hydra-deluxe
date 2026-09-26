@@ -38,6 +38,7 @@
 #include <memory>
 #include <optional>
 #include <process.h>
+#include <sqlite3.h>
 #include <string>
 #include <vector>
 
@@ -435,19 +436,34 @@ std::string snapshot_db(const std::string& src) {
         (tmp / ("hydra_replay_snapshot_" + std::to_string(_getpid()) + ".db"))
             .string();
 
-    std::ifstream in(src, std::ios::binary);
-    if (!in) throw std::runtime_error("cannot read database: " + src);
-    std::ofstream out(dst, std::ios::binary | std::ios::trunc);
-    if (!out)
+    // SQLite's own backup, not a file copy. The database runs in WAL mode, so
+    // recent commits can sit in the -wal file beside it until a checkpoint,
+    // and a copy of the main file alone would miss them. The backup reads
+    // through SQLite and gets one consistent snapshot, whatever the app is
+    // doing (https://www.sqlite.org/backup.html).
+    sqlite3* from = nullptr;
+    if (sqlite3_open_v2(src.c_str(), &from, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+        sqlite3_close(from);
+        throw std::runtime_error("cannot read database: " + src);
+    }
+    std::remove(dst.c_str());
+    sqlite3* to = nullptr;
+    if (sqlite3_open(dst.c_str(), &to) != SQLITE_OK) {
+        sqlite3_close(to);
+        sqlite3_close(from);
         throw std::runtime_error(
             "cannot make a snapshot of the database (cannot write " + dst +
             "); refusing to open the live database " + src);
-    out << in.rdbuf();
-    if (!out)
+    }
+    sqlite3_backup* backup = sqlite3_backup_init(to, "main", from, "main");
+    const int rc = backup ? sqlite3_backup_step(backup, -1) : SQLITE_ERROR;
+    sqlite3_backup_finish(backup);
+    sqlite3_close(to);
+    sqlite3_close(from);
+    if (rc != SQLITE_DONE)
         throw std::runtime_error(
             "cannot make a snapshot of the database (copy to " + dst +
             " failed); refusing to open the live database " + src);
-    out.close();
     std::printf("(read from a snapshot at %s)\n", dst.c_str());
     return dst;
 }

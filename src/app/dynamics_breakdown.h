@@ -99,13 +99,13 @@ std::string dynamics_cache_key(const std::string& notespath, bool pro, Difficult
 // The stored-row key for one count.
 store::DynamicsKey dynamics_store_key(const std::string& md5, Difficulty difficulty, bool pro);
 
-// After an analysis, store its dynamics counts as a free by-product (the
-// chart is already parsed). Stores only when the analysis parsed with bass2x
-// on: with it off the parse dropped the 2x kicks and the counts would be
-// incomplete. Best effort: a failed save is swallowed so it can never block
-// the analysis record.
-void store_dynamics_from_analysis(store::RecordStore& store, const std::string& md5,
-                                  const Song& song, bool bass2x, Difficulty difficulty, bool pro);
+// After an analysis, its dynamics count as a free by-product (the chart is
+// already parsed), ready for RecordStore::save_analysis. nullopt when the
+// analysis parsed with bass2x off (the parse dropped the 2x kicks and the
+// counts would be incomplete) or the count fails: best effort, never a reason
+// to lose the analysis record.
+std::optional<store::DynamicsEntry> dynamics_entry_from_analysis(
+    const std::string& md5, const Song& song, bool bass2x, Difficulty difficulty, bool pro);
 
 }  // namespace app
 }  // namespace hydra
