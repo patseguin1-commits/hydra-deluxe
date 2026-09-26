@@ -206,9 +206,6 @@ struct OutAct {
     int64_t clamp_tick;
     // The phrases collected while active: out_cols_[col_begin, col_end).
     int32_t col_begin, col_end;
-    // Reserved for the squeezed-out phrase; rebuild() stamps the Activation's
-    // sqout_tick from the deact edge, so this stays NO_TIME.
-    int64_t sqout_tick;
 };
 struct OutSq {
     int32_t kind;
@@ -318,7 +315,7 @@ private:
         v.soloscore = (int32_t)o->soloscore;
         v.accentscore = (int32_t)o->accentscore;
         v.ghostscore = (int32_t)o->ghostscore;
-        v.frontend_points = o->frontend.has_value() ? o->frontend->points : 0;
+        v.frontend_points = o->frontend_points;
         v.late_sqin_count = o->late_sqin_count;
         v.activation_fill_deadline_ms =
             o->activation_fill_deadline_ms.value_or(0.0);
@@ -980,7 +977,6 @@ void Engine::emit_acts(int32_t act_tail, int64_t sp_end_time,
         oa.sq_end = (int32_t)out_sqs_.size();
         oa.final_sp_end = NO_TIME;
         oa.clamp_tick = a.clamp_tick;
-        oa.sqout_tick = NO_TIME;
         emit_cols(a.col_tail, &oa.col_begin, &oa.col_end);
         out_acts_.push_back(oa);
     }
@@ -1219,7 +1215,7 @@ std::vector<MPath> rebuild(const Enum& en, const std::vector<OutPath>& out_paths
             act.timecode = node->timecode;
             act.chord = node->chord;
             act.sp_meter = oa.sp_meter;
-            act.frontend_points = node->branch_edge->frontend->points;
+            act.frontend_points = node->branch_edge->frontend_points;
             act.e_offset = oa.e_offset;
             if (oa.deact_edge >= 0) {
                 act.backends = en.edges[(size_t)oa.deact_edge]->backends;

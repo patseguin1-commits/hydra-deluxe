@@ -46,11 +46,9 @@ enum class NoteDynamicType { Normal = 1, Ghost = 2, Accent = 3 };
 enum class NoteCymbalType { Normal = 1, Cymbal = 2 };
 
 bool allows_cymbals(NoteColor c);
-bool allows_dynamics(NoteColor c);
 std::string color_str(NoteColor c);         // "Kick"/"Red"/...
 std::string dynamic_str(NoteDynamicType t); // "none"/"ghost"/"accent"
 std::string color_notationstr(NoteColor c); // "K"/"R"/"Y"/"B"/"G"
-NoteCymbalType cymbal_flip(NoteCymbalType t);
 
 // ---- squeeze thresholds -------------------------------------------------
 // One home for the ms thresholds that define squeeze semantics. Each used to
@@ -199,14 +197,6 @@ struct SPSqueeze {
         return kind == SqueezeKind::SqIn ? "SqIn" : "SqOut";
     }
     std::string description() const;
-};
-
-struct FrontendSqueeze {
-    Chord chord;
-    int points = 0;
-    bool operator==(const FrontendSqueeze& o) const {
-        return chord == o.chord && points == o.points;
-    }
 };
 
 struct BackendSqueeze {

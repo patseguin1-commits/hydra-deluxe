@@ -271,7 +271,6 @@ TEST_CASE("a ghost or accent kick scores double, like a pad") {
     CHECK(ChordNote{NoteColor::Kick, NoteDynamicType::Ghost,
                     NoteCymbalType::Normal, true}
               .basescore() == 100);
-    CHECK(allows_dynamics(NoteColor::Kick));
 }
 
 TEST_CASE("ChordNote::str shows the kick's dynamic and its 2x flag") {

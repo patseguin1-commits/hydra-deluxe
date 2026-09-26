@@ -175,10 +175,8 @@ ReplayScore score_of(const Path& path) {
     return s;
 }
 
-// The song is no longer consulted: the deact node comes off the record, so
-// there is nothing left to rebuild from the chart. The parameter stays so
-// callers read the same, and so a future window rule can use it.
-std::vector<ReplayWindow> windows_for_path(const Path& path, const Song&) {
+// The deact node comes off the record, so the chart is not consulted.
+std::vector<ReplayWindow> windows_for_path(const Path& path) {
     std::vector<ReplayWindow> out;
     for (const Activation& act : path.walk_activations()) {
         if (!act.timecode || !act.deact_tick) continue;
@@ -200,7 +198,7 @@ std::vector<ReplayWindow> windows_for_path(const Path& path, const Song&) {
 PathReplay replay_stored_path(const Song& song, const Path& path,
                               const core::Rules& rules) {
     PathReplay out;
-    out.windows = windows_for_path(path, song);
+    out.windows = windows_for_path(path);
     out.result = replay_path(song, out.windows, rules);
     out.stored = score_of(path);
     out.activations = path.walk_activations().size();

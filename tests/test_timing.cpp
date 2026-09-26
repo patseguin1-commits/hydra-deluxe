@@ -68,7 +68,7 @@ TEST_CASE("timing: a map without a tick-0 entry throws") {
     CHECK_THROWS_AS(hydra::MsIndex(bpm, 480), std::out_of_range);
 
     std::map<int64_t, int64_t> tpm{{480, 1920}};
-    CHECK_THROWS_AS(hydra::MeasureIndex(tpm, 480), std::out_of_range);
+    CHECK_THROWS_AS(hydra::MeasureIndex{tpm}, std::out_of_range);
 }
 
 TEST_CASE("timing: a tick before the first tempo mark reads at the opening tempo") {
@@ -86,7 +86,7 @@ TEST_CASE("timing: a meter change off a barline carries a partial measure") {
     // section begins mid-measure, so its measure count is the whole measures
     // counted so far (1), not 1.5.
     std::map<int64_t, int64_t> tpm{{0, 1920}, {2880, 960}};
-    hydra::MeasureIndex mi(tpm, 480);
+    hydra::MeasureIndex mi(tpm);
     CHECK(mi.section_at(0) == 0);
     CHECK(mi.section_at(1919) == 0);
     CHECK(mi.section_at(2880) == 0);   // exactly on the boundary -> prior section

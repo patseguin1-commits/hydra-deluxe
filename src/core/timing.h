@@ -64,7 +64,7 @@ private:
 // Built from a tpm map (tick -> ticks-per-measure).
 class MeasureIndex {
 public:
-    MeasureIndex(const std::map<int64_t, int64_t>& tpm_map, int64_t tick_r);
+    explicit MeasureIndex(const std::map<int64_t, int64_t>& tpm_map);
 
     // Which section a tick is measured in (a tick exactly on a boundary is
     // measured with the section before it).

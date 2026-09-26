@@ -83,9 +83,7 @@ double MsIndex::tick_at_ms(double ms) const {
 
 // ---- MeasureIndex -------------------------------------------------------
 
-MeasureIndex::MeasureIndex(const std::map<int64_t, int64_t>& tpm_map,
-                           int64_t tick_r) {
-    (void)tick_r;  // The meter index does not use resolution; kept for parity.
+MeasureIndex::MeasureIndex(const std::map<int64_t, int64_t>& tpm_map) {
     if (tpm_map.find(0) == tpm_map.end())
         throw std::out_of_range("tpm map has no tick-0 entry");
 
@@ -147,7 +145,7 @@ Timecode::Timecode(int64_t ticks, int64_t tick_r,
 SongTiming::SongTiming(int64_t tick_r,
                        const std::map<int64_t, int64_t>& tpm_map,
                        const std::map<int64_t, double>& bpm_map)
-    : tick_r_(tick_r), mbt_(tpm_map, tick_r), ms_(bpm_map, tick_r) {}
+    : tick_r_(tick_r), mbt_(tpm_map), ms_(bpm_map, tick_r) {}
 
 namespace {
 // bisect.bisect_left(a, x, lo): leftmost insert position >= lo.

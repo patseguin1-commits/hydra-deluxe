@@ -79,7 +79,6 @@ ScoreGraph::ScoreGraph(const Song& song, std::optional<int> sp_meter_cap,
     start_ = new_node(song_.start_time(), false);
     base_track_head_ = start_;
     sp_track_head_ = new_node(song_.start_time(), true);
-    sp_start_ = sp_track_head_;
     proto_base_edge_ = new_edge();
     proto_sp_edge_ = new_edge();
     sp_phrase_count_ = song.sp_phrase_count();
@@ -165,14 +164,13 @@ void ScoreGraph::build() {
                 deact_heap_.push_back(kv.second);
             std::make_heap(deact_heap_.begin(), deact_heap_.end(), cmp);
 
-            proto_base_edge_->sp_times.push_back({timestamp.timecode, ext_map});
-            proto_sp_edge_->sp_times.push_back({timestamp.timecode, ext_map});
+            proto_base_edge_->sp_times.push_back({timestamp.timecode, {}});
+            proto_sp_edge_->sp_times.push_back({timestamp.timecode, std::move(ext_map)});
         }
 
         if (timestamp.has_activation()) {
             advance_tracks(timestamp.timecode, timestamp.chord);
-            ScoreGraphEdge* act_edge = add_act_edge(
-                timestamp.chord, sg.sp, *timestamp.activation_length);
+            ScoreGraphEdge* act_edge = add_act_edge(sg.sp, *timestamp.activation_length);
 
             for (const auto& kv : act_edge->activation_initial_end_times) {
                 const Timecode& end_time = kv.second;
@@ -289,7 +287,6 @@ bool ScoreGraph::is_recent_to_head(const Timecode& tc) const {
 
 void ScoreGraph::set_head_time(const Timecode& tc) {
     head_time_ = tc;
-    head_time_set_ = true;
 
     std::vector<ScoreGraphEdge*> keep_edges;
     for (ScoreGraphEdge* edge : recent_deact_edges_)
@@ -316,8 +313,6 @@ void ScoreGraph::advance_tracks(const Timecode& tc,
                                 const std::optional<Chord>& chord) {
     if (base_track_head_->timecode.ticks() >= tc.ticks()) return;
 
-    length_ += 1;
-
     proto_base_edge_->dest = new_node(tc, false);
     proto_sp_edge_->dest = new_node(tc, true);
     proto_base_edge_->dest->chord = chord;
@@ -333,13 +328,11 @@ void ScoreGraph::advance_tracks(const Timecode& tc,
     sp_track_head_ = sp_track_head_->adv_edge->dest;
 }
 
-ScoreGraphEdge* ScoreGraph::add_act_edge(const Chord& frontend_chord,
-                                         int frontend_points,
-                                         int64_t fill_length_ticks) {
+ScoreGraphEdge* ScoreGraph::add_act_edge(int frontend_points, int64_t fill_length_ticks) {
     ScoreGraphEdge* act_edge = new_edge();
     act_edge->dest = sp_track_head_;
 
-    act_edge->frontend = FrontendSqueeze{frontend_chord, frontend_points};
+    act_edge->frontend_points = frontend_points;
 
     act_edge->activation_fill_deadline_ms = activation_fill_deadline_ms(
         song_.timing(), act_edge->dest->timecode.ticks(), fill_length_ticks,

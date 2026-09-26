@@ -192,7 +192,7 @@ ReplayScore score_of(const Path& path);
 // stored sqout_tick (a record from before v6), so a path that yields fewer
 // windows than it has activations cannot be replayed faithfully.
 // replay_stored_path below checks that before a score is trusted.
-std::vector<ReplayWindow> windows_for_path(const Path& path, const Song& song);
+std::vector<ReplayWindow> windows_for_path(const Path& path);
 
 // A stored path replayed, with the two checks that say whether the replay
 // stands for it. The one place those checks live: hydra_replay's selfcheck,
