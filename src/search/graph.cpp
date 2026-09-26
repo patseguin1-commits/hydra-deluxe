@@ -111,11 +111,8 @@ void ScoreGraph::build() {
 
         CategoryScores sg = category_scores(timestamp.chord, combo_, nullptr, rules_.sqout_rule);
 
-        try {
-            MultSqueeze msq(timestamp.chord, combo_);
-            store_multsqueeze(msq);
-        } catch (const std::invalid_argument&) {
-        }
+        if (MultSqueeze::applies(timestamp.chord, combo_))
+            store_multsqueeze(MultSqueeze(timestamp.chord, combo_));
 
         store_basescore(sg.base);
         store_comboscore(sg.combo);

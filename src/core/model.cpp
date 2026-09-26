@@ -342,25 +342,24 @@ MultSqueeze::MultSqueeze(Chord chord, int combo)
 // against to_multiplier. For 4-note chords only combos 7, 17 and 27 are
 // accepted, and 5-note chords never are, although both also straddle from
 // other combos. Why the set stops there is not recorded; it is kept fixed.
-void MultSqueeze::validate() const {
-    switch (combo_) {
+bool MultSqueeze::applies(const Chord& chord, int combo) {
+    switch (combo) {
         case 7: case 8: case 17: case 18: case 27: case 28: break;
-        default:
-            throw std::invalid_argument("Invalid MultSqueeze combo");
+        default: return false;
     }
-    int mod = (chord_.count() + combo_) % 10;
-    if (mod != 0 && mod != 1)
-        throw std::invalid_argument("Invalid MultSqueeze chord length");
+    const int mod = (chord.count() + combo) % 10;
+    if (mod != 0 && mod != 1) return false;
 
-    std::vector<ChordNote> notes = chord_.notes();
-    bool all_same = true;
+    // A chord whose notes are all worth the same has nothing to squeeze.
+    const std::vector<ChordNote> notes = chord.notes();
     for (const ChordNote& n : notes)
-        if (n.basescore() != notes[0].basescore()) {
-            all_same = false;
-            break;
-        }
-    if (all_same)
-        throw std::invalid_argument("MultSqueeze chord has no squeezable notes");
+        if (n.basescore() != notes[0].basescore()) return true;
+    return false;
+}
+
+void MultSqueeze::validate() const {
+    if (!applies(chord_, combo_))
+        throw std::invalid_argument("not a multiplier squeeze at this combo");
 }
 
 int MultSqueeze::multiplier() const { return to_multiplier(combo_) + 1; }
