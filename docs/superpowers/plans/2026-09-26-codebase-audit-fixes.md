@@ -11418,7 +11418,7 @@ A stored record carries a lot of bytes nobody needs. The whole-record blob forma
 
 Inside the kept format, four things change. `Path::skipped_accents` and `skipped_ghosts` are never set to anything but 0, so they go, along with the two path-view warnings that read them. Each variant node stores its own six score totals, note count and leftover SP, but `prepare_variants` overwrites all eight from the parent on every load. Now only a root path's totals are stored, in the record's structure blob. The multiplier squeezes depend on the combo alone, never on the path, yet every path, variant and node carries its own copy, and the graph keeps a second copy on the SP track that nothing reads. Now the graph finds them once, the record holds one list, and the structure blob stores it once. Last, six `Activation` fields that the search always sets (`skips`, `timecode`, `chord`, `sp_meter`, `frontend_points`, `e_offset`) stop being `std::optional`, a Python-era leftover. Their stored presence bytes go with them.
 
-The node and structure format versions go from 5 to 6. The Ready rule already compares the structure version, so every older result reads Stale and the library needs one re-analysis (decision 8). This task calls the new layout "record format v7" because it follows blob format 6. In code there is no 7: the blob version constant is deleted, and the two codec versions become 6. ADR 0016 records the layout.
+The node and structure format versions go from 5 to 6. The Ready rule already compares the structure version, so every older result reads Stale and the library needs one re-analysis (decision 8). This task calls the new layout "record format v7" because it follows blob format 6. In code there is no 7: the blob version constant is deleted, and the two codec versions become 6. ADR 0017 records the layout.
 
 What the user sees: every analyzed chart shows as out of date until it is re-analyzed once. After that, every number, label and path string is the same as before. The two "skipped (unhittable)" warnings could never appear, so nothing visible goes.
 
@@ -11429,7 +11429,7 @@ What the user sees: every analyzed chart shows as out of date until it is re-ana
 **Goal:** Store each record once per chart fact: no whole-record blob, no dead per-path fields, root totals and multiplier squeezes once per record, and the six always-set activation fields as plain values, with node and structure formats at 6.
 
 **Files:**
-- Create: `docs/adr/0016-record-format-stores-chart-facts-once.md`, `tests/record_bytes.h`
+- Create: `docs/adr/0017-record-format-stores-chart-facts-once.md`, `tests/record_bytes.h`
 - Delete: `src/store/path_binary.h`, `src/store/path_binary.cpp`
 - Modify: `CMakeLists.txt`, `src/core/model.h`, `src/core/model.cpp`, `src/core/squeeze_rating.h`, `src/core/squeeze_rating.cpp`, `src/core/replay.cpp`
 - Modify: `src/search/graph.h`, `src/search/graph.cpp`, `src/search/engine.cpp`, `src/search/pather.cpp`
@@ -11444,7 +11444,7 @@ What the user sees: every analyzed chart shows as out of date until it is re-ana
 - [ ] The full `hydra_tests.exe` run prints `Status: SUCCESS!`, and `hydra_uitest.exe --all` passes.
 - [ ] This prints nothing: `Get-ChildItem src,tests,tools -Recurse -Include *.cpp,*.h | Select-String -Pattern 'write_record|read_record|write_path\b|read_path\b|kBlobFormatVersion|path_binary|skipped_accents|skipped_ghosts|collect_multsqueezes|peek_sp_cap'`
 - [ ] The score-neutral batch diff (brief recipe) prints nothing.
-- [ ] `docs/adr/0016-record-format-stores-chart-facts-once.md` exists.
+- [ ] `docs/adr/0017-record-format-stores-chart-facts-once.md` exists.
 
 **Verify:** `.\build_cpp.ps1 -Target hydra_tests; .\build-cpp\Release\hydra_tests.exe` -> `Status: SUCCESS!`
 
@@ -12284,7 +12284,7 @@ std::string path_overlay_key(const Path* path) {
 }
 ```
 
-- [ ] **Step 12: Write ADR 0016.** Create docs/adr/0016-record-format-stores-chart-facts-once.md:
+- [ ] **Step 12: Write ADR 0017.** Create docs/adr/0017-record-format-stores-chart-facts-once.md:
 
 ```markdown
 # The record format stores each chart fact once
@@ -12344,7 +12344,7 @@ Get-ChildItem src,tests,tools -Recurse -Include *.cpp,*.h | Select-String -Patte
 - [ ] **Step 14: Commit.**
 
 ```bash
-git add CMakeLists.txt docs/adr/0016-record-format-stores-chart-facts-once.md tests/record_bytes.h src/core/model.h src/core/model.cpp src/core/squeeze_rating.h src/core/squeeze_rating.cpp src/core/replay.cpp src/search/graph.h src/search/graph.cpp src/search/engine.cpp src/search/pather.cpp src/store/serialize.h src/store/serialize.cpp src/store/path_codec.h src/store/path_codec.cpp src/store/record_store.cpp src/app/path_view.h src/app/path_view.cpp src/app/preview_view.cpp src/app/report.cpp src/ui/details_view.cpp tools/replay.cpp tests/test_path_codec.cpp tests/test_store.cpp tests/test_search.cpp tests/test_model.cpp tests/test_path_view.cpp tests/test_squeeze_rating.cpp tests/test_replay.cpp tests/test_preview_view.cpp
+git add CMakeLists.txt docs/adr/0017-record-format-stores-chart-facts-once.md tests/record_bytes.h src/core/model.h src/core/model.cpp src/core/squeeze_rating.h src/core/squeeze_rating.cpp src/core/replay.cpp src/search/graph.h src/search/graph.cpp src/search/engine.cpp src/search/pather.cpp src/store/serialize.h src/store/serialize.cpp src/store/path_codec.h src/store/path_codec.cpp src/store/record_store.cpp src/app/path_view.h src/app/path_view.cpp src/app/preview_view.cpp src/app/report.cpp src/ui/details_view.cpp tools/replay.cpp tests/test_path_codec.cpp tests/test_store.cpp tests/test_search.cpp tests/test_model.cpp tests/test_path_view.cpp tests/test_squeeze_rating.cpp tests/test_replay.cpp tests/test_preview_view.cpp
 git commit -m "Record format v7: store each chart fact once
 
 Task: Task 12: Record format v7
@@ -12356,7 +12356,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   (`git rm` in Step 8 already staged the two deleted path_binary files.)
 
 ```json:metadata
-{"files":["docs/adr/0016-record-format-stores-chart-facts-once.md","tests/record_bytes.h","src/store/path_binary.h","src/store/path_binary.cpp","CMakeLists.txt","src/core/model.h","src/core/model.cpp","src/core/squeeze_rating.h","src/core/squeeze_rating.cpp","src/core/replay.cpp","src/search/graph.h","src/search/graph.cpp","src/search/engine.cpp","src/search/pather.cpp","src/store/serialize.h","src/store/serialize.cpp","src/store/path_codec.h","src/store/path_codec.cpp","src/store/record_store.cpp","src/app/path_view.h","src/app/path_view.cpp","src/app/preview_view.cpp","src/app/report.cpp","src/ui/details_view.cpp","tools/replay.cpp","tests/test_path_codec.cpp","tests/test_store.cpp","tests/test_search.cpp","tests/test_model.cpp","tests/test_path_view.cpp","tests/test_squeeze_rating.cpp","tests/test_replay.cpp","tests/test_preview_view.cpp"],"verifyCommand":".\\build_cpp.ps1 -Target hydra_tests; .\\build-cpp\\Release\\hydra_tests.exe","acceptanceCriteria":["path codec tests pass, including the three new layout tests.","A structure-format-5 row reads Stale.","The graph's multiplier squeezes equal an independent walk of the chart.","Full hydra_tests and hydra_uitest --all pass.","The deleted-names grep prints nothing.","The score-neutral batch diff prints nothing.","ADR 0016 exists."],"modelTier":"standard"}
+{"files":["docs/adr/0017-record-format-stores-chart-facts-once.md","tests/record_bytes.h","src/store/path_binary.h","src/store/path_binary.cpp","CMakeLists.txt","src/core/model.h","src/core/model.cpp","src/core/squeeze_rating.h","src/core/squeeze_rating.cpp","src/core/replay.cpp","src/search/graph.h","src/search/graph.cpp","src/search/engine.cpp","src/search/pather.cpp","src/store/serialize.h","src/store/serialize.cpp","src/store/path_codec.h","src/store/path_codec.cpp","src/store/record_store.cpp","src/app/path_view.h","src/app/path_view.cpp","src/app/preview_view.cpp","src/app/report.cpp","src/ui/details_view.cpp","tools/replay.cpp","tests/test_path_codec.cpp","tests/test_store.cpp","tests/test_search.cpp","tests/test_model.cpp","tests/test_path_view.cpp","tests/test_squeeze_rating.cpp","tests/test_replay.cpp","tests/test_preview_view.cpp"],"verifyCommand":".\\build_cpp.ps1 -Target hydra_tests; .\\build-cpp\\Release\\hydra_tests.exe","acceptanceCriteria":["path codec tests pass, including the three new layout tests.","A structure-format-5 row reads Stale.","The graph's multiplier squeezes equal an independent walk of the chart.","Full hydra_tests and hydra_uitest --all pass.","The deleted-names grep prints nothing.","The score-neutral batch diff prints nothing.","ADR 0017 exists."],"modelTier":"standard"}
 ```
 
 ---
