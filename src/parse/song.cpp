@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <unordered_map>
 
+#include "core/strutil.h"
 #include "core/winstr.h"  // read_file_bytes
 #include "parse/midi.h"
 #include "parse/sng.h"
@@ -20,14 +21,6 @@ namespace hydra {
 // ---- shared helpers -----------------------------------------------------
 
 namespace {
-
-std::string strip(const std::string& s) {
-    const char* ws = " \t\r\n\v\f";
-    size_t a = s.find_first_not_of(ws);
-    if (a == std::string::npos) return "";
-    size_t b = s.find_last_not_of(ws);
-    return s.substr(a, b - a + 1);
-}
 
 std::vector<std::string> split_ws(const std::string& s) {
     std::vector<std::string> out;
@@ -83,14 +76,6 @@ bool try_parse_int(const std::string& s, int64_t& out) {
     } catch (...) {
     }
     return false;
-}
-
-std::string ascii_casefold(const std::string& s) {
-    std::string out = s;
-    for (char& c : out)
-        c = static_cast<char>(
-            std::tolower(static_cast<unsigned char>(c)));
-    return out;
 }
 
 const std::regex& re_dynamics() {
@@ -691,8 +676,8 @@ struct ChartDataEntry {
 
 ChartDataEntry::ChartDataEntry(const std::string& keystr_in,
                                const std::string& valuestr_in) {
-    std::string keystr = strip(keystr_in);
-    std::string valuestr = strip(valuestr_in);
+    std::string keystr = trim(keystr_in);
+    std::string valuestr = trim(valuestr_in);
 
     int64_t k;
     if (try_parse_int(keystr, k))
@@ -732,7 +717,7 @@ ChartDataEntry::ChartDataEntry(const std::string& keystr_in,
     } else if (t0 == "E") {
         // Generic text event: no gameplay effect, but [Events] carries the
         // practice-section markers here.
-        std::string rest = strip(valuestr.substr(1));
+        std::string rest = trim(valuestr.substr(1));
         if (rest.size() >= 2 && rest.front() == '"' && rest.back() == '"')
             rest = rest.substr(1, rest.size() - 2);
         event_text = rest;
@@ -824,7 +809,7 @@ private:
 };
 
 void ChartParser::load_sections(const std::vector<uint8_t>& data) {
-    // Split into lines on '\n' (a trailing '\r' is removed by strip).
+    // Split into lines on '\n' (a trailing '\r' is removed by trim).
     std::vector<std::string> lines;
     std::string cur;
     for (uint8_t b : data) {
@@ -841,7 +826,7 @@ void ChartParser::load_sections(const std::vector<uint8_t>& data) {
 
     std::optional<ChartSection> wip;
     for (const std::string& raw : lines) {
-        std::string line = strip(raw);
+        std::string line = trim(raw);
         if (wip.has_value()) {
             if (line == "{") {
                 // block open
@@ -850,8 +835,8 @@ void ChartParser::load_sections(const std::vector<uint8_t>& data) {
                 wip.reset();
             } else {
                 std::vector<std::string> parts = split_char(line, '=');
-                std::string lhs = strip(parts[0]);
-                std::string rhs = parts.size() > 1 ? strip(parts[1]) : "";
+                std::string lhs = trim(parts[0]);
+                std::string rhs = parts.size() > 1 ? trim(parts[1]) : "";
                 wip->add(ChartDataEntry(lhs, rhs));
             }
         } else {

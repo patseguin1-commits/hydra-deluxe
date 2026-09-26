@@ -13,7 +13,7 @@
 
 #include "json.hpp"
 
-#include "core/strutil.h"  // lower_hex
+#include "core/strutil.h"  // to_lower_ascii
 #include "core/version.h"
 #include "core/winstr.h"
 
@@ -143,7 +143,7 @@ std::string join_charters(const json& entry) {
 
 DmScore parse_score(const json& entry, bool known) {
     DmScore s;
-    s.identifier = lower_hex(jstr(entry, "identifier"));
+    s.identifier = to_lower_ascii(jstr(entry, "identifier"));
     s.song_name = jstr(entry, "song_name");
     s.artist = jstr(entry, "artist");
     s.charter = join_charters(entry);

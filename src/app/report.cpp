@@ -201,11 +201,7 @@ std::string plain(const std::string& text) {
         ++i;
     }
 
-    // .strip()
-    size_t a = out.find_first_not_of(" \t\r\n\f\v");
-    if (a == std::string::npos) return "";
-    size_t b = out.find_last_not_of(" \t\r\n\f\v");
-    return out.substr(a, b - a + 1);
+    return trim(out);
 }
 
 std::pair<std::string, std::string> tier_for(const std::optional<double>& ms,
@@ -234,7 +230,7 @@ std::unordered_map<std::string, store::RecordListing> records_by_hash(
     for (store::RecordListing& r : store.list_records(chartmode, cap, lens,
                                                        store::SortColumn::Score,
                                                        /*descending=*/true))
-        by_hash.emplace(lower_hex(r.hyhash), std::move(r));
+        by_hash.emplace(to_lower_ascii(r.hyhash), std::move(r));
     return by_hash;
 }
 

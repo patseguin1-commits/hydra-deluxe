@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "app/analysis.h"
+#include "core/strutil.h"
 #include "json.hpp"
 
 #ifndef HYDRA_INPUT_DIR
@@ -50,9 +51,7 @@ inline const std::vector<std::string>& chart_paths() {
 // First corpus chart whose path ends in `suffix` (e.g. ".mid").
 inline std::string first_chart_with_suffix(const std::string& suffix) {
     for (const std::string& p : chart_paths()) {
-        if (p.size() > suffix.size() &&
-            p.compare(p.size() - suffix.size(), suffix.size(), suffix) == 0)
-            return p;
+        if (hydra::ends_with(p, suffix)) return p;
     }
     throw std::runtime_error("no corpus chart ends in " + suffix);
 }

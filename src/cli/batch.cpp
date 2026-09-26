@@ -42,6 +42,7 @@
 #include "app/config.h"
 #include "app/rules_file.h"
 #include "core/model.h"
+#include "core/strutil.h"
 #include "search/graph.h"
 #include "store/record_store.h"
 
@@ -72,10 +73,7 @@ bool same_file(const std::string& a, const std::string& b) {
         std::error_code ec;
         std::filesystem::path canon =
             std::filesystem::weakly_canonical(std::filesystem::u8path(p), ec);
-        std::string s = ec ? p : canon.u8string();
-        for (char& c : s)
-            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        return s;
+        return hydra::to_lower_ascii(ec ? p : canon.u8string());
     };
     return normalize(a) == normalize(b);
 }
