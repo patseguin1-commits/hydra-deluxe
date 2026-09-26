@@ -1,8 +1,7 @@
 // Comparison report: one dmleaderboards user's actual scores against Hydra's
-// computed optimal for the same charts. A parallel of app/report.h (kept
-// separate so report.h's byte-exact parity test is never disturbed): it joins
-// the fetched scores to stored records by chart-file MD5 (leaderboard
-// `identifier` == Hydra `hyhash`) and emits a self-contained sortable HTML page.
+// computed optimal for the same charts. It joins the fetched scores to stored
+// records by chart-file MD5 (leaderboard `identifier` == Hydra `hyhash`) and
+// emits a self-contained sortable HTML page on the shared report shell.
 //
 // "Above optimal" is expected, not an error: Hydra's optimal intentionally
 // excludes several score backends, and many leaderboard scores were set on an

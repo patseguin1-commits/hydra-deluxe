@@ -211,7 +211,7 @@ TEST_CASE("build_fill_html substitutes every placeholder") {
     // Both sides' paths reach the page, and the default sort is delta-first.
     CHECK(html.find("old-path-C") != std::string::npos);
     CHECK(html.find("new-path-C") != std::string::npos);
-    CHECK(html.find("let sortKey = 'delta', sortDir = -1;") != std::string::npos);
+    CHECK(html.find("sortKey: 'delta',") != std::string::npos);
 }
 
 TEST_CASE("generate_fill_report: tally and framing behind one seam") {

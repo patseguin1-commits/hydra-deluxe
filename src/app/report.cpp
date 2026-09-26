@@ -6,10 +6,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <unordered_set>
 
 #include "app/display_format.h"
 #include "app/html_page.h"
 #include "core/squeeze_rating.h"
+#include "core/strutil.h"
 #include "parse/song.h"
 
 namespace hydra::app::report {
@@ -18,36 +20,10 @@ using html::json_escape_into;
 
 namespace {
 
-// The per-page pieces of the sortable page shell; the shared skeleton lives
-// in app/html_page.cpp (html::kSortable*). Assembled, the page stays
-// byte-identical to hydra_report.py's PAGE triple-quoted string. The
-// \uXXXX sequences are literal JavaScript escapes (the Python source wrote
-// them as \uXXXX); raw strings keep them untouched.
-const char* const kTitle = R"page(<title>Hydra Path Index</title>
-<style>
-)page";
-
-const char* const kCssColumns = R"page(
-/* Every text column is capped. Left to size themselves, a full-discography
-   path string (hundreds of activations) or a charter credit carrying Clone
-   Hero colour markup stretches its column to thousands of pixels and pushes
-   score, skip and timing off the far right of the page. Hover for the full
-   value; the title attribute carries it. */
-td.trunc { overflow: hidden; text-overflow: ellipsis; }
-.song { font-weight: 550; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
-td.artist { max-width: 150px; }
-td.charter { max-width: 150px; }
-td.path { max-width: 230px; }
-.dim { color: var(--muted); }
-.path { color: var(--ink); }
-.rank { color: var(--muted); font-size: 12px; }
-.delta { color: var(--muted); font-size: 12px; }
-
-)page";
-
-const char* const kChipColors = R"page(.t0{color:var(--t0)} .t1{color:var(--t1)} .t2{color:var(--t2)}
-.t3{color:var(--t3)} .t4{color:var(--t4)} .t5{color:var(--t5)} .tn{color:var(--tn); border-color:transparent}
-)page";
+// The path report's own pieces. The stylesheet and the script that sorts,
+// filters and draws the table are shared with the other two report pages
+// (html::page_template, docs/adr/0016).
+const char* const kTitle = "Hydra Path Index";
 
 const char* const kBody = R"page(<div class="wrap">
   <header>
@@ -84,12 +60,10 @@ const char* const kBody = R"page(<div class="wrap">
 
 )page";
 
-const char* const kDataJs = R"page(<script id="data" type="application/json">__DATA__</script>
-<script>
-const DATA = JSON.parse(document.getElementById('data').textContent);
-const ROWS = DATA.rows;
-const HIT_WINDOW = DATA.hit_window;
-const BEYOND = Math.max(...DATA.tiers.filter(t => t.cutoff !== null).map(t => t.cutoff));
+// The payload is {hit_window, tiers, rows}. The tier dropdown and the
+// "Past N ms" tile read the tier table, so they always match the bands the
+// rows were labeled with.
+const char* const kPageJs = R"page(const BEYOND = Math.max(...DATA.tiers.filter(t => t.cutoff !== null).map(t => t.cutoff));
 
 // The tier dropdown mirrors the bands the rows were labeled with.
 {
@@ -104,168 +78,84 @@ const BEYOND = Math.max(...DATA.tiers.filter(t => t.cutoff !== null).map(t => t.
   }
 }
 
-const COLS = [
-  {k:'song',    t:'Song',     num:false},
-  {k:'artist',  t:'Artist',   num:false},
-  {k:'charter', t:'Charter',  num:false},
-  {k:'path',    t:'Path',     num:false},
-  {k:'score',   t:'Score',    num:true},
-  {k:'acts',    t:'Acts',     num:true},
-  {k:'skip',    t:'Max skip', num:true},
-  {k:'ms',      t:'Hardest ms', num:true},
-  {k:'tier',    t:'Timing',   num:false},
-  {k:'efill',   t:'Cal fill', num:true},
-  {k:'mult',    t:'Avg mult', num:true},
-  {k:'sqin',    t:'SqIn',     num:true},
-  {k:'sqout',   t:'SqOut',    num:true},
-  {k:'notes',   t:'Notes',    num:true},
-];
-
-let sortKey = 'score', sortDir = -1;
-
-)page";
-
-const char* const kPageJs = R"page(const fmtMs = n => n === null || n === undefined ? '—' : n.toFixed(1);
-
-function visible() {
-  const q = document.getElementById('q').value.trim().toLowerCase();
-  const tier = document.getElementById('tier').value;
-  const bestOnly = document.getElementById('bestonly').checked;
-
-  return ROWS.filter(r => {
-    if (bestOnly && r.rank !== 1) return false;
-    if (tier && r.tier !== tier) return false;
-    if (!q) return true;
-    return (r.song + ' ' + r.artist + ' ' + r.charter + ' ' + r.path).toLowerCase().includes(q);
-  });
-}
-
-function render() {
-  const rows = visible();
-  const dir = sortDir;
-  rows.sort((a, b) => {
-    let x = a[sortKey], y = b[sortKey];
-    // Nulls always sort to the bottom, whichever direction is active.
-    if (x === null || x === undefined) return 1;
-    if (y === null || y === undefined) return -1;
-    if (typeof x === 'string') return dir * x.localeCompare(y);
-    return dir * (x - y);
-  });
-
-  document.querySelectorAll('#head th').forEach((th, i) => {
-    const c = COLS[i];
-    if (c.k === sortKey) th.setAttribute('aria-sort', dir === 1 ? 'ascending' : 'descending');
-    else th.removeAttribute('aria-sort');
-    // Inactive columns keep a dim double arrow, so it is obvious every one
-    // of them can be sorted.
-    th.querySelector('.arrow').textContent =
-      c.k === sortKey ? (dir === 1 ? '\u2191' : '\u2193') : '\u21c5';
-  });
-
-  const body = document.getElementById('body');
-  body.textContent = '';
-  const frag = document.createDocumentFragment();
-
-  for (const r of rows) {
-    const tr = document.createElement('tr');
-    if (r.rank === 1) tr.className = 'best';
-
-    const cells = [
-      ['song trunc', r.song],
-      ['dim trunc artist', r.artist],
-      ['dim trunc charter', r.charter],
-      ['path mono trunc', r.path],
-      ['num', fmt(r.score)],
-      ['num', r.acts],
-      ['num', r.skip],
-      ['num', fmtMs(r.ms)],
-      ['tier', null],
-      ['num', fmtMs(r.efill)],
-      ['num', r.mult.toFixed(3)],
-      ['num', r.sqin],
-      ['num', r.sqout],
-      ['num', fmt(r.notes)],
+const PAGE = {
+  rows: DATA.rows,
+  noun: 'paths',
+  sortKey: 'score',
+  sortDir: -1,
+  cols: [
+    {k:'song',    t:'Song',     num:false},
+    {k:'artist',  t:'Artist',   num:false},
+    {k:'charter', t:'Charter',  num:false},
+    {k:'mode',    t:'Mode',     num:false},
+    {k:'path',    t:'Path',     num:false},
+    {k:'score',   t:'Score',    num:true},
+    {k:'acts',    t:'Acts',     num:true},
+    {k:'skip',    t:'Max skip', num:true},
+    {k:'ms',      t:'Hardest ms', num:true},
+    {k:'tier',    t:'Timing',   num:false},
+    {k:'efill',   t:'Cal fill', num:true},
+    {k:'mult',    t:'Avg mult', num:true},
+    {k:'sqin',    t:'SqIn',     num:true},
+    {k:'sqout',   t:'SqOut',    num:true},
+    {k:'notes',   t:'Notes',    num:true},
+  ],
+  controls: [['q', 'input'], ['tier', 'change'], ['bestonly', 'change']],
+  filter(q) {
+    const tier = document.getElementById('tier').value;
+    const bestOnly = document.getElementById('bestonly').checked;
+    return r => {
+      if (bestOnly && r.rank !== 1) return false;
+      if (tier && r.tier !== tier) return false;
+      if (!q) return true;
+      return (r.song + ' ' + r.artist + ' ' + r.charter + ' ' + r.path).toLowerCase().includes(q);
+    };
+  },
+  rowClass: r => r.rank === 1 ? 'best' : '',
+  cells: r => [
+    ['song trunc', r.song],
+    ['dim trunc artist', r.artist],
+    ['dim trunc charter', r.charter],
+    ['dim trunc mode', r.mode],
+    ['path mono trunc', r.path],
+    ['num', fmt(r.score)],
+    ['num', r.acts],
+    ['num', r.skip],
+    ['num', fmtMs(r.ms)],
+    ['chip ' + r.tok, r.tier, 'chip'],
+    ['num', fmtMs(r.efill)],
+    ['num', r.mult.toFixed(3)],
+    ['num', r.sqin],
+    ['num', r.sqout],
+    ['num', fmt(r.notes)],
+  ],
+  stats(rows) {
+    const best = rows.filter(r => r.rank === 1);
+    const withMs = rows.filter(r => r.ms !== null && r.ms !== undefined);
+    const tightest = withMs.length ? Math.max(...withMs.map(r => r.ms)) : null;
+    const maxSkip = rows.length ? Math.max(...rows.map(r => r.skip)) : 0;
+    const beyond = rows.filter(r => r.ms !== null && r.ms >= BEYOND).length;
+    return [
+      ['Charts', new Set(best.map(r => r.song + r.artist)).size.toLocaleString()],
+      ['Paths shown', rows.length.toLocaleString()],
+      ['Tightest squeeze', tightest === null ? DASH : tightest.toFixed(1) + ' ms'],
+      ['Past ' + BEYOND + ' ms', beyond.toLocaleString()],
+      ['Highest skip', maxSkip],
     ];
-
-    cells.forEach(([cls, val], i) => {
-      const td = document.createElement('td');
-      if (cls === 'tier') {
-        const chip = document.createElement('span');
-        chip.className = 'chip ' + r.tok;
-        chip.textContent = r.tier;
-        td.appendChild(chip);
-      } else {
-        td.className = cls;
-        td.textContent = val;
-        // Truncated cells still have to be readable somehow.
-        if (cls.includes('trunc') && val) td.title = val;
-      }
-      tr.appendChild(td);
-    });
-
-    frag.appendChild(tr);
-  }
-  body.appendChild(frag);
-
-  const empty = document.getElementById('empty');
-  empty.textContent = 'Nothing matches those filters.';
-  empty.hidden = rows.length > 0;
-  document.getElementById('count').textContent =
-    rows.length.toLocaleString() + ' of ' + ROWS.length.toLocaleString() + ' paths';
-
-  renderStats(rows);
-}
-
-function renderStats(rows) {
-  const best = rows.filter(r => r.rank === 1);
-  const withMs = rows.filter(r => r.ms !== null && r.ms !== undefined);
-  const tightest = withMs.length ? Math.max(...withMs.map(r => r.ms)) : null;
-  const maxSkip = rows.length ? Math.max(...rows.map(r => r.skip)) : 0;
-  const beyond = rows.filter(r => r.ms !== null && r.ms >= BEYOND).length;
-
-  const stats = [
-    ['Charts', new Set(best.map(r => r.song + r.artist)).size.toLocaleString()],
-    ['Paths shown', rows.length.toLocaleString()],
-    ['Tightest squeeze', tightest === null ? '—' : tightest.toFixed(1) + ' ms'],
-    ['Past ' + BEYOND + ' ms', beyond.toLocaleString()],
-    ['Highest skip', maxSkip],
-  ];
-
-  const el = document.getElementById('stats');
-  el.textContent = '';
-  for (const [k, v] of stats) {
-    const d = document.createElement('div');
-    d.className = 'stat';
-    const kk = document.createElement('div'); kk.className = 'stat-k'; kk.textContent = k;
-    const vv = document.createElement('div'); vv.className = 'stat-v'; vv.textContent = v;
-    d.append(kk, vv);
-    el.appendChild(d);
-  }
-}
-
-document.getElementById('q').addEventListener('input', render);
-document.getElementById('tier').addEventListener('change', render);
-document.getElementById('bestonly').addEventListener('change', render);
-
+  },
+};
 )page";
 
-// The page shell, concatenated once on first use.
+// The page shell, built once on first use.
 const std::string& page_template() {
-    static const std::string page = std::string(html::kSortableHead) + kTitle +
-                                    html::kSortableCssCore +
-                                    html::kSortableCssTable + kCssColumns +
-                                    html::kSortableCssChip + kChipColors +
-                                    html::kSortableCssTail + kBody + kDataJs +
-                                    html::kSortableJsSorter + kPageJs +
-                                    html::kSortableJsBoot;
+    static const std::string page = html::page_template(kTitle, kBody, kPageJs);
     return page;
 }
 
-}  // namespace
-
+// repr(float) / json.dumps float formatting for the page payload.
 std::string py_repr(double v) {
     // std::to_chars with no precision produces the shortest string that
-    // round-trips — the same contract as CPython's float repr. The one
+    // round-trips -- the same contract as CPython's float repr. The one
     // cosmetic difference: Python prints integral floats as "140.0" where
     // to_chars gives "140".
     char buf[32];
@@ -276,6 +166,8 @@ std::string py_repr(double v) {
         s += ".0";
     return s;
 }
+
+}  // namespace
 
 std::string plain(const std::string& text) {
     if (text.empty()) return text;
@@ -320,9 +212,13 @@ std::pair<std::string, std::string> tier_for(const std::optional<double>& ms,
                                              double hit_window_ms) {
     // The ladder itself lives in core/squeeze_rating.h (timing_tiers) so
     // these labels and the page's embedded tier table cannot drift apart.
+    return tier_for(ms, timing_tiers(hit_window_ms));
+}
+
+std::pair<std::string, std::string> tier_for(const std::optional<double>& ms,
+                                             const std::vector<TimingTier>& tiers) {
     // The two open bands are the table's last two entries: "Beyond", then
     // the "None" (no squeeze) entry.
-    const std::vector<TimingTier> tiers = timing_tiers(hit_window_ms);
     const TimingTier& none = tiers.back();
     const TimingTier& beyond = tiers[tiers.size() - 2];
     if (!ms) return {none.name, none.tok};
@@ -331,11 +227,24 @@ std::pair<std::string, std::string> tier_for(const std::optional<double>& ms,
     return {beyond.name, beyond.tok};
 }
 
+std::unordered_map<std::string, store::RecordListing> records_by_hash(
+    store::RecordStore& store, const std::string& chartmode, const store::CapQuery& cap,
+    const store::Lens& lens) {
+    std::unordered_map<std::string, store::RecordListing> by_hash;
+    for (store::RecordListing& r : store.list_records(chartmode, cap, lens,
+                                                       store::SortColumn::Score,
+                                                       /*descending=*/true))
+        by_hash.emplace(lower_hex(r.hyhash), std::move(r));
+    return by_hash;
+}
+
 std::vector<ReportRow> collect_rows(store::RecordStore& store, int64_t max_paths,
                                     const store::CapQuery& cap, const store::Lens& lens,
                                     double hit_window_ms,
                                     const std::atomic<bool>* cancel) {
     std::vector<ReportRow> rows;
+    // Built once for the whole report, not once per row.
+    const std::vector<TimingTier> tiers = timing_tiers(hit_window_ms);
 
     store.for_each_blob(std::nullopt, cap, lens,
                         [&](const store::RecordStore::BlobRow& meta,
@@ -349,13 +258,12 @@ std::vector<ReportRow> collect_rows(store::RecordStore& store, int64_t max_paths
         std::stable_sort(paths.begin(), paths.end(), [](const Path* a, const Path* b) {
             return a->totalscore() > b->totalscore();
         });
-        int64_t best_score = paths.empty() ? 0 : paths[0]->totalscore();
 
         int64_t shown = std::min<int64_t>(max_paths, static_cast<int64_t>(paths.size()));
         for (int64_t idx = 0; idx < shown; ++idx) {
             const Path* path = paths[static_cast<size_t>(idx)];
             store::PathSummary s = store::summarize_path(*path);
-            auto [label, token] = tier_for(s.hardest_ms, hit_window_ms);
+            auto [label, token] = tier_for(s.hardest_ms, tiers);
 
             ReportRow row;
             row.song = title_or_unknown(plain(meta.ref_name));
@@ -365,7 +273,6 @@ std::vector<ReportRow> collect_rows(store::RecordStore& store, int64_t max_paths
             row.rank = static_cast<int>(idx + 1);
             row.path = path->pathstring();
             row.score = *s.score;
-            row.delta = *s.score - best_score;
             row.acts = *s.actcount;
             row.skip = *s.maxskip;
             row.ms = s.hardest_ms;
@@ -381,6 +288,7 @@ std::vector<ReportRow> collect_rows(store::RecordStore& store, int64_t max_paths
             row.sqin = *s.sqin_count;
             row.sqout = *s.sqout_count;
             row.notes = *s.notecount;
+            row.hyhash = meta.hyhash;
             rows.push_back(std::move(row));
         }
     }, cancel);
@@ -428,7 +336,6 @@ std::string build_html(const std::vector<ReportRow>& rows, const std::string& su
         data += ",\"path\":";
         json_escape_into(data, r.path);
         data += ",\"score\":" + std::to_string(r.score);
-        data += ",\"delta\":" + std::to_string(r.delta);
         data += ",\"acts\":" + std::to_string(r.acts);
         data += ",\"skip\":" + std::to_string(r.skip);
         data += ",\"ms\":" + (r.ms ? py_repr(*r.ms) : std::string("null"));
@@ -451,10 +358,6 @@ std::string build_html(const std::vector<ReportRow>& rows, const std::string& su
 GeneratedReport generate_report(store::RecordStore& store,
                                 const ReportOptions& options) {
     GeneratedReport out;
-    auto [songs, records] = store.counts();
-    out.songs = songs;
-    out.records = records;
-
     const double w = static_cast<double>(options.hit_window_ms);
     std::vector<ReportRow> rows =
         collect_rows(store, options.max_paths, options.cap, options.lens, w, options.cancel);
@@ -464,6 +367,14 @@ GeneratedReport generate_report(store::RecordStore& store,
     if (options.cancel && options.cancel->load()) return GeneratedReport{};
     out.rows = static_cast<int64_t>(rows.size());
     if (rows.empty()) return out;
+    // The subtitle counts what the page lists: every record on it has exactly
+    // one rank-1 row, and its songs are the distinct charts among the rows.
+    std::unordered_set<std::string> songs;
+    for (const ReportRow& r : rows) {
+        if (r.rank == 1) ++out.records;
+        songs.insert(r.hyhash);
+    }
+    out.songs = static_cast<int64_t>(songs.size());
 
     std::string shown = options.max_paths > kEveryPathLabelThreshold
                             ? "every path"
@@ -472,8 +383,8 @@ GeneratedReport generate_report(store::RecordStore& store,
     std::string cap_label = options.cap.exact
                                 ? "SP cap " + std::to_string(*options.cap.exact) + " bars"
                                 : "SP cap Auto";
-    std::string subtitle = group_thousands(records) + " records across " +
-                           group_thousands(songs) + " songs — " + shown + " — " + cap_label;
+    std::string subtitle = group_thousands(out.records) + " records across " +
+                           group_thousands(out.songs) + " songs — " + shown + " — " + cap_label;
     std::string dbname =
         std::filesystem::u8path(options.db_path).filename().u8string();
     std::string footer = "Generated from " + dbname +

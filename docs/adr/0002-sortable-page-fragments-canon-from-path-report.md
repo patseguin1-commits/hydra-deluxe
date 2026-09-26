@@ -1,5 +1,7 @@
 # Sortable-page fragments are canon from the pinned path report
 
+_Superseded by ADR 0016 (2026-09): `hydra_report.py` is gone, nothing pins the page bytes, and the three report pages now share one stylesheet and one script._
+
 The two HTML reports (path index, dmleaderboards comparison) assemble from
 shared fragments in `app/html_page.cpp`. The path report's assembled bytes are
 pinned to `hydra_report.py`'s PAGE string (byte-exact parity), so the

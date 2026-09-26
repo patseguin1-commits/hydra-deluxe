@@ -1,6 +1,5 @@
-// Tests for app/analysis.{h,cpp} — chord counting cross-checked against the
-// song parser (same tally, computed through a different code path), plus
-// discovery/hashing sanity over the real testdata/input corpus.
+// Tests for app/analysis.{h,cpp}: discovery/hashing sanity over the real
+// testdata/input corpus.
 
 #include "doctest.h"
 
@@ -33,29 +32,6 @@
 using namespace hydra::app;
 
 using hydra::file_exists_utf8;
-
-TEST_CASE("count_chart_chords matches the song parser's code tally") {
-    int checked = 0;
-
-    for (const std::string& path : corpus::chart_paths()) {
-        const std::string ext = path.substr(path.find_last_of('.') + 1);
-        if (ext != "mid" && ext != "chart") continue;  // count_chart_chords doesn't take .sng
-
-        // The same tally computed through the full parser.
-        hydra::Song song = hydra::load_songpath(path, true, true);
-        std::map<std::string, int> expected;
-        for (const hydra::SongTimestamp& ts : song.sequence)
-            ++expected[ts.chord.code()];
-
-        std::map<std::string, int> actual = count_chart_chords(path);
-
-        CHECK_MESSAGE(actual == expected, path);
-        ++checked;
-    }
-
-    CHECK(checked > 0);
-    MESSAGE("checked " << checked << " charts");
-}
 
 TEST_CASE("discover_charts walks the corpus without throwing") {
     auto [items, errors] = discover_charts({std::string(HYDRA_INPUT_DIR)});

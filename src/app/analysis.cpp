@@ -547,15 +547,6 @@ std::pair<std::vector<ScanItem>, std::vector<std::string>> discover_charts(
     return discover_charts(rootfolders, callbacks, nullptr);
 }
 
-// ---- chord counting -------------------------------------------------------
-
-std::map<std::string, int> count_chart_chords(const std::string& filepath) {
-    Song song = load_songpath(filepath, true, true);
-    std::map<std::string, int> counts;
-    for (const SongTimestamp& ts : song.sequence) ++counts[ts.chord.code()];
-    return counts;
-}
-
 // ---- analysis -------------------------------------------------------------
 
 AnalysisResult analyze_chart_file(const std::string& filepath,
