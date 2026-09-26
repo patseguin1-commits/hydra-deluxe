@@ -86,11 +86,11 @@ TEST_CASE("records round-trip through RecordStore across the corpus and config m
     int checks = 0, mismatches = 0;
 
     for (const std::string& path : corpus::chart_paths()) {
-        Song song = load_songpath(path, true, true);
+        const Song& song = corpus::song(path, true, true);
         if (song.is_empty()) continue;
 
         for (const Config& cfg : kMatrix) {
-            std::optional<HydraRecord> record;
+            const HydraRecord* record = nullptr;
             try {
                 SearchSettings settings;
                 settings.sp_cap = cfg.cap;
@@ -100,7 +100,7 @@ TEST_CASE("records round-trip through RecordStore across the corpus and config m
                 // No budget: every Auto rung runs to the end, so the result
                 // never depends on how busy the machine is.
                 settings.rules.auto_budget_s = std::nullopt;
-                record = analyze_chart(song, settings);
+                record = &corpus::analyzed(path, settings);
             } catch (const ChartFileError&) {
                 continue;  // charts the engine rejects have no row to store
             }

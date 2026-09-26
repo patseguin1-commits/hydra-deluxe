@@ -11,14 +11,20 @@
 #define HYDRA_TESTS_CORPUS_UTIL_H
 
 #include <algorithm>
+#include <exception>
 #include <fstream>
+#include <map>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "app/analysis.h"
+#include "core/rules.h"
 #include "json.hpp"
+#include "parse/song.h"
+#include "search/pather.h"
 
 #ifndef HYDRA_INPUT_DIR
 #error "HYDRA_INPUT_DIR must be defined (see CMakeLists.txt)"
@@ -67,6 +73,104 @@ inline std::string read_bytes(const std::string& path) {
 
 inline json load_json(const std::string& path) {
     return json::parse(read_bytes(path));
+}
+
+// ---- cached corpus work ---------------------------------------------------
+// Many corpus loops parse the same chart, or analyze it at the same settings,
+// as a loop in another test case. These two calls do each piece of work once
+// per test run and hand every later caller the same answer. A failure is
+// cached too: every call for that key throws the same exception again, so a
+// loop's try/catch behaves exactly as it did around the direct call.
+// Both return const references into caches that live for the whole run; a
+// test that needs to change the Song or the record copies it first.
+
+namespace detail {
+
+template <class T>
+struct Outcome {
+    std::optional<T> value;
+    std::exception_ptr error;
+};
+
+// Every SearchSettings field that can change a record. fingerprint() leaves
+// out the Auto ladder and the Auto budget. Only an Auto run reads those two,
+// so an Auto key adds auto_fingerprint() (the ladder) and the budget, and a
+// fixed-cap key leaves them out: a loop that clears the budget and one that
+// keeps the default then share one fixed-cap answer.
+inline void add_settings(std::ostringstream& k, const hydra::SearchSettings& s) {
+    auto opt = [&k](const auto& o) {
+        if (o) k << *o;
+        else k << "none";
+        k << '|';
+    };
+    opt(s.sp_cap);
+    k << static_cast<int>(s.depth_mode) << '|' << s.depth_value << '|';
+    opt(s.ms_filter);
+    k << s.legacy_fill_deadline << '|' << s.rules.fingerprint() << '|';
+    if (!s.sp_cap) {
+        k << s.rules.auto_fingerprint() << '|';
+        opt(s.rules.auto_budget_s);
+    }
+}
+
+}  // namespace detail
+
+// The Song for one corpus chart, parsed once per run for these load options
+// (the arguments load_songpath takes).
+inline const hydra::Song& song(const std::string& path, bool pro, bool bass2x,
+                               hydra::Difficulty difficulty = hydra::Difficulty::Expert,
+                               const hydra::core::Rules& rules = hydra::core::default_rules()) {
+    static std::map<std::string, detail::Outcome<hydra::Song>> cache;
+    std::ostringstream key;
+    key.precision(17);
+    key << path << '|' << pro << '|' << bass2x << '|' << static_cast<int>(difficulty) << '|'
+        << rules.fingerprint();
+    auto [it, fresh] = cache.try_emplace(key.str());
+    detail::Outcome<hydra::Song>& o = it->second;
+    if (fresh) {
+        try {
+            o.value.emplace(hydra::load_songpath(path, pro, bass2x, difficulty, rules));
+        } catch (...) {
+            o.error = std::current_exception();
+        }
+    }
+    if (o.error) std::rethrow_exception(o.error);
+    return *o.value;
+}
+
+// One corpus chart analyzed under `settings`, once per run: the record
+// analyze_chart_file would return (parsed with settings.prodrums, bass2x,
+// difficulty and rules, then analyze_chart). Throws what that would throw.
+inline const hydra::HydraRecord& analyzed(const std::string& path,
+                                          const hydra::app::AnalysisSettings& settings) {
+    static std::map<std::string, detail::Outcome<hydra::HydraRecord>> cache;
+    std::ostringstream key;
+    key.precision(17);
+    key << path << '|' << settings.prodrums << '|' << settings.bass2x << '|'
+        << static_cast<int>(settings.difficulty) << '|';
+    detail::add_settings(key, settings);
+    auto [it, fresh] = cache.try_emplace(key.str());
+    detail::Outcome<hydra::HydraRecord>& o = it->second;
+    if (fresh) {
+        try {
+            const hydra::Song& s = song(path, settings.prodrums, settings.bass2x,
+                                        settings.difficulty, settings.rules);
+            o.value.emplace(hydra::analyze_chart(s, settings));
+        } catch (...) {
+            o.error = std::current_exception();
+        }
+    }
+    if (o.error) std::rethrow_exception(o.error);
+    return *o.value;
+}
+
+// The same for a loop that holds plain SearchSettings and parses with
+// load_songpath(path, true, true): pro drums, 2x bass, Expert.
+inline const hydra::HydraRecord& analyzed(const std::string& path,
+                                          const hydra::SearchSettings& settings) {
+    hydra::app::AnalysisSettings a;
+    static_cast<hydra::SearchSettings&>(a) = settings;
+    return analyzed(path, a);
 }
 
 }  // namespace corpus

@@ -328,6 +328,7 @@ endforeach()
 # ---- hydra_tests: the doctest harness ------------------------------------
 add_executable(hydra_tests
     tests/test_main.cpp
+    tests/test_corpus_cache.cpp
     tests/test_timing.cpp
     tests/test_chord_code.cpp
     tests/test_midi.cpp
