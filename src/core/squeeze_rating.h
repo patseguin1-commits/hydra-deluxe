@@ -105,9 +105,7 @@ struct BackendRating {
 // The full transfer-scale story for one activation, as the details display
 // tells it.
 struct ActivationRating {
-    // Resolved scales: recomputed live from `timing` when one is at hand,
-    // else the record's stored (blob v3) values — 1.0 flat-tempo identities
-    // on older blobs.
+    // The scales the search stored on the activation (transfer_pre/post).
     ActTransferScales scales;
     // The materially affected directions: drive the scale-warning line.
     // late/early_warns aggregate; the per-end flags record which end tripped
@@ -131,13 +129,12 @@ struct ActivationRating {
 
 // The display's whole view of an activation's squeezes: it builds the backend
 // rows itself (act.display_backends()), so the caller renders and nothing
-// more. `timing` may be null (no songmeta row): the stored scales are used
-// then. Backend rows are judged at the post (deact-node) end, SqIn/SqOut
+// more. It reads the scales the search stored on the activation. Backend rows are judged at the post (deact-node) end, SqIn/SqOut
 // phrase notes at the pre (pre-extension) end.
 // backend_leeway_ms: Rules::backend_leeway_ms. A plain row less than this
 // past the SP end is counted by the engine, so it is not a late squeeze.
 ActivationRating rate_activation(
-    const Activation& act, const SongTiming* timing,
+    const Activation& act,
     double hit_window_ms = kDefaultHitWindowMs,
     double backend_leeway_ms = core::default_rules().backend_leeway_ms);
 

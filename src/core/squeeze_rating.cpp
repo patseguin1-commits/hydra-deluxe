@@ -77,17 +77,13 @@ bool transfer_is_material(double gap_ms, double transfer_r,
 }
 
 ActivationRating rate_activation(const Activation& act,
-                                 const SongTiming* timing,
                                  double hit_window_ms,
                                  double backend_leeway_ms) {
     ActivationRating out;
 
-    std::optional<ActTransferScales> scales;
-    if (timing) scales = frontend_transfer_scales(act, *timing);
-    // No timing at hand (no songmeta row): the record stores the scales the
-    // search computed (1.0 on old blobs).
-    if (!scales) scales = ActTransferScales{act.transfer_pre, act.transfer_post};
-    out.scales = *scales;
+    // The scales the search stamped on the record. A stored fact is read,
+    // never re-derived (ADRs 0011, 0013, 0014); every Ready record has them.
+    out.scales = ActTransferScales{act.transfer_pre, act.transfer_post};
 
     // The scale that governs each row follows the sign of its offset, not the
     // kind of squeeze. A sqout row still inside SP (offset < 0) has to be
@@ -109,18 +105,18 @@ ActivationRating rate_activation(const Activation& act,
         if (bsq.offset_ms) {
             bool applies = false;
             if (row.squeezed_out && *bsq.offset_ms > 0.0) {
-                row.scale = scales->post.late;
+                row.scale = out.scales.post.late;
                 applies = transfer_is_material(*bsq.offset_ms, row.scale,
                                                hit_window_ms);
                 out.late_backend_warns |= applies;
             } else if (row.squeezed_out) {
-                row.scale = scales->post.early;
+                row.scale = out.scales.post.early;
                 applies = transfer_is_material(*bsq.offset_ms, row.scale,
                                                hit_window_ms);
                 out.early_backend_warns |= applies;
             } else if (!core::counted_without_squeeze(*bsq.offset_ms,
                                                       backend_leeway_ms)) {
-                row.scale = scales->post.late;
+                row.scale = out.scales.post.late;
                 applies = transfer_is_material(*bsq.offset_ms, row.scale,
                                                hit_window_ms);
                 out.late_backend_warns |= applies;
@@ -149,10 +145,10 @@ ActivationRating rate_activation(const Activation& act,
         bool early = sq.difficulty() >= 0.0 ? achieved_early : !achieved_early;
         if (early)
             out.early_note_warns |= transfer_is_material(
-                sq.difficulty(), scales->pre.early, hit_window_ms);
+                sq.difficulty(), out.scales.pre.early, hit_window_ms);
         else
             out.late_note_warns |= transfer_is_material(
-                sq.difficulty(), scales->pre.late, hit_window_ms);
+                sq.difficulty(), out.scales.pre.late, hit_window_ms);
     }
 
     out.late_warns = out.late_backend_warns || out.late_note_warns;
