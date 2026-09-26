@@ -65,7 +65,7 @@ std::optional<int64_t> activation_deact_tick(const Activation& act);
 // 2-measure SqIn extension down from it. The engine stamps the stored
 // transfer_pre/post through this same function at copy-out, so a live
 // recompute can't drift from the record. Display-only; nullopt when the
-// activation has no timecode, no sp_meter, or no deact_tick (stale record).
+// activation has no deact_tick.
 std::optional<ActTransferScales> frontend_transfer_scales(const Activation& act,
                                                           const SongTiming& timing);
 

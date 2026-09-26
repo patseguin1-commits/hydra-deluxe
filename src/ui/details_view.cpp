@@ -367,11 +367,11 @@ void render_score_breakdown_section(const std::vector<std::string>& breakdown) {
 
 // `copied_at` (when "Copied!" last flashed) is owned by AppState's
 // DetailsViewState and passed by reference, so it dies with the app state.
-void render_path_details(const Path* path, const app::PathsTabCache::Details& details,
-                         double& copied_at) {
+void render_path_details(const Path* path, const HydraRecord& record,
+                         const app::PathsTabCache::Details& details, double& copied_at) {
     ImGui::PushFont(nullptr, 0.0f);  // default font for the button, like Python's MainFont
     if (ImGui::Button("Copy path string", ImVec2(px(180), px(30)))) {
-        ImGui::SetClipboardText(path->pathstring_verbose().c_str());
+        ImGui::SetClipboardText(path->pathstring_verbose(record.multsqueezes).c_str());
         copied_at = ImGui::GetTime();
     }
     hint("Ctrl+C also copies the selected path");
@@ -487,7 +487,7 @@ void render_path_panel(AppState& app, const Path*& selected_path) {
             app.viewed.timing ? &*app.viewed.timing : nullptr,
             static_cast<double>(app.settings.hit_window_ms), app.settings.backend_limit(),
             app.settings.rules);
-        render_path_details(selected_path, details, app.details_ui.copied_at);
+        render_path_details(selected_path, *app.viewed.record, details, app.details_ui.copied_at);
     }
     ImGui::EndChild();
 }
@@ -1110,7 +1110,8 @@ void render_details_modal(AppState& app) {
     // Built only when the chord is pressed, not every frame just in case.
     if (selected_path && !ImGui::GetIO().WantTextInput &&
         ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_C))
-        ImGui::SetClipboardText(selected_path->pathstring_verbose().c_str());
+        ImGui::SetClipboardText(
+            selected_path->pathstring_verbose(app.viewed.record->multsqueezes).c_str());
 
     // Song info / record-status panels scale with the popup's width
     // (itself sized off the viewport, see below) instead of a fixed pixel

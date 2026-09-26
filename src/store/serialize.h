@@ -1,15 +1,9 @@
-// Binary record serialization: a versioned, hand-rolled binary format.
-//
-// A record's blob is written by write_record() and read back by
-// read_record(); both walk the Path tree (multsqueezes, activations with trimmed display backends,
-// sqinouts, recursive variants), but as flat binary rather than JSON. The
-// format starts with a version tag so a future layout change can be detected
-// instead of misread.
-//
-// A deserialized record's Activation/BackendSqueeze timecodes carry only raw
-// ticks (Timecode::raw) — the blob has no tempo map of its own. Call
-// restore_timecodes() with the song's SongTiming (from songmeta) to resolve
-// them into full Timecodes.
+// Small binary primitives for the store's own formats -- the path codec
+// (store/path_codec.h) and the songmeta tempo-map blob (record_store.cpp) --
+// plus restore_timecodes. A decoded record's Activation/BackendSqueeze
+// timecodes carry only raw ticks (Timecode::raw), because a stored path has
+// no tempo map of its own. restore_timecodes() with the song's SongTiming
+// (from songmeta) resolves them into full Timecodes.
 
 #ifndef HYDRA_STORE_SERIALIZE_H
 #define HYDRA_STORE_SERIALIZE_H
@@ -24,26 +18,6 @@
 #include "core/timing.h"
 
 namespace hydra::store {
-
-// Bumped whenever write_record's layout changes. A blob written with a newer
-// version is not read; the caller treats it like a version mismatch, the same
-// way a row stamped by another Hydra version reads back as
-// RecordStatus::Stale (see RecordStore::get_record).
-//
-// Version 2 appended HydraRecord::allzero_paths. Version 3 appended the four
-// frontend transfer scales (pre/post x early/late) to each activation; older
-// blobs read back with the 1.0 flat-tempo defaults. Version 4 appended each
-// activation's deact_tick -- the deactivation node the search stamps on it;
-// older blobs read back with it unset, and nothing re-derives it. Version 5
-// appended each activation's clamp_tick -- the collecting note the SP cap
-// pinned the window to; older blobs read back with it unset. Version 1 blobs
-// are still read -- they simply have no all-0 path until the chart is
-// re-analyzed. That does not make them Ready, though: the store's Ready rule
-// also checks the stored path-structure format against
-// kPathStructureFormatVersion (path_codec.h), so a library analyzed under an
-// older path layout reads Stale until it is re-analyzed.
-// v6: Activation.sqout_tick and collected_phrase_ticks; HydraRecord.rules_fingerprint (docs/adr/0014).
-constexpr uint32_t kBlobFormatVersion = 6;
 
 class SerializeError : public std::runtime_error {
 public:
@@ -97,31 +71,9 @@ private:
     size_t pos_ = 0;
 };
 
-// Writes a blob in the given format version (1..kBlobFormatVersion; throws
-// SerializeError otherwise). Production always writes the newest layout (the
-// default); the version parameter exists so the migration tests can produce a
-// genuine old blob through the same writer the readers are gated against —
-// the write and read gates live side by side in serialize.cpp and cannot
-// drift apart.
-std::vector<uint8_t> write_record(const HydraRecord& record,
-                                  uint32_t version = kBlobFormatVersion);
-
-// Throws SerializeError if the blob's format version doesn't match, or the
-// bytes are truncated/malformed. The single-argument form returns a record
-// whose Timecodes carry raw ticks only (see the header comment) — use the
-// timing-taking overload wherever a fully restored record is wanted.
-HydraRecord read_record(const std::vector<uint8_t>& blob);
-
-// read_record + restore_timecodes in one call: the record comes back with
-// full Timecodes, ready for the display layer. This closes the two-call load
-// seam; the raw form above stays for callers that deliberately skip the
-// restore (RecordStore::for_each_blob).
-HydraRecord read_record(const std::vector<uint8_t>& blob,
-                        const SongTiming& timing);
-
 // Rebuilds every Timecode in the record (activations and their backends) from
 // raw ticks into full Timecodes derived from `timing`. Call once after
-// read_record, using the timing built from the record's song (songmeta).
+// decoding, using the timing built from the record's song (songmeta).
 void restore_timecodes(HydraRecord& record, const SongTiming& timing);
 
 }  // namespace hydra::store

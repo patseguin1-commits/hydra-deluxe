@@ -179,10 +179,10 @@ ReplayScore score_of(const Path& path) {
 std::vector<ReplayWindow> windows_for_path(const Path& path) {
     std::vector<ReplayWindow> out;
     for (const Activation& act : path.walk_activations()) {
-        if (!act.timecode || !act.deact_tick) continue;
+        if (!act.deact_tick) continue;
 
         ReplayWindow w;
-        w.act_tick = act.timecode->ticks();
+        w.act_tick = act.timecode.ticks();
         w.deact_tick = *act.deact_tick;
         for (const SPSqueeze& sq : act.sqinouts)
             if (sq.kind == SqueezeKind::SqOut) w.sqout_offset_ms = sq.offset();

@@ -25,9 +25,9 @@ std::optional<int64_t> activation_deact_tick(const Activation& act) {
 
 std::optional<ActTransferScales> frontend_transfer_scales(const Activation& act,
                                                           const SongTiming& timing) {
-    if (!act.timecode || !act.sp_meter || !act.deact_tick) return std::nullopt;
+    if (!act.deact_tick) return std::nullopt;
 
-    int64_t act_tick = act.timecode->ticks();
+    int64_t act_tick = act.timecode.ticks();
     bool has_sqin = false;
     for (const SPSqueeze& sq : act.sqinouts) {
         if (sq.kind == SqueezeKind::SqIn) {

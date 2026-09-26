@@ -88,7 +88,6 @@ struct ScoreGraphEdge {
     // The frontend chord's SP points: set only on activation edges, 0 elsewhere.
     int frontend_points = 0;
     std::vector<BackendSqueeze> backends;
-    std::vector<MultSqueeze> multsqueezes;
 
     // Set only on activation edges; absent (nullopt / empty) otherwise.
     std::optional<double> activation_fill_deadline_ms;
@@ -115,6 +114,9 @@ public:
     std::optional<int> sp_meter_cap() const { return sp_meter_cap_; }
     const core::Rules& rules() const { return rules_; }
     const SongTiming& timing() const { return song_.timing(); }
+    // The chart's multiplier squeezes, in chart order. One list: the combo
+    // that decides them never depends on the path.
+    const std::vector<MultSqueeze>& multsqueezes() const { return multsqueezes_; }
 
     // The notes left in the squeeze window (kSqueezeWindowMs) before the song's
     // last timestamp, i.e. the trailing notes no deactivation edge ever got to
@@ -184,6 +186,7 @@ private:
     ScoreGraphNode* base_track_head_ = nullptr;
     ScoreGraphNode* sp_track_head_ = nullptr;
     int combo_ = 0;
+    std::vector<MultSqueeze> multsqueezes_;
     // The Song's sp_phrase_count(), kept here for max_sp_bars() -- not tallied
     // by this graph itself.
     int sp_phrase_count_ = 0;

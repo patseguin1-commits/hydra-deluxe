@@ -420,7 +420,8 @@ std::string analyzed_filter(const CapQuery& cap) {
     return sql;
 }
 int bind_analyzed_filter(sqlite3_stmt* s, int idx, const std::string& chartmode,
-                         const CapQuery& cap, const Lens& lens, uint64_t rules_fingerprint) {
+                         const CapQuery& cap, const Lens& lens,
+                         const core::RulesStamp& rules_fingerprint) {
     bind_text(s, idx++, chartmode);
     idx = bind_ready_params(s, idx, rules_fingerprint);
     idx = bind_lens(s, idx, lens);
@@ -443,7 +444,7 @@ PathSummary summarize_path(const Path& path) {
     std::optional<double> hardest;
     int sqin = 0, sqout = 0;
     for (const Activation& a : acts) {
-        if (a.skips && *a.skips > maxskip) maxskip = *a.skips;
+        if (a.skips > maxskip) maxskip = a.skips;
         if (auto d = a.difficulty()) {
             if (!hardest || *d > *hardest) hardest = d;
         }

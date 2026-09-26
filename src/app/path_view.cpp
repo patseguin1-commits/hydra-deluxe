@@ -47,10 +47,10 @@ RecordStatusView build_record_status(const store::RecordLookup& lookup) {
     return view;
 }
 
-std::vector<MultSqueezeView> build_multsqueezes(const Path& path) {
+std::vector<MultSqueezeView> build_multsqueezes(const HydraRecord& record) {
     std::vector<MultSqueezeView> out;
-    out.reserve(path.multsqueezes.size());
-    for (const MultSqueeze& msq : path.multsqueezes) {
+    out.reserve(record.multsqueezes.size());
+    for (const MultSqueeze& msq : record.multsqueezes) {
         MultSqueezeView v;
         v.label = msq.notationstr() + "   (+" + std::to_string(msq.points()) +
                   " pts):   " + msq.chord().rowstr();
@@ -92,10 +92,10 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
         // advance (IM_TABSIZE) shared with DearPyGui, so the columns line up
         // identically to the Python app.
         std::string ntn = act.notationstr();
-        std::string meas = act.timecode ? measurestr(*act.timecode) : "";
+        std::string meas = measurestr(act.timecode);
         char hbuf[128];
         std::snprintf(hbuf, sizeof(hbuf), "%-6s(%d SP)\t%9s", ntn.c_str(),
-                      act.sp_meter.value_or(0), meas.c_str());
+                      act.sp_meter, meas.c_str());
         av.header = hbuf;
         if (auto ms = act.difficulty()) {
             // "%9s" of "12.3ms" is byte-identical to the old "%7.1fms".
@@ -114,7 +114,7 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
         }
 
         av.frontend =
-            "Frontend: " + (act.chord ? act.chord->rowstr() : std::string("None"));
+            "Frontend: " + act.chord.rowstr();
 
         ActivationRating rate = rate_activation(act, W, rules.backend_leeway_ms);
 
@@ -302,18 +302,6 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
         }
     }
 
-    if (path.skipped_accents > 0)
-        view.footer.push_back(
-            {"This path has " + std::to_string(path.skipped_accents) +
-                 " skipped (unhittable) accent" +
-                 (path.skipped_accents == 1 ? "" : "s") + "!",
-             true});
-    if (path.skipped_ghosts > 0)
-        view.footer.push_back(
-            {"This path has " + std::to_string(path.skipped_ghosts) +
-                 " skipped (unhittable) ghost" +
-                 (path.skipped_ghosts == 1 ? "" : "s") + "!",
-             true});
     return view;
 }
 
@@ -437,7 +425,7 @@ const PathsTabCache::Details& PathsTabCache::details(
     if (record_generation != details_generation_ || &path != details_path_ ||
         hit_window_ms != details_hit_window_ms_ ||
         backend_limit_ms != details_backend_limit_ms_) {
-        details_.squeezes = build_multsqueezes(path);
+        details_.squeezes = build_multsqueezes(record);
         details_.activations =
             build_activations(path, record, timing, hit_window_ms, backend_limit_ms, rules);
         details_.breakdown = build_score_breakdown(path);

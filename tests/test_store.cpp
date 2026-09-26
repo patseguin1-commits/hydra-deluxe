@@ -31,6 +31,7 @@
 #include "core/winstr.h"
 #include "corpus_util.h"
 #include "parse/song.h"
+#include "record_bytes.h"
 #include "search/pather.h"
 #include "store/record_store.h"
 #include "store/serialize.h"
@@ -145,9 +146,8 @@ TEST_CASE("records round-trip through RecordStore across the corpus and config m
                 const Activation& orig = orig_acts.front();
                 const auto again_acts = reloaded->best_path().all_activations();
                 const Activation& again = again_acts.front();
-                if (!again.timecode.has_value() ||
-                    again.timecode->ticks() != orig.timecode->ticks() ||
-                    again.timecode->ms() != orig.timecode->ms())
+                if (again.timecode.ticks() != orig.timecode.ticks() ||
+                    again.timecode.ms() != orig.timecode.ms())
                     d = "restored timecode";
                 // The transfer scales ride in the v3 blob bit-exactly.
                 else if (again.transfer_pre.early != orig.transfer_pre.early ||
@@ -246,7 +246,7 @@ TEST_CASE("stored transfer scales equal a live recompute after a store round tri
                                       live->post.late == act.transfer_post.late;
                     if (!same && ++mismatches <= 8)
                         CHECK_MESSAGE(false, path << " [" << cfg.key << "] activation at tick "
-                                                  << act.timecode->ticks());
+                                                  << act.timecode.ticks());
                 }
             }
         }
@@ -255,224 +255,6 @@ TEST_CASE("stored transfer scales equal a live recompute after a store round tri
     CHECK(mismatches == 0);
     REQUIRE(acts > 0);
     MESSAGE("compared " << acts << " stored activations with a live recompute");
-}
-
-// The blob grew allzero_paths in format version 2, per-activation transfer
-// scales in version 3, and each activation's deact_tick in version 4. Older
-// blobs must still read (scales default to 1.0, deact_tick to unset), or
-// bumping the format would silently strand every stored record.
-TEST_CASE("record blob: v3 carries transfer scales, v1/v2 still read") {
-    std::optional<HydraRecord> record;
-    for (const std::string& path : corpus::chart_paths()) {
-        Song song = load_songpath(path, true, true);
-        if (song.is_empty()) continue;
-        try {
-            SearchSettings settings;
-            settings.sp_cap = 4;
-            settings.depth_mode = DepthMode::Scores;
-            settings.depth_value = 4;
-            settings.ms_filter = 10.0;
-            HydraRecord r = analyze_chart(song, settings);
-            if (!r.allzero_paths.empty()) {
-                record = std::move(r);
-                break;
-            }
-        } catch (const ChartFileError&) {
-            continue;
-        }
-    }
-    REQUIRE_MESSAGE(record.has_value(), "no corpus chart produced an all-0 path");
-
-    HydraRecord again = read_record(write_record(*record));
-    CHECK(again.allzero_paths.size() == record->allzero_paths.size());
-    CHECK(again.all_allzero_paths().size() == record->all_allzero_paths().size());
-    CHECK(again.allzero_paths.front().pathstring() ==
-          record->allzero_paths.front().pathstring());
-    CHECK(again.allzero_paths.front().totalscore() ==
-          record->allzero_paths.front().totalscore());
-
-    // Version 3 activations carry the transfer scales bit-exactly.
-    const auto orig_acts = record->best_path().all_activations();
-    const auto again_acts = again.best_path().all_activations();
-    const Activation& orig_act = orig_acts.front();
-    const Activation& again_act = again_acts.front();
-    CHECK(again_act.transfer_pre.early == orig_act.transfer_pre.early);
-    CHECK(again_act.transfer_pre.late == orig_act.transfer_pre.late);
-    CHECK(again_act.transfer_post.early == orig_act.transfer_post.early);
-    CHECK(again_act.transfer_post.late == orig_act.transfer_post.late);
-
-    // Version 4 activations also carry the deactivation node D bit-exactly --
-    // the search stamped it on this record, so a round trip must not drop it.
-    REQUIRE(orig_act.deact_tick.has_value());
-    CHECK(again_act.deact_tick == orig_act.deact_tick);
-
-    // Pre-v3 blobs have no per-activation transfer scales. This synthetic old
-    // blob is hand-rolled with the primitives on purpose — an independent
-    // spelling of the v2 layout, so a symmetric bug in the versioned writer
-    // and reader can't hide. The versioned-writer round-trip below
-    // cross-checks write_record(record, 2) against the same reader.
-    BinaryWriter w;
-    w.u32(2);                 // version
-    w.opt_f64(std::nullopt);  // ms_limit
-    w.opt_i32(std::nullopt);  // sp_cap
-    w.boolean(true);          // sp_cap_converged
-    w.u32(1);                 // one path
-    w.u32(0);                 //   no multsqueezes
-    w.u32(1);                 //   one activation
-    w.opt_i32(0);             //     skips
-    w.i64(960);               //     timecode ticks
-    w.opt_str(std::nullopt);  //     chord
-    w.opt_i32(4);             //     sp_meter
-    w.opt_i32(std::nullopt);  //     frontend_points
-    w.u32(0);                 //     no backends
-    w.u32(1);                 //     one sqinout:
-    w.u8(1);                  //       SqOut
-    w.f64(-12.0);             //       offset_ms
-    w.opt_f64(300.0);         //     e_offset (not e-critical)
-    w.i64(100);               //   score_base
-    w.i64(0);                 //   score_combo
-    w.i64(0);                 //   score_sp
-    w.i64(0);                 //   score_solo
-    w.i64(0);                 //   score_accents
-    w.i64(0);                 //   score_ghosts
-    w.i32(10);                //   notecount
-    w.i32(0);                 //   leftover_sp
-    w.i32(0);                 //   skipped_ghosts
-    w.i32(0);                 //   skipped_accents
-    w.u32(0);                 //   no variants
-    w.opt_i32(std::nullopt);  //   var_point
-    w.u32(0);                 // no allzero paths (v2 tail)
-
-    HydraRecord old2 = read_record(w.bytes);
-    REQUIRE(old2.paths.size() == 1);
-    const auto a2_acts = old2.best_path().all_activations();
-    const Activation& a2 = a2_acts.front();
-    // Missing scales default to the flat-tempo identity...
-    CHECK(a2.transfer_pre.early == 1.0);
-    CHECK(a2.transfer_pre.late == 1.0);
-    CHECK(a2.transfer_post.early == 1.0);
-    CHECK(a2.transfer_post.late == 1.0);
-    // ...and difficulty stays the raw 12 ms gap (scales are display-only).
-    CHECK(*old2.best_path().difficulty() == doctest::Approx(12.0));
-    // This hand-rolled blob stamps version 2, well under the version-4 gate,
-    // so it carries no deact_tick bytes at all -- reading it back must leave
-    // the field unset rather than inventing a value.
-    CHECK_FALSE(a2.deact_tick.has_value());
-
-    // A version 1 blob is the same layout without the trailing all-0 list.
-    std::vector<uint8_t> v1(w.bytes.begin(), w.bytes.end() - 4);
-    v1[0] = 1;
-    HydraRecord old1 = read_record(v1);
-    CHECK(old1.allzero_paths.empty());
-    CHECK(old1.paths.size() == 1);
-    CHECK(old1.best_path().pathstring() == old2.best_path().pathstring());
-
-    // The versioned writer produces byte-for-byte what the hand-rolled
-    // spelling produced: the write and read gates cannot drift apart.
-    HydraRecord same = old2;
-    CHECK(write_record(same, 2) == w.bytes);
-
-    // A v1 write drops the all-0 tail; reading it back keeps the paths.
-    HydraRecord old1w = read_record(write_record(same, 1));
-    CHECK(old1w.allzero_paths.empty());
-    CHECK(old1w.paths.size() == 1);
-
-    // The writer refuses versions outside 1..kBlobFormatVersion.
-    CHECK_THROWS_AS(write_record(same, 0), SerializeError);
-    CHECK_THROWS_AS(write_record(same, kBlobFormatVersion + 1), SerializeError);
-
-    // A blob from a future format is still refused.
-    std::vector<uint8_t> future = write_record(*record);
-    future[0] = kBlobFormatVersion + 1;
-    CHECK_THROWS_AS(read_record(future), SerializeError);
-}
-
-// The version gate for deact_tick specifically: a v3 write has nowhere to put
-// the field, so it must come back unset, not guessed at from an older blob. A
-// small hand-built record is enough to prove this -- it doesn't need a real
-// search, just one activation with a timecode and a deact_tick set.
-TEST_CASE("record blob: a v3 write drops deact_tick, a v4 write keeps it") {
-    Activation act;
-    act.timecode = Timecode::raw(960);
-    act.deact_tick = 4800;
-
-    Path path;
-    path.activations.push_back(act);
-
-    HydraRecord record;
-    record.sp_cap = 4;
-    record.paths.push_back(path);
-
-    // write_record's version argument defaults to kBlobFormatVersion; pass 3
-    // explicitly to get the old layout.
-    HydraRecord as_v3 = read_record(write_record(record, 3));
-    REQUIRE(as_v3.paths.size() == 1);
-    CHECK_FALSE(as_v3.best_path().all_activations().front().deact_tick.has_value());
-
-    // The default (current) version carries it through.
-    HydraRecord as_current = read_record(write_record(record));
-    REQUIRE(as_current.paths.size() == 1);
-    CHECK(as_current.best_path().all_activations().front().deact_tick == 4800);
-}
-
-// Same gate, one version later: clamp_tick is the field version 5 added, so a
-// v4 write has nowhere to put it and must come back unset, while the default
-// (v5) write keeps it.
-TEST_CASE("record blob: a v4 write drops clamp_tick, a v5 write keeps it") {
-    Activation act;
-    act.timecode = Timecode::raw(960);
-    act.clamp_tick = 3072;
-
-    Path path;
-    path.activations.push_back(act);
-
-    HydraRecord record;
-    record.sp_cap = 4;
-    record.paths.push_back(path);
-
-    HydraRecord as_v4 = read_record(write_record(record, 4));
-    REQUIRE(as_v4.paths.size() == 1);
-    CHECK_FALSE(
-        as_v4.best_path().all_activations().front().clamp_tick.has_value());
-
-    HydraRecord as_current = read_record(write_record(record));
-    REQUIRE(as_current.paths.size() == 1);
-    CHECK(as_current.best_path().all_activations().front().clamp_tick == 3072);
-}
-
-TEST_CASE("record blob: a v5 write drops sqout_tick and collected_phrase_ticks, a v6 write keeps them") {
-    Activation act;
-    act.timecode = Timecode::raw(960);
-    act.deact_tick = 7680;
-    act.sqout_tick = 7488;
-    act.collected_phrase_ticks = {1920, 3840};
-    Path path;
-    path.activations.push_back(act);
-    HydraRecord record;
-    record.sp_cap = 4;
-    record.rules_fingerprint = 0x0123456789abcdefull;
-    record.paths.push_back(path);
-
-    HydraRecord v6 = read_record(write_record(record, 6));
-    const Activation& a6 = v6.paths.at(0).activations.at(0);
-    REQUIRE(a6.sqout_tick.has_value());
-    CHECK(*a6.sqout_tick == 7488);
-    CHECK(a6.collected_phrase_ticks == std::vector<int64_t>{1920, 3840});
-    CHECK(v6.rules_fingerprint == 0x0123456789abcdefull);
-
-    // A v5 blob has none of the three. They read back empty, and the
-    // fingerprint reads kNoRulesFingerprint, which no Rules value produces,
-    // so an old record can never pass as analyzed under the current rules.
-    HydraRecord v5 = read_record(write_record(record, 5));
-    const Activation& a5 = v5.paths.at(0).activations.at(0);
-    CHECK_FALSE(a5.sqout_tick.has_value());
-    CHECK(a5.collected_phrase_ticks.empty());
-    CHECK(v5.rules_fingerprint == core::kNoRulesFingerprint);
-    // v5 still keeps what v5 always kept.
-    REQUIRE(a5.deact_tick.has_value());
-    CHECK(*a5.deact_tick == 7680);
-
-    CHECK_THROWS_AS(write_record(record, kBlobFormatVersion + 1), SerializeError);
 }
 
 TEST_CASE("RecordStore maintenance: has_record, list_records, reindex") {
@@ -806,6 +588,20 @@ TEST_CASE("a row in an older path format is Stale even when this build stamped i
     CHECK(purge.counts().second == 1);
     purge.add_record(RecordKey{"purge", "mode", CapQuery::at(16)}, at_cap(16));
     CHECK(purge.counts().second == 1);
+}
+
+TEST_CASE("a row in the 1.8.1 path layout (structure format 5) reads Stale") {
+    RecordStore store(":memory:");
+    store.add_song("old", "Song", "Artist", "Charter", fixture().song);
+    PreparedRow row = prepare_row(RecordKey{"old", "mode", CapQuery::at(4)}, at_cap(4));
+    REQUIRE(row.structure.size() >= 4);
+    row.structure[0] = 5;
+    store.add_row(row);
+
+    const RecordLookup lookup = store.get_record(RecordKey{"old", "mode", CapQuery::at(4)});
+    CHECK(lookup.status == RecordStatus::Stale);
+    CHECK(lookup.stale_build);
+    CHECK_FALSE(lookup.record.has_value());
 }
 
 TEST_CASE("a row analyzed under other rules reads Stale until the rules match again") {
@@ -1287,7 +1083,7 @@ TEST_CASE("replacing one lens's result leaves the other's bytes untouched") {
         store.add_song("h", "Song", "Artist", "Charter", fixture().song);
         store.add_record(RecordKey{"h", "mode", CapQuery::at(4), kLensA}, at_cap_ms10(4));
         store.add_record(RecordKey{"h", "mode", CapQuery::at(4), kLensB}, at_cap(4));
-        before = write_record(
+        before = record_bytes(
             *store.get_record(RecordKey{"h", "mode", CapQuery::at(4), kLensB}).record);
     }
     const int64_t shared = scalar(path, "SELECT COUNT(*) FROM paths");
@@ -1301,7 +1097,7 @@ TEST_CASE("replacing one lens's result leaves the other's bytes untouched") {
         store.add_record(RecordKey{"h", "mode", CapQuery::at(4), kLensA}, redone);
         // Lens B loads exactly the bytes it loaded before: the collection that
         // followed A's rewrite took nothing B still points at.
-        CHECK(write_record(*store.get_record(RecordKey{"h", "mode", CapQuery::at(4), kLensB})
+        CHECK(record_bytes(*store.get_record(RecordKey{"h", "mode", CapQuery::at(4), kLensB})
                                 .record) == before);
     }
     CHECK(scalar(path, "SELECT COUNT(*) FROM paths") == shared);

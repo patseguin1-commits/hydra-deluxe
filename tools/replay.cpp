@@ -773,21 +773,17 @@ void check_chart(const std::string& path, const core::Rules& rules, Tally* tally
                 const ActivationWalk acts = p->walk_activations();
                 for (size_t k = 0; k < acts.size(); ++k) {
                     const Activation& act = acts[k];
-                    const int64_t act_tick =
-                        act.timecode ? act.timecode->ticks() : -1;
-                    int64_t nominal = -1;
-                    if (act.timecode && act.sp_meter)
-                        nominal = timing
-                                      .plusmeasure(*act.timecode,
-                                                   sp_bars_to_measures(*act.sp_meter))
-                                      .ticks();
+                    const int64_t act_tick = act.timecode.ticks();
+                    const int64_t nominal =
+                        timing.plusmeasure(act.timecode, sp_bars_to_measures(act.sp_meter))
+                            .ticks();
                     std::printf(
                         "       act %zu: tick %lld  deact %lld  nominal %lld  "
                         "sp_meter %d  skips %d  backends %zu  sqinouts %zu\n",
                         k, (long long)act_tick,
                         (long long)act.deact_tick.value_or(-1),
-                        (long long)nominal, act.sp_meter.value_or(-1),
-                        act.skips.value_or(-1), act.backends.size(),
+                        (long long)nominal, act.sp_meter,
+                        act.skips, act.backends.size(),
                         act.sqinouts.size());
                 }
             }

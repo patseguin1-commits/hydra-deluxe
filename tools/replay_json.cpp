@@ -81,22 +81,19 @@ nlohmann::json paths_json(const std::vector<const Path*>& all, const SongTiming&
                 sq.push_back(nlohmann::json{{"kind", s2.type_name()},
                                             {"offset_ms", s2.offset()}});
 
-            const int64_t act_tick = act.timecode ? act.timecode->ticks() : -1;
+            const int64_t act_tick = act.timecode.ticks();
             const std::optional<int64_t>& d = act.deact_tick;
-            int64_t nominal = -1;
-            if (act.timecode && act.sp_meter)
-                nominal = timing
-                              .plusmeasure(*act.timecode, sp_bars_to_measures(*act.sp_meter))
-                              .ticks();
+            const int64_t nominal =
+                timing.plusmeasure(act.timecode, sp_bars_to_measures(act.sp_meter)).ticks();
 
             acts.push_back(nlohmann::json{
                 {"act_tick", act_tick},
                 {"deact_tick", d ? *d : -1},
                 {"sqout_tick", act.sqout_tick ? *act.sqout_tick : -1},
                 {"nominal_deact_tick", nominal},
-                {"sp_meter", act.sp_meter ? *act.sp_meter : -1},
-                {"skips", act.skips ? *act.skips : -1},
-                {"chord_code", act.chord ? act.chord->code() : std::string()},
+                {"sp_meter", act.sp_meter},
+                {"skips", act.skips},
+                {"chord_code", act.chord.code()},
                 {"sqinouts", sq},
             });
         }

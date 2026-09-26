@@ -160,7 +160,6 @@ add_library(hydra_core STATIC
     src/search/engine.cpp
     src/search/pather.cpp
     src/store/serialize.cpp
-    src/store/path_binary.cpp
     src/store/path_codec.cpp
     src/store/record_store.cpp
     src/app/analysis.cpp

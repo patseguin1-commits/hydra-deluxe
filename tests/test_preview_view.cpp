@@ -145,7 +145,7 @@ Activation sp_act_at(const Song& song, int64_t tick, int sp_meter) {
     a.sp_meter = sp_meter;
     a.skips = 0;
     a.deact_tick =
-        song.timing().plusmeasure(*a.timecode, sp_bars_to_measures(sp_meter)).ticks();
+        song.timing().plusmeasure(a.timecode, sp_bars_to_measures(sp_meter)).ticks();
     return a;
 }
 
@@ -525,13 +525,10 @@ TEST_CASE("build_preview_scene: an analyzed chart's overlay matches its path") {
 
     // Every activation the path takes (those with a resolved timecode) appears
     // in the overlay, inside the song, in ms that share the notes' timing.
-    size_t expected = 0;
-    for (const Activation& a : best.all_activations())
-        if (a.timecode.has_value()) ++expected;
+    const size_t expected = best.all_activations().size();
     CHECK(scene.activations.size() == expected);
     size_t i = 0;
     for (const Activation& a : best.all_activations()) {
-        if (!a.timecode.has_value()) continue;
         const PreviewActivation& pa = scene.activations[i++];
         CHECK(pa.tick >= 0);
         CHECK(pa.ms >= 0.0);
@@ -548,9 +545,9 @@ TEST_CASE("build_preview_scene: an analyzed chart's overlay matches its path") {
             CHECK(pa.sp_end_ms > pa.ms);
         }
         // The activation note's lane is the chord's highest-priority note.
-        if (a.chord.has_value() && !a.chord->notes().empty()) {
+        if (a.chord.count() > 0) {
             CHECK(pa.has_lane);
-            CHECK(pa.lane == lane_of(a.chord->activation_note().colortype));
+            CHECK(pa.lane == lane_of(a.chord.activation_note().colortype));
         }
     }
 
@@ -739,8 +736,7 @@ TEST_CASE("sp meter curve: two clamped collections refill twice and empty at the
     REQUIRE(!paths.empty());
     REQUIRE(paths.front().activations.size() == 1);
     const Activation& act = paths.front().activations.front();
-    REQUIRE(act.timecode.has_value());
-    REQUIRE(act.timecode->ticks() == 2304);
+    REQUIRE(act.timecode.ticks() == 2304);
     REQUIRE(activation_deact_tick(act) == std::optional<int64_t>(6912));
     // Extra parentheses: the braced list's comma would split the macro.
     REQUIRE((act.collected_phrase_ticks == std::vector<int64_t>{3072, 3840}));

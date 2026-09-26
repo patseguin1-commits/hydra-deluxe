@@ -1,9 +1,8 @@
 // Tests for store/path_codec.{h,cpp}: the content-addressed path codec.
 //
 // The cornerstone is an equality proxy, not a field checklist. A record taken
-// apart by the new codec and put back together must serialize, through the
-// untouched record serializer, to exactly the same bytes as the same record
-// round-tripped through that serializer alone. If any field the codec stores,
+// apart by the codec and put back together must flatten again to exactly the
+// same bytes as the original (record_bytes.h). If any field the codec stores,
 // rebuilds, or drops were wrong, those bytes would differ.
 
 #include "doctest.h"
@@ -19,7 +18,7 @@
 #include "corpus_util.h"
 #include "parse/song.h"
 #include "search/pather.h"
-#include "store/path_binary.h"
+#include "record_bytes.h"
 #include "store/path_codec.h"
 #include "store/record_store.h"
 #include "store/serialize.h"
@@ -102,72 +101,102 @@ std::vector<std::string> pathstrings(const std::vector<const Path*>& paths) {
 
 }  // namespace
 
-TEST_CASE("path codec: a rebuilt record is byte-identical through the record serializer") {
+TEST_CASE("path codec: a rebuilt record flattens to the same bytes") {
     const HydraRecord& rec = fixture().record;
     REQUIRE_FALSE(rec.paths.empty());
     REQUIRE_FALSE(rec.allzero_paths.empty());
     REQUIRE(rec.all_paths().size() > rec.paths.size());
 
-    // The two round trips: the old serializer alone, and the new codec.
-    HydraRecord old_loaded = read_record(write_record(rec));
-    FlatRecord flat = flatten_record(rec);
-    HydraRecord new_loaded = rebuild_record(flat);
+    HydraRecord back = rebuild_record(flatten_record(rec));
+    CHECK(record_bytes(back) == record_bytes(rec));
 
-    // The strongest equality proxy available: every field any consumer reads
-    // goes through write_record, so equal bytes means equal records.
-    CHECK(write_record(old_loaded) == write_record(new_loaded));
+    CHECK(back.ms_limit == rec.ms_limit);
+    CHECK(back.sp_cap == rec.sp_cap);
+    CHECK(back.sp_cap_converged == rec.sp_cap_converged);
+    CHECK(back.rules_fingerprint == rec.rules_fingerprint);
+    CHECK(back.multsqueezes == rec.multsqueezes);
 
-    // Header fields.
-    CHECK(new_loaded.ms_limit == old_loaded.ms_limit);
-    CHECK(new_loaded.sp_cap == old_loaded.sp_cap);
-    CHECK(new_loaded.sp_cap_converged == old_loaded.sp_cap_converged);
-    CHECK(new_loaded.ms_limit == rec.ms_limit);
-    CHECK(new_loaded.sp_cap == rec.sp_cap);
-    CHECK(new_loaded.sp_cap_converged == rec.sp_cap_converged);
+    CHECK(back.all_paths().size() == rec.all_paths().size());
+    CHECK(back.all_allzero_paths().size() == rec.all_allzero_paths().size());
+    CHECK(pathstrings(back.all_paths()) == pathstrings(rec.all_paths()));
+    CHECK(pathstrings(back.all_allzero_paths()) == pathstrings(rec.all_allzero_paths()));
+    CHECK(diff_summary(summarize_record(back), summarize_record(rec)) == "");
 
-    // Counts, at the root level and across the whole variant tree.
-    CHECK(new_loaded.paths.size() == old_loaded.paths.size());
-    CHECK(new_loaded.allzero_paths.size() == old_loaded.allzero_paths.size());
-    CHECK(new_loaded.all_paths().size() == old_loaded.all_paths().size());
-    CHECK(new_loaded.all_allzero_paths().size() ==
-          old_loaded.all_allzero_paths().size());
+    // Every path, variants included, carries its root's totals again after
+    // prepare_variants pushes them down.
+    const std::vector<const Path*> want = rec.all_paths();
+    const std::vector<const Path*> got = back.all_paths();
+    for (size_t i = 0; i < want.size(); ++i) {
+        CHECK(got[i]->totalscore() == want[i]->totalscore());
+        CHECK(got[i]->notecount == want[i]->notecount);
+        CHECK(got[i]->leftover_sp == want[i]->leftover_sp);
+        CHECK(got[i]->tied_pathcount() == want[i]->tied_pathcount());
+    }
 
-    // Per-path pathstrings, in traversal order.
-    CHECK(pathstrings(new_loaded.all_paths()) ==
-          pathstrings(old_loaded.all_paths()));
-    CHECK(pathstrings(new_loaded.all_allzero_paths()) ==
-          pathstrings(old_loaded.all_allzero_paths()));
+    const ActivationWalk acts = back.best_path().walk_activations();
+    REQUIRE_FALSE(acts.empty());
+    CHECK(acts.front().deact_tick == rec.best_path().walk_activations().front().deact_tick);
 
-    // The summary columns the library listing sorts on.
-    CHECK(diff_summary(summarize_record(new_loaded),
-                       summarize_record(old_loaded)) == "");
-    CHECK(diff_summary(summarize_record(new_loaded), summarize_record(rec)) == "");
+    // Raw ticks until restored; after the restore the strings still agree.
+    restore_timecodes(back, fixture().song.timing());
+    CHECK(pathstrings(back.all_paths()) == pathstrings(rec.all_paths()));
+    CHECK(record_bytes(back) == record_bytes(rec));
+}
 
-    // The tied-path recount is rebuilt, not stored; it must land the same way.
-    for (size_t i = 0; i < new_loaded.paths.size(); ++i)
-        CHECK(new_loaded.paths[i].tied_pathcount() ==
-              old_loaded.paths[i].tied_pathcount());
+// A node is a path's activations and nothing else. Totals live with the
+// root in the structure blob, and the squeezes live on the record.
+TEST_CASE("path codec: a node carries activations only, never totals") {
+    const Path& root = fixture().record.best_path();
+    Path changed = root;
+    changed.score_base += 1;
+    changed.score_sp += 7;
+    changed.notecount += 1;
+    changed.leftover_sp += 1;
+    CHECK(encode_path_node(changed) == encode_path_node(root));
 
-    // The deactivation node the search stamps on each activation rides
-    // through flatten_record/rebuild_record like every other field. The
-    // byte-identical check above already proves it, but pin it directly too,
-    // so a codec bug that drops only this one field can't hide behind
-    // "everything else matched".
-    const auto old_acts = old_loaded.best_path().all_activations();
-    const auto new_acts = new_loaded.best_path().all_activations();
-    REQUIRE_FALSE(old_acts.empty());
-    REQUIRE(old_acts.front().deact_tick.has_value());
-    CHECK(new_acts.front().deact_tick == old_acts.front().deact_tick);
+    REQUIRE_FALSE(changed.activations.empty());
+    changed.activations.front().skips += 1;
+    CHECK(encode_path_node(changed) != encode_path_node(root));
+}
 
-    // Both sides carry raw ticks until timecodes are restored; after the same
-    // restore against the song's timing, the strings still agree.
-    restore_timecodes(old_loaded, fixture().song.timing());
-    restore_timecodes(new_loaded, fixture().song.timing());
-    CHECK(pathstrings(new_loaded.all_paths()) ==
-          pathstrings(old_loaded.all_paths()));
-    CHECK(pathstrings(new_loaded.all_allzero_paths()) ==
-          pathstrings(old_loaded.all_allzero_paths()));
-    CHECK(write_record(old_loaded) == write_record(new_loaded));
+TEST_CASE("path codec: root totals ride in the structure, once per root") {
+    HydraRecord rec = fixture().record;
+    const FlatRecord before = flatten_record(rec);
+    rec.paths.front().score_base += 1;
+    rec.paths.front().notecount += 2;
+    rec.paths.front().leftover_sp += 3;
+    const FlatRecord after = flatten_record(rec);
+
+    CHECK(after.structure != before.structure);
+    REQUIRE(after.nodes.size() == before.nodes.size());
+    for (size_t i = 0; i < after.nodes.size(); ++i)
+        CHECK(after.nodes[i].hash == before.nodes[i].hash);
+
+    const HydraRecord back = rebuild_record(after);
+    CHECK(back.paths.front().score_base == rec.paths.front().score_base);
+    CHECK(back.paths.front().notecount == rec.paths.front().notecount);
+    CHECK(back.paths.front().leftover_sp == rec.paths.front().leftover_sp);
+}
+
+TEST_CASE("path codec: the multiplier squeezes are stored once per record") {
+    HydraRecord rec = fixture().record;
+    Chord c;
+    c.add_note(NoteColor::Red);
+    c.add_note(NoteColor::Yellow);
+    c.apply_cymbal(NoteColor::Yellow);
+    rec.multsqueezes = {MultSqueeze(c, 8), MultSqueeze(c, 18)};
+    HydraRecord none = rec;
+    none.multsqueezes.clear();
+
+    const FlatRecord with = flatten_record(rec);
+    const FlatRecord without = flatten_record(none);
+    // Each squeeze costs its chord code (a 4-byte length plus 5 characters)
+    // and its 4-byte combo, once, however many paths the record holds.
+    CHECK(with.structure.size() == without.structure.size() + 2 * 13);
+    REQUIRE(with.nodes.size() == without.nodes.size());
+    for (size_t i = 0; i < with.nodes.size(); ++i)
+        CHECK(with.nodes[i].payload == without.nodes[i].payload);
+    CHECK(rebuild_record(with).multsqueezes == rec.multsqueezes);
 }
 
 TEST_CASE("path codec: a record with no paths round-trips") {
@@ -184,7 +213,7 @@ TEST_CASE("path codec: a record with no paths round-trips") {
     CHECK(back.ms_limit == empty.ms_limit);
     CHECK(back.sp_cap == empty.sp_cap);
     CHECK(back.sp_cap_converged == empty.sp_cap_converged);
-    CHECK(write_record(back) == write_record(read_record(write_record(empty))));
+    CHECK(record_bytes(back) == record_bytes(empty));
 }
 
 TEST_CASE("path codec: node payloads are flat and content-addressed") {
@@ -201,12 +230,6 @@ TEST_CASE("path codec: node payloads are flat and content-addressed") {
     CHECK(node.variants.empty());
     CHECK_FALSE(node.var_point.has_value());
     CHECK(node.activations.size() == root.activations.size());
-    CHECK(node.multsqueezes.size() == root.multsqueezes.size());
-    CHECK(node.score_base == root.score_base);
-    CHECK(node.notecount == root.notecount);
-    CHECK(node.leftover_sp == root.leftover_sp);
-    CHECK(node.skipped_ghosts == root.skipped_ghosts);
-    CHECK(node.skipped_accents == root.skipped_accents);
 
     // deact_tick is the newest field on Activation (blob v4 / node v2); a
     // plain encode_path_node/decode_path_node round trip must keep it, not
@@ -234,24 +257,12 @@ TEST_CASE("path codec: node payloads are flat and content-addressed") {
     CHECK_THROWS_AS(decode_path_node(truncated), SerializeError);
 }
 
-// A version-1 node is the pre-deact_tick payload shape: activations in the
-// blob-v3 layout, no deact_tick bytes at all. It used to still be readable,
-// with deact_tick coming back unset. That reachability is gone now: a
-// version-1 node only ever lived inside a version-1 structure blob, and the
-// store's Ready rule reads the structure format, so a version-1 structure
-// never gets decoded any more. With no path left that can hand decode_path_node
-// a version-1 node, there is only one layout left to support, and reading
-// anything else is a bug, not a compatibility case. Built by hand with
-// write_path_node(..., 3) (the same function encode_path_node calls at the
-// current version) so this exercises the real old layout, not a copy of it.
-TEST_CASE("path codec: a version-1 node is rejected") {
-    const Path& path = fixture().record.best_path();
-
-    BinaryWriter w;
-    w.u32(1);  // node version 1: activations in the blob-v3 layout
-    detail::write_path_node(w, path, 3);
-
-    CHECK_THROWS_AS(decode_path_node(w.bytes), SerializeError);
+// Only the current node layout is read. A node from an older layout is
+// reachable only through an older structure, which the store never decodes.
+TEST_CASE("path codec: a node in an older layout is rejected") {
+    std::vector<uint8_t> old = encode_path_node(fixture().record.best_path());
+    old[0] = 5;  // the 1.8.1 node layout
+    CHECK_THROWS_AS(decode_path_node(old), SerializeError);
 }
 
 TEST_CASE("path codec: flattening dedups and is stable") {
@@ -320,10 +331,15 @@ TEST_CASE("path codec: a missing node or a bad structure blob throws") {
     past4.structure[0] = 4;
     CHECK_THROWS_AS(rebuild_record(past4), SerializeError);
 
-    // The current version is 5, and the unmodified flat record -- still at
+    // Version 5 is the 1.8.1 layout: per-path squeezes and totals in nodes.
+    FlatRecord past5 = flat;
+    past5.structure[0] = 5;
+    CHECK_THROWS_AS(rebuild_record(past5), SerializeError);
+
+    // The current version is 6, and the unmodified flat record -- still at
     // that version -- round-trips through rebuild_record without throwing,
     // rules fingerprint included.
-    CHECK(kPathStructureFormatVersion == 5);
+    CHECK(kPathStructureFormatVersion == 6);
     CHECK(flat.structure[0] == static_cast<uint8_t>(kPathStructureFormatVersion));
     HydraRecord rebuilt = rebuild_record(flat);
     CHECK(rebuilt.rules_fingerprint == rec.rules_fingerprint);

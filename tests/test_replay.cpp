@@ -125,8 +125,7 @@ TEST_CASE("targeted search reproduces every corpus path") {
             std::vector<int64_t> ticks;
             bool have_ticks = true;
             for (const Activation& act : want_acts) {
-                if (!act.timecode) { have_ticks = false; break; }
-                ticks.push_back(act.timecode->ticks());
+                ticks.push_back(act.timecode.ticks());
             }
             REQUIRE(have_ticks);
 
@@ -188,11 +187,11 @@ TEST_CASE("targeted search rejects a tick that is not a fill") {
         HydraRecord rec = analyze_chart(song, cfg);
         if (rec.paths.empty()) continue;
         const std::vector<Activation> acts = rec.best_path().all_activations();
-        if (acts.empty() || !acts[0].timecode) continue;
+        if (acts.empty()) continue;
 
         // One tick past a real activation fill: the fill node lives on the
         // tick itself, so tick + 1 is never one.
-        const int64_t bogus = acts[0].timecode->ticks() + 1;
+        const int64_t bogus = acts[0].timecode.ticks() + 1;
         CHECK(search_target(song, cfg, {bogus}).empty());
         return;
     }
