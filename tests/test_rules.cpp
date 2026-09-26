@@ -180,7 +180,7 @@ TEST_CASE("rules: the leeway changes what the engine counts") {
         if (song.is_empty()) continue;
         auto best = [&](const core::Rules& r) {
             ScoreGraph graph(song, 4, FillDeadlineRule::Ch11, r);
-            return run_search(graph, DepthMode::Scores, 0, std::nullopt).front().totalscore();
+            return run_search(graph, EngineOptions{}).front().totalscore();
         };
         const int64_t s_none = best(none);
         const int64_t s_default = best(core::default_rules());
@@ -203,7 +203,7 @@ TEST_CASE("rules: max_tied_paths caps the tied paths the engine keeps") {
         Song song = load_songpath(path, true, true);
         if (song.is_empty()) continue;
         ScoreGraph graph(song, 4, FillDeadlineRule::Ch11, one);
-        std::vector<Path> paths = run_search(graph, DepthMode::Scores, 0, std::nullopt);
+        std::vector<Path> paths = run_search(graph, EngineOptions{});
         REQUIRE(!paths.empty());
         CHECK(paths.front().tied_pathcount() == 1);
         if (++charts == 5) break;

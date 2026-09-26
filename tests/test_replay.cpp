@@ -320,7 +320,7 @@ TEST_CASE("windows read from a path JSON match the ones read from the record") {
         REQUIRE(dumped.size() == all.size());
         for (size_t k = 0; k < all.size(); ++k) {
             const Path* p = all[k];
-            const std::vector<ReplayWindow> want = windows_for_path(*p, song);
+            const std::vector<ReplayWindow> want = windows_for_path(*p);
             if (want.empty()) continue;
 
             // The real dump producer, so a format change on either side fails.

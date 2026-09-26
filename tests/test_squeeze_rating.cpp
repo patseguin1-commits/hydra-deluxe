@@ -389,7 +389,7 @@ TEST_CASE("rate_activation: SqIns warn late, SqOuts early, with no backend rows"
     act.transfer_post = act.transfer_pre;
     act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, 50.0});
 
-    ActivationRating rate = rate_activation(act, nullptr, 85.0);
+    ActivationRating rate = rate_activation(act, 85.0);
     CHECK(rate.late_warns);
     CHECK_FALSE(rate.early_warns);
     CHECK(rate.late_note_warns);
@@ -397,7 +397,7 @@ TEST_CASE("rate_activation: SqIns warn late, SqOuts early, with no backend rows"
     CHECK(rate.backends.empty());
 
     act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -50.0});
-    rate = rate_activation(act, nullptr, 85.0);
+    rate = rate_activation(act, 85.0);
     CHECK(rate.late_warns);
     CHECK(rate.early_warns);
 }
@@ -426,7 +426,7 @@ TEST_CASE("rate_activation: stored scales, materiality-gated warns and rows") {
     late_row.offset_ms = 50.0;  // inside the display window, past the leeway floor
     flat.backends.push_back(late_row);
 
-    ActivationRating r = rate_activation(flat, nullptr, 85.0);
+    ActivationRating r = rate_activation(flat, 85.0);
     CHECK_FALSE(r.late_warns);
     CHECK_FALSE(r.early_warns);
     REQUIRE(r.backends.size() == 1);
@@ -438,7 +438,7 @@ TEST_CASE("rate_activation: stored scales, materiality-gated warns and rows") {
     // effectively 66.7 ms on the nominal scale.
     Activation scaled = flat;
     scaled.transfer_post.late = 0.5;
-    r = rate_activation(scaled, nullptr, 85.0);
+    r = rate_activation(scaled, 85.0);
     CHECK(r.late_warns);
     CHECK(r.late_backend_warns);
     CHECK_FALSE(r.late_note_warns);
@@ -455,7 +455,7 @@ TEST_CASE("rate_activation: stored scales, materiality-gated warns and rows") {
     BackendSqueeze leeway_row;
     leeway_row.offset_ms = 1.5;
     leeway.backends.push_back(leeway_row);
-    r = rate_activation(leeway, nullptr, 85.0);
+    r = rate_activation(leeway, 85.0);
     CHECK_FALSE(r.late_warns);
     CHECK_FALSE(r.backends[0].effective_ms.has_value());
 
@@ -467,7 +467,7 @@ TEST_CASE("rate_activation: stored scales, materiality-gated warns and rows") {
     BackendSqueeze over_row;
     over_row.offset_ms = 222.2;
     overbudget.backends.push_back(over_row);
-    r = rate_activation(overbudget, nullptr, 85.0);
+    r = rate_activation(overbudget, 85.0);
     CHECK(r.late_backend_warns);
     REQUIRE(r.backends.size() == 1);
     CHECK(r.backends[0].scale == doctest::Approx(1.0));
@@ -478,7 +478,7 @@ TEST_CASE("rate_activation: stored scales, materiality-gated warns and rows") {
     sqout.backends.clear();
     sqout.transfer_pre.early = 0.5;
     sqout.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -50.0});
-    r = rate_activation(sqout, nullptr, 85.0);
+    r = rate_activation(sqout, 85.0);
     CHECK(r.early_warns);
     CHECK(r.early_note_warns);
     CHECK_FALSE(r.early_backend_warns);
@@ -505,7 +505,7 @@ TEST_CASE("rate_activation: free squeezes read the opposite scale direction") {
     freeout.backends.push_back(out_row);
     freeout.sqout_tick = 3187;  // this row is the squeezed-out chord
 
-    ActivationRating r = rate_activation(freeout, nullptr, 85.0);
+    ActivationRating r = rate_activation(freeout, 85.0);
     REQUIRE(r.backends.size() == 1);
     CHECK(r.backends[0].squeezed_out);
     CHECK(r.backends[0].scale == doctest::Approx(4.45));
@@ -531,7 +531,7 @@ TEST_CASE("rate_activation: free squeezes read the opposite scale direction") {
     hardout.backends.push_back(hard_row);
     hardout.sqout_tick = 3053;
 
-    r = rate_activation(hardout, nullptr, 85.0);
+    r = rate_activation(hardout, 85.0);
     REQUIRE(r.backends.size() == 1);
     CHECK(r.backends[0].squeezed_out);
     CHECK(r.backends[0].scale == doctest::Approx(0.5));
@@ -550,47 +550,31 @@ TEST_CASE("rate_activation: free squeezes read the opposite scale direction") {
     freein.transfer_post = freein.transfer_pre;
     freein.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, -50.0});
 
-    r = rate_activation(freein, nullptr, 85.0);
+    r = rate_activation(freein, 85.0);
     CHECK(r.early_note_warns);
     CHECK_FALSE(r.late_note_warns);
     CHECK(r.early_warns);
     CHECK_FALSE(r.late_warns);
 }
 
-TEST_CASE("rate_activation: a live timing overrides the stored scales") {
-    // Flat 4/4 at one tempo: the live recompute yields identity scales even
-    // though the record stored 0.5s — the stored values are only a fallback.
-    std::map<int64_t, int64_t> tpm{{0, 1920}};
-    std::map<int64_t, double> bpm{{0, 120.0}};
-    SongTiming st(480, tpm, bpm);
-
+TEST_CASE("rate_activation: the stored scales are the only scales") {
+    // A flat chart would recompute identity scales, but the search stored
+    // 0.5s. The rating reads what the search stored and never recomputes.
     Activation act;
-    act.timecode = st.timecode(0);
+    act.timecode = Timecode::raw(0);
     act.sp_meter = 2;
+    act.deact_tick = 7680;
     act.transfer_pre = TransferScale{0.5, 0.5};
     act.transfer_post = TransferScale{0.5, 0.5};
-    // No SqIn, no offset-bearing row yet at this point: the old fallback's
-    // node, act + 2*B measures (tick 7680) -- the row below sits 50 ms past
-    // it, recovering the same node the other way.
-    act.deact_tick = st.plusmeasure(*act.timecode, 4).ticks();
 
     BackendSqueeze row;
-    row.timecode = st.timecode(7728);  // 50 ms past the 4-measure SP end
+    row.timecode = Timecode::raw(7728);
     row.offset_ms = 50.0;
     act.backends.push_back(row);
 
-    ActivationRating r = rate_activation(act, &st, 85.0);
-    CHECK(r.scales.post.late == doctest::Approx(1.0));
-    CHECK_FALSE(r.late_warns);
-    CHECK_FALSE(r.backends[0].effective_ms.has_value());
-
-    // A stale activation (no timecode) falls back to the stored scales even
-    // when a timing is at hand.
-    Activation stale;
-    stale.transfer_post.late = 0.5;
-    stale.backends.push_back(row);
-    r = rate_activation(stale, &st, 85.0);
+    ActivationRating r = rate_activation(act, 85.0);
     CHECK(r.scales.post.late == doctest::Approx(0.5));
+    CHECK(r.scales.pre.early == doctest::Approx(0.5));
     CHECK(r.late_warns);
 }
 
@@ -692,7 +676,7 @@ TEST_CASE("rate_activation: cap_clamped flag") {
     Activation clamped_with_squeeze;
     clamped_with_squeeze.clamp_tick = 3072;
     clamped_with_squeeze.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -50.0});
-    ActivationRating r1 = rate_activation(clamped_with_squeeze, nullptr, 85.0);
+    ActivationRating r1 = rate_activation(clamped_with_squeeze, 85.0);
     CHECK(r1.cap_clamped);
 
     // clamp_tick set, but the only backend row is at -30 ms -- inside the
@@ -703,14 +687,14 @@ TEST_CASE("rate_activation: cap_clamped flag") {
     BackendSqueeze mild_row;
     mild_row.offset_ms = -30.0;
     clamped_no_squeeze.backends.push_back(mild_row);
-    ActivationRating r2 = rate_activation(clamped_no_squeeze, nullptr, 85.0);
+    ActivationRating r2 = rate_activation(clamped_no_squeeze, 85.0);
     CHECK_FALSE(r2.cap_clamped);
 
     // A SqOut with no clamp_tick at all -- the window was never cap-clamped,
     // so there's nothing to warn about regardless of the squeeze.
     Activation unclamped_with_squeeze;
     unclamped_with_squeeze.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -50.0});
-    ActivationRating r3 = rate_activation(unclamped_with_squeeze, nullptr, 85.0);
+    ActivationRating r3 = rate_activation(unclamped_with_squeeze, 85.0);
     CHECK_FALSE(r3.cap_clamped);
 }
 
@@ -730,7 +714,7 @@ TEST_CASE("rate_activation: a plain row inside the leeway is not a frontend sque
     row.offset_ms = 2.5;
     act.backends.push_back(row);
 
-    ActivationRating r = rate_activation(act, nullptr, 85.0);
+    ActivationRating r = rate_activation(act, 85.0);
     CHECK_FALSE(r.cap_clamped);
     CHECK_FALSE(r.late_backend_warns);
     REQUIRE(r.backends.size() == 1);
@@ -739,7 +723,7 @@ TEST_CASE("rate_activation: a plain row inside the leeway is not a frontend sque
 
     // At the leeway edge the row is uncounted, so the frontend decides it.
     act.backends[0].offset_ms = 3.0;
-    r = rate_activation(act, nullptr, 85.0);
+    r = rate_activation(act, 85.0);
     CHECK(r.cap_clamped);
     CHECK(act.backends[0].summarystr(85.0) == "Hard (uncounted)");
 
@@ -747,7 +731,7 @@ TEST_CASE("rate_activation: a plain row inside the leeway is not a frontend sque
     const double narrow = 2.0;
     REQUIRE(narrow != core::default_rules().backend_leeway_ms);
     act.backends[0].offset_ms = 2.5;
-    r = rate_activation(act, nullptr, 85.0, narrow);
+    r = rate_activation(act, 85.0, narrow);
     CHECK(r.cap_clamped);
     CHECK(act.backends[0].summarystr(85.0, narrow) == "Hard (uncounted)");
 }

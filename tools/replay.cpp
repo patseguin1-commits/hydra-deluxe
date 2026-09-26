@@ -753,7 +753,7 @@ void check_chart(const std::string& path, const core::Rules& rules, Tally* tally
                             p->pathstring().c_str(), diffs.c_str());
                 // The windows the replay used, so a mismatch names the
                 // activation whose deactivation node was not recovered.
-                const std::vector<Activation> acts = p->all_activations();
+                const ActivationWalk acts = p->walk_activations();
                 for (size_t k = 0; k < acts.size(); ++k) {
                     const Activation& act = acts[k];
                     const int64_t act_tick =

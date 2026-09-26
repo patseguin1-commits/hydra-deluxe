@@ -26,6 +26,7 @@
 
 #include "core/model.h"
 #include "core/rules.h"
+#include "core/squeeze_rating.h"
 #include "core/winstr.h"
 #include "corpus_util.h"
 #include "parse/song.h"
@@ -184,6 +185,70 @@ TEST_CASE("records round-trip through RecordStore across the corpus and config m
     CHECK(mismatches == 0);
     REQUIRE(checks > 0);
     MESSAGE("checked " << checks << " round trips");
+}
+
+// rate_activation reads the stored transfer scales only. That is safe because
+// a Ready record's stored scales equal a live recompute: a Ready row was
+// written by this build, which stamps the scales with
+// frontend_transfer_scales at copy-out, and the store hands back every input
+// that function reads. This pins it through a real store round trip, for
+// every activation of every path, all-0 paths included.
+TEST_CASE("stored transfer scales equal a live recompute after a store round trip") {
+    const std::vector<Config> configs = {
+        {"cap4", 4, DepthMode::Scores, 4, std::nullopt},
+        {"cap4.ms10", 4, DepthMode::Scores, 4, 10.0},
+        {"auto", std::nullopt, DepthMode::Scores, 4, std::nullopt},
+    };
+    RecordStore store(":memory:");
+    int acts = 0, mismatches = 0;
+
+    for (const std::string& path : corpus::chart_paths()) {
+        Song song = load_songpath(path, true, true);
+        if (song.is_empty()) continue;
+
+        for (const Config& cfg : configs) {
+            std::optional<HydraRecord> record;
+            try {
+                SearchSettings settings;
+                settings.sp_cap = cfg.cap;
+                settings.depth_mode = cfg.dmode;
+                settings.depth_value = cfg.dvalue;
+                settings.ms_filter = cfg.ms;
+                record = analyze_chart(song, settings);
+            } catch (const ChartFileError&) {
+                continue;
+            }
+            const CapQuery cap = CapQuery::at(*record->sp_cap);
+            const std::string hyhash = path + "|scales|" + cfg.key;
+            store.add_song(hyhash, "Title", "Artist", "Charter", song);
+            store.add_record(RecordKey{hyhash, "mode", cap}, *record);
+
+            const RecordLookup lookup = store.get_record(RecordKey{hyhash, "mode", cap});
+            REQUIRE(lookup.status == RecordStatus::Ready);
+            REQUIRE(lookup.timing.has_value());
+
+            std::vector<const Path*> all = lookup.record->all_paths();
+            for (const Path* p : lookup.record->all_allzero_paths()) all.push_back(p);
+            for (const Path* p : all) {
+                for (const Activation& act : p->walk_activations()) {
+                    ++acts;
+                    const std::optional<ActTransferScales> live =
+                        frontend_transfer_scales(act, *lookup.timing);
+                    const bool same = live && live->pre.early == act.transfer_pre.early &&
+                                      live->pre.late == act.transfer_pre.late &&
+                                      live->post.early == act.transfer_post.early &&
+                                      live->post.late == act.transfer_post.late;
+                    if (!same && ++mismatches <= 8)
+                        CHECK_MESSAGE(false, path << " [" << cfg.key << "] activation at tick "
+                                                  << act.timecode->ticks());
+                }
+            }
+        }
+    }
+
+    CHECK(mismatches == 0);
+    REQUIRE(acts > 0);
+    MESSAGE("compared " << acts << " stored activations with a live recompute");
 }
 
 // The blob grew allzero_paths in format version 2, per-activation transfer

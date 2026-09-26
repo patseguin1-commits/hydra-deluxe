@@ -81,10 +81,12 @@ struct ScoreGraphEdge {
 
     // (sp_timecode, extension_map) per SP phrase collected on this advance edge.
     // The extension map is from_tick -> where that end moves (and whether the
-    // cap pinned it there); the engine scans it by key.
+    // cap pinned it there); the engine scans it by key. Only the SP track moves
+    // an SP end, so base-track edges leave the map empty and read the times.
     std::vector<std::pair<Timecode, std::map<int64_t, SpExtension>>> sp_times;
 
-    std::optional<FrontendSqueeze> frontend;
+    // The frontend chord's SP points: set only on activation edges, 0 elsewhere.
+    int frontend_points = 0;
     std::vector<BackendSqueeze> backends;
     std::vector<MultSqueeze> multsqueezes;
 
@@ -110,10 +112,7 @@ public:
                const core::Rules& rules = core::default_rules());
 
     ScoreGraphNode* start() const { return start_; }
-    ScoreGraphNode* sp_start() const { return sp_start_; }
-    int length() const { return length_; }
     std::optional<int> sp_meter_cap() const { return sp_meter_cap_; }
-    FillDeadlineRule fill_rule() const { return rule_; }
     const core::Rules& rules() const { return rules_; }
     const SongTiming& timing() const { return song_.timing(); }
 
@@ -160,9 +159,7 @@ private:
     void handle_deact(const Timecode& deact_tc,
                       const std::optional<Chord>& chord);
     void advance_tracks(const Timecode& tc, const std::optional<Chord>& chord);
-    ScoreGraphEdge* add_act_edge(const Chord& frontend_chord,
-                                 int frontend_points,
-                                 int64_t fill_length_ticks);
+    ScoreGraphEdge* add_act_edge(int frontend_points, int64_t fill_length_ticks);
     void add_deact_edge();
 
     Timecode plusmeasure(const Timecode& tc, int64_t add_measures);
@@ -181,12 +178,9 @@ private:
     std::deque<ScoreGraphEdge> edge_pool_;
 
     ScoreGraphNode* start_ = nullptr;
-    ScoreGraphNode* sp_start_ = nullptr;
-    int length_ = 0;
 
     // Processing state.
     Timecode head_time_;
-    bool head_time_set_ = false;
     ScoreGraphNode* base_track_head_ = nullptr;
     ScoreGraphNode* sp_track_head_ = nullptr;
     int combo_ = 0;

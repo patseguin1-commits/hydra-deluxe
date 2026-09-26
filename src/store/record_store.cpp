@@ -405,7 +405,7 @@ void rollback_if_open(sqlite3* db) {
 
 PathSummary summarize_path(const Path& path) {
     PathSummary s;
-    std::vector<Activation> acts = path.all_activations();
+    const ActivationWalk acts = path.walk_activations();
 
     s.score = path.totalscore();
     s.actcount = static_cast<int>(acts.size());

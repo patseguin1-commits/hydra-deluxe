@@ -16,10 +16,6 @@ bool allows_cymbals(NoteColor c) {
            c == NoteColor::Green;
 }
 
-// Every lane, kick included: Clone Hero prices a velocity-1 kick as a ghost
-// and a velocity-127 kick as an accent, the same rule the pads use.
-bool allows_dynamics(NoteColor) { return true; }
-
 std::string color_str(NoteColor c) {
     switch (c) {
         case NoteColor::Kick: return "Kick";
@@ -51,11 +47,6 @@ std::string color_notationstr(NoteColor c) {
     return "";
 }
 
-NoteCymbalType cymbal_flip(NoteCymbalType t) {
-    return t == NoteCymbalType::Cymbal ? NoteCymbalType::Normal
-                                       : NoteCymbalType::Cymbal;
-}
-
 // ---- ChordNote ----------------------------------------------------------
 
 bool ChordNote::operator==(const ChordNote& o) const {
@@ -70,13 +61,12 @@ std::string ChordNote::str() const {
 
     // Every modifier goes in one parenthesis, dynamic first, so a ghost 2x
     // kick reads "Kick (Ghost, 2x)".
+    // Every lane carries dynamics, the kick included (ADR 0012).
     std::vector<std::string> mods;
-    if (allows_dynamics(colortype)) {
-        switch (dynamictype) {
-            case NoteDynamicType::Normal: break;
-            case NoteDynamicType::Ghost: mods.push_back("Ghost"); break;
-            case NoteDynamicType::Accent: mods.push_back("Accent"); break;
-        }
+    switch (dynamictype) {
+        case NoteDynamicType::Normal: break;
+        case NoteDynamicType::Ghost: mods.push_back("Ghost"); break;
+        case NoteDynamicType::Accent: mods.push_back("Accent"); break;
     }
     if (is2x) mods.push_back("2x");
 
@@ -482,7 +472,7 @@ int64_t Path::totalscore() const {
 
 std::string Path::pathstring() const {
     if (!has_activations()) return "(No activations.)";
-    std::vector<Activation> acts = all_activations();
+    const ActivationWalk acts = walk_activations();
     std::string out;
     for (size_t i = 0; i < acts.size(); ++i) {
         if (i) out += " ";
@@ -506,7 +496,7 @@ std::string Path::pathstring_verbose() const {
     }
 
     if (has_activations()) {
-        std::vector<Activation> acts = all_activations();
+        const ActivationWalk acts = walk_activations();
         std::string s;
         for (size_t i = 0; i < acts.size(); ++i) {
             if (i) s += " ";
@@ -537,10 +527,11 @@ int Path::recount_tied_paths() {
 }
 
 void Path::prepare_variants() {
-    std::vector<Activation> mine = all_activations();
+    const ActivationWalk mine = walk_activations();
     for (Path& v : variants) {
-        int vp = v.var_point.value_or(0);
-        v.variant_tail.assign(mine.begin() + vp, mine.end());
+        const size_t vp = static_cast<size_t>(v.var_point.value_or(0));
+        v.variant_tail.clear();
+        for (size_t i = vp; i < mine.size(); ++i) v.variant_tail.push_back(mine[i]);
         v.score_base = score_base;
         v.score_combo = score_combo;
         v.score_sp = score_sp;
@@ -555,7 +546,7 @@ void Path::prepare_variants() {
 
 std::optional<double> Path::difficulty() const {
     std::optional<double> best;
-    for (const Activation& act : all_activations()) {
+    for (const Activation& act : walk_activations()) {
         if (auto d = act.difficulty()) {
             if (!best || *d > *best) best = d;
         }
@@ -594,7 +585,7 @@ std::vector<BackendSqueeze> Activation::display_backends() const {
 }
 
 bool Path::is_allzero() const {
-    std::vector<Activation> acts = all_activations();
+    const ActivationWalk acts = walk_activations();
     if (acts.empty()) return false;
     for (const Activation& act : acts)
         if (act.skips.value_or(-1) != 0) return false;

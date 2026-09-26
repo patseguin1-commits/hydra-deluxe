@@ -115,8 +115,7 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
         av.frontend =
             "Frontend: " + (act.chord ? act.chord->rowstr() : std::string("None"));
 
-        ActivationRating rate =
-            rate_activation(act, timing, W, rules.backend_leeway_ms);
+        ActivationRating rate = rate_activation(act, W, rules.backend_leeway_ms);
 
         // The line prints the scale(s) that actually tripped the warn:
         // backend rows are judged at the post (deact-node) end, SqIn/SqOut

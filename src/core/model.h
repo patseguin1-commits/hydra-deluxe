@@ -13,7 +13,9 @@
 #define HYDRA_CORE_MODEL_H
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -44,11 +46,9 @@ enum class NoteDynamicType { Normal = 1, Ghost = 2, Accent = 3 };
 enum class NoteCymbalType { Normal = 1, Cymbal = 2 };
 
 bool allows_cymbals(NoteColor c);
-bool allows_dynamics(NoteColor c);
 std::string color_str(NoteColor c);         // "Kick"/"Red"/...
 std::string dynamic_str(NoteDynamicType t); // "none"/"ghost"/"accent"
 std::string color_notationstr(NoteColor c); // "K"/"R"/"Y"/"B"/"G"
-NoteCymbalType cymbal_flip(NoteCymbalType t);
 
 // ---- squeeze thresholds -------------------------------------------------
 // One home for the ms thresholds that define squeeze semantics. Each used to
@@ -199,14 +199,6 @@ struct SPSqueeze {
     std::string description() const;
 };
 
-struct FrontendSqueeze {
-    Chord chord;
-    int points = 0;
-    bool operator==(const FrontendSqueeze& o) const {
-        return chord == o.chord && points == o.points;
-    }
-};
-
 struct BackendSqueeze {
     Timecode timecode;
     Chord chord;
@@ -341,6 +333,63 @@ struct Activation {
 // core/squeeze_rating.h. activation_deact_tick lives there too, but it
 // derives nothing: it just hands back the stored deact_tick.
 
+// A read-only walk over a path's activations: its own, then the variant tail
+// it shares with its parent -- the order all_activations() copies them in.
+// It holds pointers into the Path and copies nothing, so it is valid only
+// while that Path is alive and unchanged.
+class ActivationWalk {
+public:
+    class iterator {
+    public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = Activation;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const Activation*;
+        using reference = const Activation&;
+
+        iterator(const std::vector<Activation>* own, const std::vector<Activation>* tail,
+                 size_t i)
+            : own_(own), tail_(tail), i_(i) {}
+        reference operator*() const {
+            return i_ < own_->size() ? (*own_)[i_] : (*tail_)[i_ - own_->size()];
+        }
+        pointer operator->() const { return &**this; }
+        iterator& operator++() {
+            ++i_;
+            return *this;
+        }
+        iterator operator++(int) {
+            iterator old = *this;
+            ++i_;
+            return old;
+        }
+        bool operator==(const iterator& o) const { return i_ == o.i_; }
+        bool operator!=(const iterator& o) const { return i_ != o.i_; }
+
+    private:
+        const std::vector<Activation>* own_;
+        const std::vector<Activation>* tail_;
+        size_t i_;
+    };
+
+    ActivationWalk(const std::vector<Activation>& own, const std::vector<Activation>& tail)
+        : own_(&own), tail_(&tail) {}
+
+    size_t size() const { return own_->size() + tail_->size(); }
+    bool empty() const { return size() == 0; }
+    const Activation& operator[](size_t i) const {
+        return i < own_->size() ? (*own_)[i] : (*tail_)[i - own_->size()];
+    }
+    const Activation& front() const { return (*this)[0]; }
+    const Activation& back() const { return (*this)[size() - 1]; }
+    iterator begin() const { return iterator(own_, tail_, 0); }
+    iterator end() const { return iterator(own_, tail_, size()); }
+
+private:
+    const std::vector<Activation>* own_;
+    const std::vector<Activation>* tail_;
+};
+
 // ---- Path ---------------------------------------------------------------
 
 struct Path {
@@ -365,6 +414,9 @@ struct Path {
 
     // _activations then _variant_tail, as all_activations() yields.
     std::vector<Activation> all_activations() const;
+    // The same activations, read in place. Prefer this unless the caller
+    // really needs its own copy.
+    ActivationWalk walk_activations() const { return ActivationWalk(activations, variant_tail); }
     bool has_activations() const;
 
     int64_t totalscore() const;

@@ -735,7 +735,7 @@ TEST_CASE("sp meter curve: two clamped collections refill twice and empty at the
     // refill and then showed a bar after SP ended that was never banked.
     Song song = make_overfill_song();
     ScoreGraph graph(song, 2);
-    std::vector<Path> paths = run_search(graph, DepthMode::Scores, 0, std::nullopt);
+    std::vector<Path> paths = run_search(graph, EngineOptions{});
     REQUIRE(!paths.empty());
     REQUIRE(paths.front().activations.size() == 1);
     const Activation& act = paths.front().activations.front();

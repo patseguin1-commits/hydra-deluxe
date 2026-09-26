@@ -22,9 +22,11 @@ HydraRecord read(const ScoreGraph& graph, DepthMode depth_mode, int depth_value,
                  const std::function<void(float)>& on_progress) {
     HydraRecord record;
     record.ms_limit = ms_filter;
-    record.paths = run_search(graph, depth_mode, depth_value, ms_filter,
-                              /*no_skips=*/false, /*hard_ms_filter=*/false,
-                              on_progress);
+    EngineOptions options;
+    options.depth_mode = depth_mode;
+    options.depth_value = depth_value;
+    options.ms_filter = ms_filter;
+    record.paths = run_search(graph, options, on_progress);
     return record;
 }
 
@@ -76,10 +78,11 @@ std::vector<Path> search_allzero(const ScoreGraph& graph,
     // group) meant the section routinely showed a path needing hundreds of ms.
     std::vector<Path> paths;
     try {
-        paths = run_search(graph, DepthMode::Scores, /*depth_value=*/0,
-                           /*ms_filter=*/0.0,
-                           /*no_skips=*/true, /*hard_ms_filter=*/true,
-                           on_progress);
+        EngineOptions options;  // score depth 0: only the top score, plus its ties
+        options.ms_filter = 0.0;
+        options.no_skips = true;
+        options.hard_ms_filter = true;
+        paths = run_search(graph, options, on_progress);
     } catch (const std::runtime_error&) {
         // The hard filter can empty the frontier: this chart offers no all-0
         // path inside 0 ms. run() reports that the same way it reports a broken
@@ -118,9 +121,11 @@ std::vector<Path> search_target(const Song& song, const SearchSettings& settings
     // a billion cannot overflow.
     std::vector<Path> paths;
     try {
-        paths = run_search(graph, DepthMode::Points, /*depth_value=*/1'000'000'000,
-                           /*ms_filter=*/std::nullopt, /*no_skips=*/false,
-                           /*hard_ms_filter=*/false, {}, &ticks);
+        EngineOptions options;
+        options.depth_mode = DepthMode::Points;
+        options.depth_value = 1'000'000'000;
+        options.target_act_ticks = ticks;
+        paths = run_search(graph, options);
     } catch (const std::runtime_error&) {
         // The frontier emptied: this activation set is not realizable on this
         // chart. That is the normal failure for a targeted search, not a bug.
@@ -133,7 +138,7 @@ std::vector<Path> search_target(const Song& song, const SearchSettings& settings
     // activations than asked for. That is still an unrealizable set, so it
     // reports as one.
     for (const Path& p : paths) {
-        const std::vector<Activation> acts = p.all_activations();
+        const ActivationWalk acts = p.walk_activations();
         if (acts.size() != ticks.size()) return {};
         for (size_t i = 0; i < acts.size(); ++i) {
             if (!acts[i].timecode || acts[i].timecode->ticks() != ticks[i])
@@ -287,21 +292,13 @@ HydraRecord analyze_chart(const Song& song, const SearchSettings& settings,
     const int depth_value = settings.depth_value;
     const std::optional<double> ms_filter = settings.ms_filter;
 
-    // Clone Hero's 4-bar rule is the classic single pass, kept exactly as it
-    // always was so a fresh 4-bar record matches every stored one.
-    if (sp_cap == kCloneHeroSpCap) {
-        HydraRecord record =
-            analyze_at_cap(song, kCloneHeroSpCap, depth_mode, depth_value, ms_filter,
-                           std::nullopt, settings.legacy_fill_deadline, settings.rules,
-                           /*want_allzero=*/true, on_progress);
-        record.rules_fingerprint = settings.rules.fingerprint();
-        return record;
-    }
-    // Any other fixed cap runs a single pass at that ceiling. The graph is
-    // still only built as tall as the song has phrases to bank -- no run can
-    // exceed that -- so a huge cap on a short song stays cheap and exact. A
-    // fixed cap is the user's explicit choice, so Auto's time budget doesn't
-    // apply to it.
+    // A fixed cap, Clone Hero's 4 bars included, runs a single pass at that
+    // ceiling. The graph is only built as tall as the song has phrases to
+    // bank -- no run can exceed that -- so a huge cap on a short song stays
+    // cheap, and a 4-bar graph built lower stores the same bytes (test "a
+    // 4-bar graph built at the song's phrase count stores the same paths").
+    // A fixed cap is the user's explicit choice, so Auto's time budget
+    // doesn't apply to it.
     if (sp_cap.has_value()) {
         int build_cap = graph_build_cap(*sp_cap, song.sp_phrase_count());
         HydraRecord record =
