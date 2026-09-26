@@ -429,3 +429,27 @@ TEST_CASE("MultSqueeze accepts exactly the 2- and 3-note chords that straddle a 
         CHECK_MESSAGE(accepted(chord_of(4), combo) == (combo == 7 || combo == 17 || combo == 27),
                       "n=4 combo=" << combo);
 }
+
+// The graph asks applies() of every chord instead of catching a throw.
+// It must answer exactly as the constructor decides, for every shape.
+TEST_CASE("MultSqueeze::applies answers exactly when the constructor accepts") {
+    const NoteColor order[] = {NoteColor::Red, NoteColor::Yellow, NoteColor::Kick,
+                               NoteColor::Blue, NoteColor::Green};
+    for (int n = 0; n <= 5; ++n) {
+        for (bool cymbal : {false, true}) {
+            Chord c;
+            for (int i = 0; i < n; ++i) c.add_note(order[i]);
+            if (cymbal && n >= 2) c.apply_cymbal(NoteColor::Yellow);
+            for (int combo = 0; combo < 40; ++combo) {
+                bool constructed = true;
+                try {
+                    MultSqueeze ms(c, combo);
+                } catch (const std::invalid_argument&) {
+                    constructed = false;
+                }
+                CHECK_MESSAGE(MultSqueeze::applies(c, combo) == constructed,
+                              "n=" << n << " cymbal=" << cymbal << " combo=" << combo);
+            }
+        }
+    }
+}

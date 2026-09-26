@@ -223,8 +223,12 @@ struct BackendSqueeze {
 class MultSqueeze {
 public:
     MultSqueeze(Chord chord, int combo);
+    // Whether a chord hit at this combo is a multiplier squeeze: exactly the
+    // cases the constructor accepts, answered without throwing. The graph
+    // asks this of every chord, and "no" is the usual answer.
+    static bool applies(const Chord& chord, int combo);
 
-    int multiplier() const;      // to_multiplier(combo) + 1
+    int multiplier() const;     // to_multiplier(combo) + 1
     std::string direction() const;
     int points() const;
     std::string notationstr() const;

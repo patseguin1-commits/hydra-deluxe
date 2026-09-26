@@ -38,39 +38,50 @@ const int32_t NODE_BROKEN = -2;
 
 // ---- the graph, enumerated ----------------------------------------------
 // The search is index-based (indices pack into memo keys and the output act
-// records), so the graph is enumerated into index->object arrays. No per-field
-// data is copied: node()/edge() read the objects through these arrays.
+// records), so the graph is enumerated into index->object arrays, plus one
+// value-view per node and edge that node()/edge() hand out.
+
+// Cheap value-views over one node/edge, so the ported engine body keeps reading
+// `n.tick` / `e.basescore`. enumerate() builds one per node and edge, once.
+struct NodeView {
+    int64_t tick;
+    int32_t adv_edge, branch_edge, is_sp;
+};
+struct EdgeView {
+    int32_t dest;
+    int32_t notecount, basescore, comboscore, spscore, soloscore, accentscore,
+        ghostscore;
+    int32_t frontend_points;
+    int32_t late_sqin_count;
+    double activation_fill_deadline_ms, sqinout_timing;
+    int64_t sqinout_time, sqout_time, sqin_time;
+};
+
 struct Enum {
     std::vector<const ScoreGraphNode*> nodes;
     std::vector<const ScoreGraphEdge*> edges;
-    std::unordered_map<const ScoreGraphNode*, int32_t> node_idx;
-    std::unordered_map<const ScoreGraphEdge*, int32_t> edge_idx;
+    // One view per node and per edge, in index order, built once at the end
+    // of enumerate(): the hot loop indexes these instead of rebuilding a view
+    // through hash-map lookups on every read.
+    std::vector<NodeView> node_views;
+    std::vector<EdgeView> edge_views;
     int32_t start = -1;
-
-    int32_t node_of(const ScoreGraphNode* n) const {
-        if (n == nullptr) return -1;
-        auto it = node_idx.find(n);
-        return it == node_idx.end() ? -1 : it->second;
-    }
-    int32_t edge_of(const ScoreGraphEdge* e) const {
-        if (e == nullptr) return -1;
-        auto it = edge_idx.find(e);
-        return it == edge_idx.end() ? -1 : it->second;
-    }
 };
 
 Enum enumerate(const ScoreGraph& graph) {
     Enum en;
+    std::unordered_map<const ScoreGraphNode*, int32_t> node_idx;
+    std::unordered_map<const ScoreGraphEdge*, int32_t> edge_idx;
     std::vector<const ScoreGraphNode*> pend_nodes;
     std::vector<const ScoreGraphEdge*> pend_edges;
 
     std::function<int32_t(const ScoreGraphNode*)> nid =
         [&](const ScoreGraphNode* n) -> int32_t {
         if (n == nullptr) return -1;
-        auto it = en.node_idx.find(n);
-        if (it != en.node_idx.end()) return it->second;
+        auto it = node_idx.find(n);
+        if (it != node_idx.end()) return it->second;
         int32_t idx = static_cast<int32_t>(en.nodes.size());
-        en.node_idx[n] = idx;
+        node_idx[n] = idx;
         en.nodes.push_back(n);
         pend_nodes.push_back(n);
         return idx;
@@ -78,10 +89,10 @@ Enum enumerate(const ScoreGraph& graph) {
     std::function<int32_t(const ScoreGraphEdge*)> eid =
         [&](const ScoreGraphEdge* e) -> int32_t {
         if (e == nullptr) return -1;
-        auto it = en.edge_idx.find(e);
-        if (it != en.edge_idx.end()) return it->second;
+        auto it = edge_idx.find(e);
+        if (it != edge_idx.end()) return it->second;
         int32_t idx = static_cast<int32_t>(en.edges.size());
-        en.edge_idx[e] = idx;
+        edge_idx[e] = idx;
         en.edges.push_back(e);
         pend_edges.push_back(e);
         return idx;
@@ -101,24 +112,47 @@ Enum enumerate(const ScoreGraph& graph) {
             nid(e->dest);
         }
     }
+
+    // Every reachable pointer is indexed now, so each view resolves fully.
+    auto node_of = [&](const ScoreGraphNode* n) -> int32_t {
+        return n == nullptr ? -1 : node_idx.at(n);
+    };
+    auto edge_of = [&](const ScoreGraphEdge* e) -> int32_t {
+        return e == nullptr ? -1 : edge_idx.at(e);
+    };
+
+    en.node_views.reserve(en.nodes.size());
+    for (const ScoreGraphNode* o : en.nodes) {
+        NodeView v;
+        v.tick = o->timecode.ticks();
+        v.adv_edge = edge_of(o->adv_edge);
+        v.branch_edge = edge_of(o->branch_edge);
+        v.is_sp = o->is_sp ? 1 : 0;
+        en.node_views.push_back(v);
+    }
+
+    en.edge_views.reserve(en.edges.size());
+    for (const ScoreGraphEdge* o : en.edges) {
+        EdgeView v;
+        v.dest = node_of(o->dest);
+        v.notecount = (int32_t)o->notecount;
+        v.basescore = (int32_t)o->basescore;
+        v.comboscore = (int32_t)o->comboscore;
+        v.spscore = (int32_t)o->spscore;
+        v.soloscore = (int32_t)o->soloscore;
+        v.accentscore = (int32_t)o->accentscore;
+        v.ghostscore = (int32_t)o->ghostscore;
+        v.frontend_points = o->frontend_points;
+        v.late_sqin_count = o->late_sqin_count;
+        v.activation_fill_deadline_ms = o->activation_fill_deadline_ms.value_or(0.0);
+        v.sqinout_timing = o->sqinout_timing.value_or(0.0);
+        v.sqinout_time = o->sqinout_time ? o->sqinout_time->ticks() : NO_TIME;
+        v.sqout_time = o->sqout_time ? o->sqout_time->ticks() : NO_TIME;
+        v.sqin_time = o->sqin_time ? o->sqin_time->ticks() : NO_TIME;
+        en.edge_views.push_back(v);
+    }
     return en;
 }
-
-// Cheap value-views over one node/edge, so the ported engine body keeps reading
-// `n.tick` / `e.basescore`. Built per access from the objects.
-struct NodeView {
-    int64_t tick;
-    int32_t adv_edge, branch_edge, is_sp;
-};
-struct EdgeView {
-    int32_t dest;
-    int32_t notecount, basescore, comboscore, spscore, soloscore, accentscore,
-        ghostscore;
-    int32_t frontend_points;
-    int32_t late_sqin_count;
-    double activation_fill_deadline_ms, sqinout_timing;
-    int64_t sqinout_time, sqout_time, sqin_time;
-};
 
 // ---- engine data structures ---------------------------------------------
 
@@ -288,36 +322,8 @@ public:
     const std::vector<int64_t>& out_cols() const { return out_cols_; }
 
 private:
-    NodeView node(int32_t i) const {
-        const ScoreGraphNode* o = en_.nodes[(size_t)i];
-        NodeView v;
-        v.tick = o->timecode.ticks();
-        v.adv_edge = en_.edge_of(o->adv_edge);
-        v.branch_edge = en_.edge_of(o->branch_edge);
-        v.is_sp = o->is_sp ? 1 : 0;
-        return v;
-    }
-    EdgeView edge(int32_t i) const {
-        const ScoreGraphEdge* o = en_.edges[(size_t)i];
-        EdgeView v;
-        v.dest = en_.node_of(o->dest);
-        v.notecount = (int32_t)o->notecount;
-        v.basescore = (int32_t)o->basescore;
-        v.comboscore = (int32_t)o->comboscore;
-        v.spscore = (int32_t)o->spscore;
-        v.soloscore = (int32_t)o->soloscore;
-        v.accentscore = (int32_t)o->accentscore;
-        v.ghostscore = (int32_t)o->ghostscore;
-        v.frontend_points = o->frontend_points;
-        v.late_sqin_count = o->late_sqin_count;
-        v.activation_fill_deadline_ms =
-            o->activation_fill_deadline_ms.value_or(0.0);
-        v.sqinout_timing = o->sqinout_timing.value_or(0.0);
-        v.sqinout_time = o->sqinout_time ? o->sqinout_time->ticks() : NO_TIME;
-        v.sqout_time = o->sqout_time ? o->sqout_time->ticks() : NO_TIME;
-        v.sqin_time = o->sqin_time ? o->sqin_time->ticks() : NO_TIME;
-        return v;
-    }
+    const NodeView& node(int32_t i) const { return en_.node_views[(size_t)i]; }
+    const EdgeView& edge(int32_t i) const { return en_.edge_views[(size_t)i]; }
     const ScoreGraphEdge* eobj(int32_t i) const { return en_.edges[(size_t)i]; }
 
     int32_t new_act(int32_t parent, int32_t act_node, int32_t skips,
