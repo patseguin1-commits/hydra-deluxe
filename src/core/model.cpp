@@ -400,13 +400,13 @@ std::string MultSqueeze::howto() const {
 // ---- Activation ---------------------------------------------------------
 
 bool Activation::is_e_critical() const {
-    return *e_offset < kCalibrationFillWindowMs;
+    return e_offset < kCalibrationFillWindowMs;
 }
 
-bool Activation::is_E0() const { return is_e0(*e_offset, *skips); }
+bool Activation::is_E0() const { return is_e0(e_offset, skips); }
 
 std::optional<double> Activation::e_difficulty(bool verbose) const {
-    if (is_E0() || verbose) return calibration_fill_difficulty(*e_offset);
+    if (is_E0() || verbose) return calibration_fill_difficulty(e_offset);
     return std::nullopt;
 }
 
@@ -429,7 +429,7 @@ std::string Activation::notationstr() const {
     std::string e = is_e_critical() ? "E" : "";
     std::string syms;
     for (const SPSqueeze& sq : sqinouts) syms += sq.symbol();
-    return e + std::to_string(*skips) + syms;
+    return e + std::to_string(skips) + syms;
 }
 
 std::string Activation::notationstr_verbose() const {
@@ -481,7 +481,7 @@ std::string Path::pathstring() const {
     return out;
 }
 
-std::string Path::pathstring_verbose() const {
+std::string Path::pathstring_verbose(const std::vector<MultSqueeze>& multsqueezes) const {
     std::vector<std::string> sections;
 
     if (!multsqueezes.empty()) {
@@ -588,7 +588,7 @@ bool Path::is_allzero() const {
     const ActivationWalk acts = walk_activations();
     if (acts.empty()) return false;
     for (const Activation& act : acts)
-        if (act.skips.value_or(-1) != 0) return false;
+        if (act.skips != 0) return false;
     return true;
 }
 

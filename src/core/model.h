@@ -259,14 +259,16 @@ struct TransferScale {
 };
 
 struct Activation {
-    std::optional<int> skips;
-    std::optional<Timecode> timecode;
-    std::optional<Chord> chord;
-    std::optional<int> sp_meter;
-    std::optional<int> frontend_points;
+    // The search sets these six on every activation it makes, so they are
+    // plain values (record format v7, docs/adr/0017).
+    int skips = 0;
+    Timecode timecode;
+    Chord chord;
+    int sp_meter = 0;
+    int frontend_points = 0;
     std::vector<BackendSqueeze> backends;
     std::vector<SPSqueeze> sqinouts;
-    std::optional<double> e_offset;
+    double e_offset = 0.0;
 
     // The deactivation node D: the chart tick where this activation's Star
     // Power ends, extensions from phrases collected mid-SP included. Stamped
@@ -322,7 +324,7 @@ struct Activation {
 
     // Backends worth keeping: those near the deactivation, plus whatever note
     // is being squeezed out of SP however far out it lands. The details view
-    // shows exactly these, and path_binary stores only these, so a stored
+    // shows exactly these, and the path codec stores only these, so a stored
     // record shows the same rows as a fresh one.
     std::vector<BackendSqueeze> display_backends() const;
 };
@@ -393,12 +395,9 @@ private:
 // ---- Path ---------------------------------------------------------------
 
 struct Path {
-    std::vector<MultSqueeze> multsqueezes;
     std::vector<Activation> activations;
     int notecount = 0;
     int leftover_sp = 0;
-    int skipped_ghosts = 0;
-    int skipped_accents = 0;
 
     int64_t score_base = 0;
     int64_t score_combo = 0;
@@ -421,7 +420,9 @@ struct Path {
 
     int64_t totalscore() const;
     std::string pathstring() const;
-    std::string pathstring_verbose() const;
+    // The Ctrl+C string: the chart's multiplier squeezes (from the record,
+    // HydraRecord::multsqueezes), the verbose activations, the score.
+    std::string pathstring_verbose(const std::vector<MultSqueeze>& multsqueezes) const;
 
     int tied_pathcount() const { return tied_count; }
     int recount_tied_paths();
@@ -433,8 +434,7 @@ struct Path {
     bool is_difficult() const;
 
     // An "all-0" path: it has activations and every one of them records
-    // skips == 0. False for a path with no activations, and for a stale record
-    // whose activations carry no skip count.
+    // skips == 0. False for a path with no activations.
     bool is_allzero() const;
 
     // Points per scored note, on average. 0.0 for a path with no scoring
@@ -455,6 +455,11 @@ struct HydraRecord {
     // never pass as current.
     uint64_t rules_fingerprint = core::default_rules().fingerprint();
     std::vector<Path> paths;
+
+    // The chart's multiplier squeezes, in chart order. They depend on the
+    // combo alone, never on the path, so a record holds one list rather than
+    // one per path (docs/adr/0017).
+    std::vector<MultSqueeze> multsqueezes;
 
     // The best all-0 path: the highest-scoring path whose activations all
     // record skips == 0, found under a 0 ms timing limit, plus the tied

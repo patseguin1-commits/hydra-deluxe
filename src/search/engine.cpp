@@ -152,11 +152,6 @@ struct ColNode {
 struct Variant {
     int32_t prev;
     int32_t var_point;
-    int32_t sc[6];
-    int32_t notecount;
-    int32_t leftover_sp;
-    int32_t skipped_accents;
-    int32_t skipped_ghosts;
     int32_t act_tail;
     int32_t var_head;
     int32_t tied_count;
@@ -173,8 +168,6 @@ struct Path {
     int32_t var_head;
     int32_t tied_count;
     int32_t notecount;
-    int32_t skipped_accents;
-    int32_t skipped_ghosts;
     int32_t sc[6];
     int64_t score;
     int64_t sp_end_time;
@@ -193,7 +186,7 @@ struct Path {
 struct OutPath {
     int32_t score_base, score_combo, score_sp, score_solo, score_accents,
         score_ghosts;
-    int32_t notecount, leftover_sp, skipped_accents, skipped_ghosts;
+    int32_t notecount, leftover_sp;
     int32_t var_point, depth, act_begin, act_end;
 };
 struct OutAct {
@@ -762,11 +755,6 @@ void Engine::reduce_group(const int32_t* members, int32_t n) {
             Variant v;
             v.prev = leader.var_head;
             v.var_point = act_count(leader);
-            for (int32_t k = 0; k < 6; ++k) v.sc[k] = p.sc[k];
-            v.notecount = p.notecount;
-            v.leftover_sp = p.sp;
-            v.skipped_accents = p.skipped_accents;
-            v.skipped_ghosts = p.skipped_ghosts;
             v.act_tail = p.act_tail;
             v.var_head = p.var_head;
             v.tied_count = p.tied_count;
@@ -1003,17 +991,10 @@ void Engine::emit_variant(int32_t v, int32_t depth) {
 
     for (size_t k = order.size(); k-- > 0;) {
         const Variant& var = variants_[(size_t)order[k]];
-        OutPath op;
-        op.score_base = var.sc[0];
-        op.score_combo = var.sc[1];
-        op.score_sp = var.sc[2];
-        op.score_solo = var.sc[3];
-        op.score_accents = var.sc[4];
-        op.score_ghosts = var.sc[5];
-        op.notecount = var.notecount;
-        op.leftover_sp = var.leftover_sp;
-        op.skipped_accents = var.skipped_accents;
-        op.skipped_ghosts = var.skipped_ghosts;
+        // A variant ties its parent's score, and prepare_variants copies the
+        // parent's totals, note count and leftover SP onto it, so the engine
+        // hands none of its own (docs/adr/0017).
+        OutPath op{};
         op.var_point = var.var_point;
         op.depth = depth;
         emit_acts(var.act_tail, var.sp_end, var.clamp_tick, var.col_tail, &op.act_begin,
@@ -1034,8 +1015,6 @@ void Engine::emit_path(const Path& p) {
     op.score_ghosts = p.sc[5];
     op.notecount = p.notecount;
     op.leftover_sp = p.sp;
-    op.skipped_accents = p.skipped_accents;
-    op.skipped_ghosts = p.skipped_ghosts;
     op.var_point = -1;
     op.depth = 0;
     emit_acts(p.act_tail, p.sp_end_time, p.clamp_tick, p.col_tail, &op.act_begin,
@@ -1164,15 +1143,6 @@ bool Engine::run() {
 // Inflates the engine's flat decision log back into hydra::Path objects,
 // reading the graph objects straight off the enumeration.
 
-std::vector<MultSqueeze> collect_multsqueezes(const ScoreGraph& graph) {
-    std::vector<MultSqueeze> found;
-    for (const ScoreGraphNode* n = graph.start(); n != nullptr && n->adv_edge;
-         n = n->adv_edge->dest)
-        for (const MultSqueeze& m : n->adv_edge->multsqueezes)
-            found.push_back(m);
-    return found;
-}
-
 // One rebuilt path plus its variant children, referenced by index so the pool
 // can reallocate freely.
 struct BuildNode {
@@ -1184,7 +1154,6 @@ std::vector<MPath> rebuild(const Enum& en, const std::vector<OutPath>& out_paths
                            const std::vector<OutAct>& out_acts,
                            const std::vector<OutSq>& out_sqs,
                            const std::vector<int64_t>& out_cols,
-                           const std::vector<MultSqueeze>& multsqueezes,
                            const std::vector<BackendSqueeze>& tail_backends,
                            const SongTiming& timing) {
     std::vector<BuildNode> pool;
@@ -1202,9 +1171,6 @@ std::vector<MPath> rebuild(const Enum& en, const std::vector<OutPath>& out_paths
         path.score_ghosts = op.score_ghosts;
         path.notecount = op.notecount;
         path.leftover_sp = op.leftover_sp;
-        path.skipped_accents = op.skipped_accents;
-        path.skipped_ghosts = op.skipped_ghosts;
-        path.multsqueezes = multsqueezes;
 
         for (int j = op.act_begin; j < op.act_end; ++j) {
             const OutAct& oa = out_acts[(size_t)j];
@@ -1213,7 +1179,9 @@ std::vector<MPath> rebuild(const Enum& en, const std::vector<OutPath>& out_paths
             Activation act;
             act.skips = oa.skips;
             act.timecode = node->timecode;
-            act.chord = node->chord;
+            // An activation node is a chart note, so it always carries the
+            // chord hit there.
+            act.chord = node->chord.value();
             act.sp_meter = oa.sp_meter;
             act.frontend_points = node->branch_edge->frontend_points;
             act.e_offset = oa.e_offset;
@@ -1356,7 +1324,7 @@ std::vector<MPath> run_search(const ScoreGraph& graph, const EngineOptions& opti
         throw std::runtime_error("search reached a broken state");
 
     return rebuild(en, engine.out_paths(), engine.out_acts(), engine.out_sqs(),
-                   engine.out_cols(), collect_multsqueezes(graph), graph.tail_backends(),
+                   engine.out_cols(), graph.tail_backends(),
                    graph.timing());
 }
 

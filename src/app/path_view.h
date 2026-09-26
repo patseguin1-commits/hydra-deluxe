@@ -45,7 +45,7 @@ struct MultSqueezeView {
     std::string label;  // "3x   (+50 pts):   [Red - ...]"
     std::string howto;
 };
-std::vector<MultSqueezeView> build_multsqueezes(const Path& path);
+std::vector<MultSqueezeView> build_multsqueezes(const HydraRecord& record);
 
 // ---- activations -----------------------------------------------------------
 

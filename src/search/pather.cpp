@@ -22,6 +22,7 @@ HydraRecord read(const ScoreGraph& graph, DepthMode depth_mode, int depth_value,
                  const std::function<void(float)>& on_progress) {
     HydraRecord record;
     record.ms_limit = ms_filter;
+    record.multsqueezes = graph.multsqueezes();
     EngineOptions options;
     options.depth_mode = depth_mode;
     options.depth_value = depth_value;
@@ -141,7 +142,7 @@ std::vector<Path> search_target(const Song& song, const SearchSettings& settings
         const ActivationWalk acts = p.walk_activations();
         if (acts.size() != ticks.size()) return {};
         for (size_t i = 0; i < acts.size(); ++i) {
-            if (!acts[i].timecode || acts[i].timecode->ticks() != ticks[i])
+            if (acts[i].timecode.ticks() != ticks[i])
                 return {};
         }
     }

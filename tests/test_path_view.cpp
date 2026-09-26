@@ -136,7 +136,9 @@ TEST_CASE("build_activations: the calibration fill reads positive = early on bot
     e0.sp_meter = 2;
     e0.e_offset = -12.3;
     ActivationDetailsView av = view_of(e0);
-    CHECK(av.header == "E0    (2 SP)\t         \t   12.3ms");
+    // The fixture sets no timecode, so it sits at tick 0 (m1.1.0); an
+    // activation always has one now (record format v7, docs/adr/0017).
+    CHECK(av.header == "E0    (2 SP)\t   m1.1.0\t   12.3ms");
     CHECK(av.calibration == "Calibration fill: 12.3ms (required)");
 
     // E-critical but not E0: no ms in the header, and the details line uses
@@ -146,7 +148,7 @@ TEST_CASE("build_activations: the calibration fill reads positive = early on bot
     e1.sp_meter = 2;
     e1.e_offset = 20.0;
     av = view_of(e1);
-    CHECK(av.header == "E1    (2 SP)\t         ");
+    CHECK(av.header == "E1    (2 SP)\t   m1.1.0");
     CHECK(av.calibration == "Calibration fill: -20.0ms (optional)");
 }
 
@@ -502,11 +504,11 @@ TEST_CASE("find a chart with an uncounted squeezed-out row" * doctest::skip()) {
 }
 
 TEST_CASE("build_multsqueezes: one labeled entry per squeeze") {
-    const Path& best = analyzed().record.best_path();
-    std::vector<MultSqueezeView> v = build_multsqueezes(best);
-    CHECK(v.size() == best.multsqueezes.size());
+    const HydraRecord& rec = analyzed().record;
+    std::vector<MultSqueezeView> v = build_multsqueezes(rec);
+    CHECK(v.size() == rec.multsqueezes.size());
     for (size_t i = 0; i < v.size(); ++i) {
         CHECK(v[i].label.find(" pts):   ") != std::string::npos);
-        CHECK(v[i].howto == best.multsqueezes[i].howto());
+        CHECK(v[i].howto == rec.multsqueezes[i].howto());
     }
 }

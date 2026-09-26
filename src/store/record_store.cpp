@@ -414,7 +414,7 @@ PathSummary summarize_path(const Path& path) {
     std::optional<double> hardest;
     int sqin = 0, sqout = 0;
     for (const Activation& a : acts) {
-        if (a.skips && *a.skips > maxskip) maxskip = *a.skips;
+        if (a.skips > maxskip) maxskip = a.skips;
         if (auto d = a.difficulty()) {
             if (!hardest || *d > *hardest) hardest = d;
         }

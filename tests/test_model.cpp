@@ -165,12 +165,17 @@ TEST_CASE("Path pathstring and pathstring_verbose") {
     p.score_base = 100000;  // totalscore == 100000
 
     CHECK(p.pathstring() == "1");
-    CHECK(p.pathstring_verbose() ==
+    CHECK(p.pathstring_verbose({}) ==
           "(No mult squeezes.) | 1 | Score: 100,000");
+    Chord c;
+    c.add_note(NoteColor::Red);
+    c.add_note(NoteColor::Yellow);
+    c.apply_cymbal(NoteColor::Yellow);
+    CHECK(p.pathstring_verbose({MultSqueeze(c, 8)}) == "2x | 1 | Score: 100,000");
 
     Path empty;
     CHECK(empty.pathstring() == "(No activations.)");
-    CHECK(empty.pathstring_verbose() ==
+    CHECK(empty.pathstring_verbose({}) ==
           "(No mult squeezes.) | (No activations.) | Score: 0");
 }
 
@@ -204,7 +209,7 @@ TEST_CASE("Path::walk_activations: own activations then the variant tail, in pla
     // The same sequence the copying all_activations() hands out.
     const std::vector<Activation> copied = p.all_activations();
     REQUIRE(copied.size() == walk.size());
-    for (size_t i = 0; i < copied.size(); ++i) CHECK(*copied[i].skips == *walk[i].skips);
+    for (size_t i = 0; i < copied.size(); ++i) CHECK(copied[i].skips == walk[i].skips);
 
     // Nothing on either side.
     Path none;

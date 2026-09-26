@@ -220,8 +220,7 @@ void ScoreGraph::store_ghostscore(int64_t points) {
     proto_sp_edge_->ghostscore += points;
 }
 void ScoreGraph::store_multsqueeze(const MultSqueeze& msq) {
-    proto_base_edge_->multsqueezes.push_back(msq);
-    proto_sp_edge_->multsqueezes.push_back(msq);
+    multsqueezes_.push_back(msq);
 }
 
 void ScoreGraph::store_new_backend(const SongTimestamp& ts, int sp_points,

@@ -299,21 +299,20 @@ PreviewScene build_preview_scene(const Song& song, const Path* path, int sp_cap,
     // Overlay: the path's activations, ms resolved against the song's timing.
     if (path != nullptr) {
         for (const Activation& a : path->all_activations()) {
-            if (!a.timecode.has_value()) continue;
             PreviewActivation pa;
-            pa.tick = a.timecode->ticks();
+            pa.tick = a.timecode.ticks();
             pa.ms = song.timecode(pa.tick).ms();
-            pa.sp_meter = a.sp_meter.value_or(0);
-            pa.skips = a.skips.value_or(0);
+            pa.sp_meter = a.sp_meter;
+            pa.skips = a.skips;
             pa.collected_phrase_ticks = a.collected_phrase_ticks;
             if (std::optional<int64_t> d = activation_deact_tick(a)) {
                 pa.has_sp_end = true;
                 pa.sp_end_tick = *d;
                 pa.sp_end_ms = timing.ms_index().at(*d);
             }
-            if (a.chord.has_value() && !a.chord->notes().empty()) {
+            if (a.chord.count() > 0) {
                 pa.has_lane = true;
-                pa.lane = lane_of(a.chord->activation_note().colortype);
+                pa.lane = lane_of(a.chord.activation_note().colortype);
             }
             scene.activations.push_back(pa);
         }
@@ -525,7 +524,10 @@ double step_tick_ms(const PreviewScene& scene, double now_ms, double length_ms,
 
 std::string path_overlay_key(const Path* path) {
     if (path == nullptr) return {};
-    return path->pathstring_verbose() + "|" + std::to_string(path->totalscore());
+    // The key only has to tell paths of one chart apart (the controller
+    // compares it after matching the chart), and a chart's multiplier
+    // squeezes are the same for every path, so they are left out.
+    return path->pathstring_verbose({}) + "|" + std::to_string(path->totalscore());
 }
 
 }  // namespace hydra::app

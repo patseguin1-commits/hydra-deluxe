@@ -101,6 +101,44 @@ TEST_CASE("search invariants hold across the corpus and config knobs") {
 // it reshapes which activations exist at all. That must still produce a normal,
 // complete record -- the score itself is not pinned here (it is a different
 // game's answer, and tests/test_fill_deadline.cpp pins the math instead).
+// A multiplier squeeze depends on the combo alone, and a full-combo path
+// never breaks combo, so the list is one fact about the chart. The graph
+// finds it once; analyze_chart hands that one list to the record.
+TEST_CASE("the graph finds the chart's multiplier squeezes once, in chart order") {
+    int charts = 0, with_squeezes = 0, analyzed = 0;
+    for (const std::string& path : corpus::chart_paths()) {
+        Song song = load_songpath(path, true, true);
+        if (song.is_empty()) continue;
+        ++charts;
+
+        // An independent spelling: every chord, at the combo before it.
+        std::vector<MultSqueeze> want;
+        int combo = 0;
+        for (const SongTimestamp& ts : song.sequence) {
+            try {
+                want.push_back(MultSqueeze(ts.chord, combo));
+            } catch (const std::invalid_argument&) {
+            }
+            combo += ts.chord.count();
+        }
+
+        ScoreGraph graph(song, 4);
+        CHECK_MESSAGE(graph.multsqueezes() == want, path);
+        if (want.empty()) continue;
+        ++with_squeezes;
+
+        if (analyzed < 3) {
+            SearchSettings cfg;
+            cfg.sp_cap = 4;
+            cfg.depth_value = 0;
+            CHECK_MESSAGE(analyze_chart(song, cfg).multsqueezes == want, path);
+            ++analyzed;
+        }
+    }
+    REQUIRE(charts > 0);
+    CHECK(with_squeezes > 0);
+}
+
 TEST_CASE("legacy fill deadline analyzes a chart end to end") {
     int analyzed = 0;
 
@@ -399,10 +437,8 @@ TEST_CASE("SP past the last note: backends measured from the tracked SP end") {
         run_search(graph, EngineOptions{});
 
     const Activation& act = last_act(paths);
-    REQUIRE(act.sp_meter.has_value());
-    CHECK(*act.sp_meter == 2);
-    REQUIRE(act.timecode.has_value());
-    CHECK(act.timecode->ticks() == 2304);
+    CHECK(act.sp_meter == 2);
+    CHECK(act.timecode.ticks() == 2304);
 
     const int64_t end_tick = 5376;
     const double end_ms = tick_ms(song, end_tick);
@@ -452,8 +488,7 @@ TEST_CASE("SP past the last note: a mid-activation phrase extends the end") {
         run_search(graph, EngineOptions{});
 
     const Activation& act = last_act(paths);
-    REQUIRE(act.sp_meter.has_value());
-    CHECK(*act.sp_meter == 2);
+    CHECK(act.sp_meter == 2);
 
     const int64_t extended_tick = 6912;
     const int64_t plain_tick = 5376;
@@ -471,7 +506,7 @@ TEST_CASE("SP past the last note: a mid-activation phrase extends the end") {
     // The activation records no SqIn, so the old fallback would have landed
     // on the plain end. Pin that the rows, not the reconstruction, answered.
     CHECK(act.sqinouts.empty());
-    CHECK(song.timing().plusmeasure(*act.timecode, 4).ticks() == plain_tick);
+    CHECK(song.timing().plusmeasure(act.timecode, 4).ticks() == plain_tick);
 }
 
 TEST_CASE("SP past the last note: synthesized rows survive a store round-trip") {
@@ -492,7 +527,7 @@ TEST_CASE("SP past the last note: synthesized rows survive a store round-trip") 
     REQUIRE(!act.backends.empty());
 
     // Decoded timecodes are ticks-only until restore_timecodes resolves them
-    // against the song's tempo map -- the same two steps read_record takes.
+    // against the song's tempo map -- the same two steps a store load takes.
     HydraRecord back;
     back.paths.push_back(
         store::decode_path_node(store::encode_path_node(paths.front())));
@@ -556,7 +591,7 @@ TEST_CASE("run_search: EngineOptions carries each knob to the engine") {
     pinned.depth_mode = DepthMode::Points;
     pinned.depth_value = 1'000'000'000;
     std::vector<int64_t> ticks;
-    for (const Activation& a : best.front().activations) ticks.push_back(a.timecode->ticks());
+    for (const Activation& a : best.front().activations) ticks.push_back(a.timecode.ticks());
     pinned.target_act_ticks = ticks;
     const std::vector<Path> again = run_search(graph, pinned);
     REQUIRE_FALSE(again.empty());
@@ -651,10 +686,8 @@ TEST_CASE("SP cap overfill: a mid-SP phrase that clamps records the "
         run_search(graph, EngineOptions{});
 
     const Activation& act = last_act(paths);
-    REQUIRE(act.sp_meter.has_value());
-    CHECK(*act.sp_meter == 2);
-    REQUIRE(act.timecode.has_value());
-    CHECK(act.timecode->ticks() == 2304);
+    CHECK(act.sp_meter == 2);
+    CHECK(act.timecode.ticks() == 2304);
 
     auto deact = activation_deact_tick(act);
     REQUIRE(deact.has_value());
@@ -685,8 +718,7 @@ TEST_CASE("SP cap overfill: a mid-SP phrase that only ties the cap does "
         run_search(graph, EngineOptions{});
 
     const Activation& act = last_act(paths);
-    REQUIRE(act.sp_meter.has_value());
-    CHECK(*act.sp_meter == 2);
+    CHECK(act.sp_meter == 2);
 
     auto deact = activation_deact_tick(act);
     REQUIRE(deact.has_value());
@@ -723,8 +755,7 @@ TEST_CASE("SP cap overfill: a later unclamped extension keeps the earlier "
         run_search(graph, EngineOptions{});
 
     const Activation& act = last_act(paths);
-    REQUIRE(act.sp_meter.has_value());
-    CHECK(*act.sp_meter == 2);
+    CHECK(act.sp_meter == 2);
 
     // The chart ends at 7500, before the SP end at 7680, so this is the same
     // "SP outlasts the chart" case as the tests above: the tail rows are
@@ -760,8 +791,7 @@ TEST_CASE("SP cap overfill: a second clamp in the same window replaces "
         run_search(graph, EngineOptions{});
 
     const Activation& act = last_act(paths);
-    REQUIRE(act.timecode.has_value());
-    CHECK(act.timecode->ticks() == 2304);
+    CHECK(act.timecode.ticks() == 2304);
 
     auto deact = activation_deact_tick(act);
     REQUIRE(deact.has_value());
@@ -821,7 +851,6 @@ TEST_CASE("collected phrases: the corpus agrees with the squeezes and the SP end
         ScoreGraph graph(song, 4);
         for (const Path& p : run_search(graph, EngineOptions{DepthMode::Scores, 1})) {
             for (const Activation& act : p.all_activations()) {
-                REQUIRE(act.timecode.has_value());
                 bool took_sqout = false;
                 for (const SPSqueeze& sq : act.sqinouts)
                     if (sq.kind == SqueezeKind::SqOut) took_sqout = true;
@@ -832,7 +861,7 @@ TEST_CASE("collected phrases: the corpus agrees with the squeezes and the SP end
                 int64_t prev = -1;
                 for (int64_t t : act.collected_phrase_ticks) {
                     CHECK(t > prev);  // strictly ascending
-                    CHECK(t >= act.timecode->ticks());
+                    CHECK(t >= act.timecode.ticks());
                     // A squeezed-out phrase, and anything after it, was
                     // never collected.
                     if (act.sqout_tick) CHECK(t < *act.sqout_tick);

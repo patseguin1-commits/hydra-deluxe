@@ -253,9 +253,9 @@ void warnable_text(const app::TextLine& line) {
     if (line.warn) ImGui::PopStyleColor();
 }
 
-void render_multsqueeze_section(const Path* path) {
+void render_multsqueeze_section(const HydraRecord& record) {
     if (begin_section("Multiplier squeezes")) {
-        std::vector<app::MultSqueezeView> squeezes = app::build_multsqueezes(*path);
+        std::vector<app::MultSqueezeView> squeezes = app::build_multsqueezes(record);
         if (squeezes.empty()) {
             ImGui::TextDisabled("None.");
         } else {
@@ -381,7 +381,7 @@ void render_path_details(const Path* path, const HydraRecord& record,
                          double& copied_at) {
     ImGui::PushFont(nullptr, 0.0f);  // default font for the button, like Python's MainFont
     if (ImGui::Button("Copy path string", ImVec2(px(180), px(30)))) {
-        ImGui::SetClipboardText(path->pathstring_verbose().c_str());
+        ImGui::SetClipboardText(path->pathstring_verbose(record.multsqueezes).c_str());
         copied_at = ImGui::GetTime();
     }
     hint("Ctrl+C also copies the selected path");
@@ -392,7 +392,7 @@ void render_path_details(const Path* path, const HydraRecord& record,
     ImGui::PopFont();
     ImGui::Spacing();
 
-    render_multsqueeze_section(path);
+    render_multsqueeze_section(record);
     render_activations_section(path, record, timing, settings);
     render_score_breakdown_section(path);
 }
@@ -1102,7 +1102,9 @@ void render_details_modal(AppState& app) {
 
     // Ctrl+C copies the selected path -- unless a text input has focus, which
     // keeps its own copy behavior.
-    std::string copytext = selected_path ? selected_path->pathstring_verbose() : "";
+    // selected_path is set only while the viewed record is Ready.
+    std::string copytext =
+        selected_path ? selected_path->pathstring_verbose(app.viewed.record->multsqueezes) : "";
     if (!copytext.empty() && !ImGui::GetIO().WantTextInput &&
         ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_C))
         ImGui::SetClipboardText(copytext.c_str());
