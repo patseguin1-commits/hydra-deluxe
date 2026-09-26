@@ -34,4 +34,4 @@ hydra_batch refuses a run (exit code 2) whose --legacy-fills flag disagrees with
 
 ## The shipped exe
 
-Hydra.exe from the installer no longer contains the GUI test engine's tests or the repo's test-data paths. The Opus library's own safety checks still embed its source file names; that is noted as open.
+Hydra.exe from the installer no longer contains the GUI test engine's tests or any path of the builder's folders. The Opus library's safety checks name their source files relative to the repo (`/d1trimfile`), and the installer now refuses to package an exe that holds the repo path in any form.

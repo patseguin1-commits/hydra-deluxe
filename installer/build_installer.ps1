@@ -61,13 +61,15 @@ if ($LASTEXITCODE -ne 0) { throw "cmake --install failed" }
 $leaked = Get-ChildItem $stage -Recurse -Include *.db, *_settings.ini, *_ui.ini
 if ($leaked) { throw "user data leaked into the staging dir: $($leaked.FullName -join ', ')" }
 
-# Guard the other invariant: the shipped exe holds no repo paths. They come
-# only from the attached GUI tests, which the ship preset leaves out.
-$srcDir = $repo -replace '\\', '/'
+# Guard the other invariant: the shipped exe holds no repo path at all, in
+# either slash style. The attached GUI tests (left out by the ship preset)
+# and __FILE__ (trimmed by /d1trimfile in CMakeLists.txt) were the sources.
 $exeText = [Text.Encoding]::GetEncoding(28591).GetString(
     [IO.File]::ReadAllBytes((Join-Path $stage "Hydra.exe")))
-foreach ($p in "$srcDir/testdata/input", "$srcDir/assets/preview", "$srcDir/resource") {
-    if ($exeText.Contains($p)) { throw "Hydra.exe holds the repo path $p; build it with -Preset ship" }
+foreach ($p in ($repo -replace '/', '\'), ($repo -replace '\\', '/')) {
+    if ($exeText.IndexOf($p, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        throw "Hydra.exe holds the repo path $p; build it with -Preset ship"
+    }
 }
 
 # 4. VC++ x64 redistributable (chained by the installer). Cached out of git.

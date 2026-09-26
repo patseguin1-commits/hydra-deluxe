@@ -30,6 +30,13 @@ endif()
 # Parallel compilation within each target.
 add_compile_options(/MP)
 
+# __FILE__ names the source relative to the repo, not by its absolute path.
+# Opus's safety checks (OPUS_HARDENING) store __FILE__ for their error message,
+# which put the builder's folder path into the shipped Hydra.exe 28 times.
+# /d1trimfile strips the prefix (MSVC 16.4+); the checks themselves stay on.
+file(TO_NATIVE_PATH "${CMAKE_SOURCE_DIR}/" HYDRA_SOURCE_PREFIX)
+add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/d1trimfile:${HYDRA_SOURCE_PREFIX}>)
+
 # Strict flags for our own code, applied via this interface target; third-party
 # gets relaxed warnings so a vendor update never turns into a wall of warnings.
 # /utf-8: our sources are UTF-8, and several hold non-ASCII text in string
