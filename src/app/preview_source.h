@@ -48,8 +48,10 @@ struct PreviewSource {
     Song song;
     std::vector<PreviewAudioStem> stems;
     // Where chart time 0 sits in the audio: audio_ms = chart_ms +
-    // audio_offset_ms. From song.ini delay (ms) and .chart Offset (s), as
-    // Clone Hero applies them. 0 for .sng and .srb.
+    // audio_offset_ms. From the delay (ms) and the .chart Offset (s), as
+    // Clone Hero applies them. A folder chart's delay comes from its song.ini
+    // and a .sng's from its metadata block. A .srb has no delay field, so
+    // only its chart's Offset counts.
     double audio_offset_ms = 0.0;
 };
 
@@ -66,6 +68,11 @@ PreviewSource resolve_preview_source(const std::string& notespath, bool pro,
 // song.ini's `delay` in milliseconds, or nullopt when the file or key is
 // missing or the value is not a number.
 std::optional<double> read_ini_delay_ms(const std::string& ini_path);
+
+// A .sng container's `delay` metadata in milliseconds, the key matched in any
+// case (the last one wins, like the library scan's metadata read), or nullopt
+// when it is missing or not a number.
+std::optional<double> sng_delay_ms(const std::vector<uint8_t>& sng_bytes);
 
 // The Preview's audio offset in ms from the two values Clone Hero reads.
 double preview_audio_offset_ms(std::optional<double> ini_delay_ms,
