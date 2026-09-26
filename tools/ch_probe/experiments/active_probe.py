@@ -1,48 +1,43 @@
 """Experiment 2: the active probe. LIVE-ONLY orchestration.
 
-What it does, in one line: play a purpose-built chart, fire timed keystrokes
-that walk across the window edge, and record for each one the delta the engine
-measured and whether it counted as a hit -- so the boundary between hits and
-misses tells us the window the game actually enforces.
+What it does, in one line: play a song of isolated kick pairs, press the second
+kick of each pair late by a planned offset, and record whether the engine
+counted it -- so the line between hits and misses shows the window the game
+enforces at each spacing.
 
-Why bother after the passive probe: the formula tells us the *intended* window.
-Only a real input proves the *enforced* one, because a second clamp could sit at
-the hit-comparison. If the enforced edge matches the passive numbers, the model
-is confirmed. If it caps lower, we have located a second clamp.
+How it runs:
 
-The one idea it rests on: we cannot deliver a keystroke at a precise
-millisecond -- OS jitter is several ms. So we do not trust the input timing. We
-aim near the edge, then record the delta the engine measured, not the one we
-intended. Scatter a few hundred inputs near the edge and the crossover between
-the hit cluster and the miss cluster is the true window.
+1. Write the probe song into Clone Hero's songs folder: probe_chart's pairs
+   layout, one pair per (spacing, offset), at 480 ticks per beat and 125 BPM
+   so one tick is one millisecond, with a silent song.ogg.
+2. Wait for that song to be playing, and find the live engine by memory scan.
+3. Attach the debugger (kill-on-exit off) and breakpoint the hit check. The
+   debug loop runs on this thread, because Windows only delivers debug events
+   to the thread that attached.
+4. A second thread presses the keys: the first kick of each pair on time, the
+   second at note + offset. Hit = the score rose (proven by play_chart.py).
+   Measured offset = the +0x2e0 hit time minus the note when that field
+   changed, else the estimated send time (walk_edges.py's rule).
+5. Detach (always, even on Ctrl+C), write the rows, and summarise per spacing.
 
-How it works:
+The hit-check breakpoint counts how often the game ran its hit check during
+each input: evidence that the debugger reaches the hit decision.
 
-1. Generate a probe chart of isolated note pairs at known spacings.
-2. Attach, capture the engine, set the drum key binding (read it from the game;
-   do not guess).
-3. Breakpoint the hit check. For each fired input, read the measured delta and
-   the hit/miss flag there.
-4. Walk the input offset across the edge for each spacing.
-5. Hand the collected (spacing, measured_delta, hit) rows to analysis, which
-   finds the per-spacing edge and compares it to the predicted parabola.
-
-IMPORTANT: every function that touches the process, the input driver, or the
-debugger is a LIVE-ONLY seam and cannot be unit-tested here. The pure logic it
-leans on -- edge detection and the parabola predictor -- is tested in
-tests/test_analysis.py. Run it by hand against a running Clone Hero:
-
-    python -m tools.ch_probe.experiments.active_probe
+    python -m tools.ch_probe.experiments.active_probe --spacings 211 --offsets 70,100
 """
 
 from __future__ import annotations
 
+import argparse
 import csv
+import ctypes
 import json
 import os
 import sys
+import threading
 import time
-from typing import List, Optional, Sequence, Tuple
+from dataclasses import dataclass
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 # Make `tools.ch_probe...` importable when run directly. experiments/ is three
 # levels below the repo root.
@@ -52,170 +47,224 @@ _REPO_ROOT = os.path.abspath(
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-# Documented factories/classes only -- no reaching into internals. Imports may
-# fail here until the sibling modules exist; that is acceptable at this stage.
-from tools.ch_probe import constants  # noqa: E402
+from tools.ch_probe import constants, engine_finder, probe_chart, probe_songs  # noqa: E402
 from tools.ch_probe.experiments import analysis  # noqa: E402
+from tools.ch_probe.experiments.walk_edges import SongClock  # noqa: E402
 from tools.ch_probe.process import open_process  # noqa: E402
 from tools.ch_probe.debugger import Debugger  # noqa: E402
 from tools.ch_probe.engine import EngineModel  # noqa: E402
-from tools.ch_probe.probe_chart import generate_probe_chart  # noqa: E402
 from tools.ch_probe.input_driver import InputDriver, Lane  # noqa: E402
 
 
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
+SONG_NAME = "Active Probe"
 
-# The default probe-chart spacings from the spec: dense near the 180-220 ms
-# region where the clamp decision happens, sparse elsewhere for shape.
+# Dense near the 180-220 ms region where the clamp decision happens.
 DEFAULT_SPACINGS_MS = constants.PROBE_SPACINGS_MS
+# A sweep from clearly inside to clearly outside the ~85 ms edge.
+DEFAULT_OFFSETS_MS = (70, 75, 80, 82, 84, 86, 88, 90, 95, 100)
+SETTLE_MS = 250   # read the result this long after the note (as walk_edges.py)
 
-# The .chart note the probe chart writes (the kick), and the input lane that
-# presses it. They are different numbers: chart note 0 is the kick; input lane
-# 4 is the kick key.
-PROBE_NOTE = constants.PROBE_CHART_NOTE_KICK
-PROBE_LANE = Lane.KICK
-
-# One collected input: which spacing it belonged to, the delta the engine
-# measured (ms), and whether the note counted as a hit.
+# One collected input: its spacing, the measured offset (ms), and hit or miss.
 ActiveRow = Tuple[float, float, bool]
 
 
+@dataclass(frozen=True)
+class PlannedInput:
+    index: int
+    spacing_ms: float
+    offset_ms: float
+    first_ms: float    # the pair's first kick, pressed on time
+    second_ms: float   # the pair's second kick, pressed at second_ms + offset_ms
+
+
+def plan_inputs(spacings_ms: Sequence[float],
+                offsets_ms: Sequence[float]) -> List[PlannedInput]:
+    """One note pair per (spacing, offset), in chart order. At probe_songs'
+    480 ticks per beat and 125 BPM a tick is one millisecond, so the chart's
+    note ticks are the note times in ms."""
+    order = [(s, o) for s in spacings_ms for o in offsets_ms]
+    ticks = probe_chart.probe_note_ticks(
+        [s for s, _ in order], resolution=probe_songs.RESOLUTION, bpm=probe_songs.BPM)
+    return [PlannedInput(i, float(s), float(o), float(ticks[2 * i]), float(ticks[2 * i + 1]))
+            for i, (s, o) in enumerate(order)]
+
+
+def write_probe_song(root: str, plan: Sequence[PlannedInput]) -> str:
+    """Write the playable probe song folder: notes.chart, song.ini, song.ogg."""
+    folder = os.path.join(root, SONG_NAME)
+    os.makedirs(folder, exist_ok=True)
+    text = probe_chart.build_probe_chart_text(
+        [p.spacing_ms for p in plan], resolution=probe_songs.RESOLUTION,
+        bpm=probe_songs.BPM, note=constants.PROBE_CHART_NOTE_KICK)
+    length_ms = int(plan[-1].second_ms) + probe_songs.SILENCE_MS
+    full_name = f"Hydra Probe - {SONG_NAME}"
+    with open(os.path.join(folder, "notes.chart"), "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+    with open(os.path.join(folder, "song.ini"), "w", encoding="utf-8", newline="\n") as f:
+        f.write(probe_songs.song_ini(full_name, length_ms))
+    probe_songs.write_silent_ogg(os.path.join(folder, "song.ogg"), length_ms)
+    return folder
+
+
 class ActiveCollector:
-    """Gathers (spacing, measured_delta, hit) rows at the hit-check breakpoint.
+    """Rows from the input thread; hit-check counts from the debug loop."""
 
-    LIVE-ONLY. The current spacing is set by the runner just before it fires an
-    input, so the callback knows which pair the hit belongs to.
-    """
-
-    def __init__(self, engine: EngineModel) -> None:
-        self._engine = engine
+    def __init__(self) -> None:
         self._rows: List[ActiveRow] = []
-        self._current_spacing: Optional[float] = None
+        self.current_index: Optional[int] = None   # the input in flight
+        self.hit_check_calls: Dict[int, int] = {}
 
     @property
     def rows(self) -> List[ActiveRow]:
         return list(self._rows)
 
-    def expect(self, spacing_ms: float) -> None:
-        """Tell the collector which spacing the next hit belongs to."""
-        self._current_spacing = spacing_ms
+    def add_row(self, row: ActiveRow) -> None:
+        self._rows.append(row)
 
     def on_hit_check(self, debugger, thread_context) -> None:
-        """Breakpoint callback at the hit check. LIVE-ONLY seam.
+        """Breakpoint callback at the hit check: count calls per input."""
+        i = self.current_index
+        if i is not None:
+            self.hit_check_calls[i] = self.hit_check_calls.get(i, 0) + 1
 
-        Read the delta the engine measured for this note and whether it counted
-        as a hit. The exact fields come from the engine model, which owns the
-        offsets; we never read raw addresses here.
-        """
-        if self._current_spacing is None:
-            return
-        delta_ms = self._engine.hit_time()
-        # A note that the engine matched inside its window counts as a hit. The
-        # engine model exposes the decision; here we treat a matched note with a
-        # finite delta as a hit and everything else as a miss. The precise
-        # hit/miss field is pinned live in the engine layer.
-        hit = self._engine.note_count() > 0
-        self._rows.append((self._current_spacing, delta_ms, hit))
+
+def drive_inputs(engine: EngineModel, driver: InputDriver, collector: ActiveCollector,
+                 plan: Sequence[PlannedInput], stop: threading.Event,
+                 focus: Callable[[], None]) -> None:
+    """Press the planned kicks against the song clock. LIVE-ONLY; runs on the
+    input thread while the main thread pumps debug events."""
+    clock = SongClock(engine.song_clock)
+    raw_s, _ = clock.read()
+    last_raw, last_move = raw_s, time.perf_counter()
+
+    def wait_until(t_ms: float) -> float:
+        """Poll until the clock estimate reaches t_ms; return it in ms."""
+        nonlocal last_raw, last_move
+        while True:
+            if stop.is_set():
+                raise RuntimeError("stopped")
+            raw, est = clock.read()
+            now = time.perf_counter()
+            if raw < last_raw - 1.0:
+                raise RuntimeError(f"clock jumped back ({last_raw:.2f} -> {raw:.2f} s)")
+            if raw != last_raw:
+                last_raw, last_move = raw, now
+            elif now - last_move > 5.0:
+                raise RuntimeError(f"clock frozen at {raw:.2f} s (song quit or paused)")
+            ahead = t_ms / 1000 - est
+            if ahead <= 0:
+                return est * 1000
+            if ahead > 0.04:
+                time.sleep(min(ahead - 0.03, 0.5))
+
+    todo = [p for p in plan if p.first_ms > raw_s * 1000 + 150]
+    print(f"  {len(todo)}/{len(plan)} pairs still ahead of the clock.")
+    print(f"  {'#':>4}  {'spacing':>7}  {'plan':>5}  {'measured':>8}  result")
+    for p in todo:
+        focus()
+        wait_until(p.first_ms)
+        driver.press_chord([Lane.KICK])                  # first kick, on time
+        sent_ms = wait_until(p.second_ms + p.offset_ms)
+        before_score, before_hit = engine.score(), engine.hit_time()
+        collector.current_index = p.index
+        driver.press_chord([Lane.KICK])                  # second kick, late
+        wait_until(max(p.second_ms, p.second_ms + p.offset_ms) + SETTLE_MS)
+        after_score, after_hit = engine.score(), engine.hit_time()
+        collector.current_index = None
+        hit = after_score > before_score
+        if after_hit != before_hit:
+            measured = after_hit * 1000 - p.second_ms
+        else:
+            measured = sent_ms - p.second_ms
+        collector.add_row((p.spacing_ms, measured, hit))
+        print(f"  {p.index + 1:4d}  {p.spacing_ms:7.0f}  {p.offset_ms:+5.0f}  "
+              f"{measured:+8.1f}  {'HIT' if hit else 'miss'}")
+
+
+def find_any_mode_engine(process) -> int:
+    """The live engine in either scoring mode."""
+    return engine_finder.find_live_engine(process, engine_finder.all_patterns(process))
+
+
+def find_game_window() -> int:
+    return ctypes.windll.user32.FindWindowW(None, "Clone Hero") or 0
 
 
 def run_active_probe(
     *,
     spacings_ms: Sequence[float] = DEFAULT_SPACINGS_MS,
-    offsets_ms: Optional[Sequence[float]] = None,
+    offsets_ms: Sequence[float] = DEFAULT_OFFSETS_MS,
     process_name: str = constants.PROCESS_NAME,
-    chart_path: Optional[str] = None,
+    song_root: str = probe_songs.DEFAULT_OUT,
     out_stub: str = "active",
+    open_proc: Callable = open_process,
+    make_debugger: Callable = Debugger,
+    find_engine: Callable = find_any_mode_engine,
+    write_song: Callable = write_probe_song,
+    make_driver: Callable = InputDriver,
+    find_window: Callable[[], int] = find_game_window,
+    drive: Callable = drive_inputs,
 ) -> List[analysis.SpacingEdge]:
-    """Generate the chart, drive inputs across the edge, analyse, return edges.
+    """Write the song, find the engine, attach, drive the inputs, detach,
+    report. LIVE-ONLY orchestration. Rows go to results/<out_stub>.csv/.json."""
+    plan = plan_inputs(spacings_ms, offsets_ms)
+    folder = write_song(song_root, plan)
+    print(f"Wrote {folder} ({len(plan)} pairs). Rescan songs in Clone Hero, "
+          "then play it on Expert drums.")
 
-    LIVE-ONLY orchestration -- needs a running Clone Hero, and someone to load
-    the generated probe chart and start playing it. `offsets_ms` is the ladder
-    of intended offsets that walk the input across the edge; the measured delta
-    is what actually gets recorded. Writes results/<out_stub>.csv and .json and
-    returns the per-spacing edge summary from analysis.summarize_active.
-    """
-    if offsets_ms is None:
-        # A default sweep from clearly-inside to clearly-outside the ~85 ms edge.
-        offsets_ms = [70, 75, 80, 82, 84, 86, 88, 90, 95, 100]
-
-    os.makedirs(RESULTS_DIR, exist_ok=True)
-    if chart_path is None:
-        chart_path = os.path.join(RESULTS_DIR, f"{out_stub}_probe.chart")
-    generate_probe_chart(list(spacings_ms), chart_path, note=PROBE_NOTE)
-    print(f"Wrote probe chart to {chart_path}. Load it and start the song.")
-
-    process = open_process(process_name)
+    process = open_proc(process_name)
     process.verify_targets()  # milestone 1: refuse a build mismatch.
+    engine = EngineModel(process)
+    print("  Waiting for the song to play...")
+    engine.use_object(find_engine(process))
+    print(f"  Engine at {engine.object_ptr:#x}")
 
-    debugger = Debugger()
-    engine = EngineModel(process, debugger)
-    engine.capture_object()
+    collector = ActiveCollector()
+    driver = make_driver()
+    hwnd = find_window()
 
-    driver = InputDriver()
-    # Read the game's real key binding for the lane; do not guess. The virtual
-    # key comes from the input driver's own config read. This call is the seam
-    # the spec's open question flags.
-    driver.set_binding(PROBE_LANE, _read_lane_binding(driver, PROBE_LANE))
+    def focus() -> None:
+        if hwnd:
+            ctypes.windll.user32.SetForegroundWindow(hwnd)
 
-    collector = ActiveCollector(engine)
-    hit_check_addr = process.resolve(constants.RVA_HIT_CHECK)
-    debugger.set_breakpoint(hit_check_addr, collector.on_hit_check)
+    stop = threading.Event()
+    done = threading.Event()
+    failures: List[BaseException] = []
 
-    _drive_sweep(engine, driver, collector, spacings_ms, offsets_ms)
-    debugger.stop()
+    def worker() -> None:
+        try:
+            drive(engine, driver, collector, plan, stop, focus)
+        except BaseException as e:  # reported below, after detaching
+            failures.append(e)
+        finally:
+            done.set()
 
+    debugger = make_debugger()
+    debugger.attach(process.pid)
+    print("  Debugger attached (kill-on-exit off).")
+    try:
+        debugger.set_breakpoint(process.resolve(constants.RVA_HIT_CHECK),
+                                collector.on_hit_check)
+        threading.Thread(target=worker, name="active-probe-input", daemon=True).start()
+        debugger.run(until=done.is_set)
+    finally:
+        stop.set()
+        debugger.stop()
+        print("  Detached.")
+
+    if failures and str(failures[0]) != "stopped":
+        print(f"  Input thread stopped early: {failures[0]}")
     rows = collector.rows
     _write_rows(rows, out_stub)
+    calls = sum(collector.hit_check_calls.values())
+    print(f"  Hit-check breakpoint fired {calls} times over "
+          f"{len(collector.hit_check_calls)} of {len(rows)} inputs.")
 
     formula_constants = analysis.normal_formula_constants(engine.constants())
     summary = analysis.summarize_active(rows, formula_constants=formula_constants)
     _print_summary(summary)
     return summary
-
-
-def _drive_sweep(
-    engine: EngineModel,
-    driver: InputDriver,
-    collector: ActiveCollector,
-    spacings_ms: Sequence[float],
-    offsets_ms: Sequence[float],
-) -> None:
-    """Fire the offset ladder against each spacing's note. LIVE-ONLY seam.
-
-    For each note pair, tell the collector which spacing is coming, then
-    schedule a keystroke at each offset and let the debugger catch the hit
-    check. The pairing of note-to-offset against the song clock is pinned live;
-    this is the part only a running game exercises.
-    """
-    clock = engine.song_clock
-    for spacing in spacings_ms:
-        collector.expect(spacing)
-        for _offset in offsets_ms:
-            # The note's target song time is resolved live from the chart the
-            # game loaded; here we drive one input per offset and let the
-            # measured delta -- not the intended offset -- be what we record.
-            target_time = clock()  # live seam: real target comes from the chart
-            driver.schedule_hit(PROBE_LANE, target_time, clock)
-            # Give the debugger a moment to catch the hit check for this input.
-            time.sleep(0)
-
-
-def _read_lane_binding(driver: InputDriver, lane: int) -> int:
-    """Return the virtual-key code bound to a drum lane. LIVE-ONLY seam.
-
-    The binding is user-configurable and must be read from the game's config,
-    not guessed. This helper isolates that read so the open question in the spec
-    has one place to live. Until the input driver exposes the config read, this
-    raises to force the caller to resolve it rather than guess a key.
-    """
-    reader = getattr(driver, "read_config_binding", None)
-    if callable(reader):
-        return reader(lane)
-    raise NotImplementedError(
-        "Drum key binding must be read from the game config; see the open "
-        "question in the spec. Wire InputDriver.read_config_binding, or pass a "
-        "known binding, before running the active probe."
-    )
 
 
 def _write_rows(rows: List[ActiveRow], stub: str) -> Tuple[str, str]:
@@ -245,7 +294,7 @@ def _write_rows(rows: List[ActiveRow], stub: str) -> Tuple[str, str]:
 def _print_summary(summary: List[analysis.SpacingEdge]) -> None:
     """Say the per-spacing result in plain English."""
     if not summary:
-        print("No inputs were collected. Was the probe chart playing?")
+        print("No inputs were collected. Was the probe song playing?")
         return
     print("spacing(ms)  measured_edge(ms)  predicted_edge(ms)  errors")
     for row in summary:
@@ -254,5 +303,21 @@ def _print_summary(summary: List[analysis.SpacingEdge]) -> None:
         print(f"{row.spacing_ms:10.1f}  {measured:>16}  {predicted:>17}  {row.errors:6d}")
 
 
+def _ms_list(text: str) -> List[float]:
+    return [float(x) for x in text.split(",") if x.strip()]
+
+
+def main(argv: Optional[List[str]] = None) -> None:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--spacings", type=_ms_list,
+                    default=list(DEFAULT_SPACINGS_MS), help="e.g. 211,300")
+    ap.add_argument("--offsets", type=_ms_list,
+                    default=list(DEFAULT_OFFSETS_MS), help="late ms, e.g. 70,100")
+    ap.add_argument("--song-root", default=probe_songs.DEFAULT_OUT)
+    args = ap.parse_args(argv)
+    run_active_probe(spacings_ms=args.spacings, offsets_ms=args.offsets,
+                     song_root=args.song_root)
+
+
 if __name__ == "__main__":
-    run_active_probe()
+    main()

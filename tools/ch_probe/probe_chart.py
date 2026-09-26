@@ -107,6 +107,27 @@ def _expert_drums_section(note_ticks: Sequence[int], note: int) -> str:
     return "\n".join(lines) + "\n"
 
 
+def probe_note_ticks(
+    spacings_ms: Sequence[float], *, resolution: int = 192, bpm: float = 120.0
+) -> list[int]:
+    """The tick of every note the probe chart writes, in order: two per
+    spacing, with a wide silent pad after each pair. The active probe reads
+    its note times from here, so they always match the written chart."""
+    pad_ticks = _PAD_WHOLE_NOTES * resolution * 4
+    cursor = _LEAD_IN_WHOLE_NOTES * resolution * 4
+
+    note_ticks: list[int] = []
+    for ms in spacings_ms:
+        gap = ms_to_ticks(ms, resolution, bpm)
+        first = cursor
+        second = cursor + gap
+        note_ticks.append(first)
+        note_ticks.append(second)
+        # Next pair starts a full pad past this pair's second note.
+        cursor = second + pad_ticks
+    return note_ticks
+
+
 def build_probe_chart_text(
     spacings_ms: Sequence[float],
     *,
@@ -121,18 +142,7 @@ def build_probe_chart_text(
     ticks apart, then jump a wide silent gap before the next pair, so no two
     pairs can overlap or interact.
     """
-    pad_ticks = _PAD_WHOLE_NOTES * resolution * 4
-    cursor = _LEAD_IN_WHOLE_NOTES * resolution * 4
-
-    note_ticks: list[int] = []
-    for ms in spacings_ms:
-        gap = ms_to_ticks(ms, resolution, bpm)
-        first = cursor
-        second = cursor + gap
-        note_ticks.append(first)
-        note_ticks.append(second)
-        # Next pair starts a full pad past this pair's second note.
-        cursor = second + pad_ticks
+    note_ticks = probe_note_ticks(spacings_ms, resolution=resolution, bpm=bpm)
 
     return (
         _song_section(resolution)

@@ -85,6 +85,7 @@ class ThreadContext(Protocol):
 
     rip: int
     rcx: int
+    rsp: int   # at a function's first instruction, [rsp] is its return address
 
     def xmm0_double(self) -> float:
         ...
