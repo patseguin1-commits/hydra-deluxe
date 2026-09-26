@@ -28,6 +28,7 @@ from tools.ch_probe.probe_chart import (  # noqa: E402
     build_probe_chart_text,
     generate_probe_chart,
     ms_to_ticks,
+    probe_note_ticks,
 )
 
 
@@ -147,6 +148,14 @@ class TestPairsAndSpacing(unittest.TestCase):
         ticks = parse_drum_ticks(build_probe_chart_text([300, 30, 211]))
         for a, b in zip(ticks, ticks[1:]):
             self.assertLess(a, b)
+
+    def test_probe_note_ticks_are_the_written_ticks(self):
+        # 480 ticks per beat at 125 BPM: one tick is one millisecond. Lead-in
+        # is two 4-beat bars (3840), each pair is followed by a 4-bar pad (7680).
+        ticks = probe_note_ticks([211, 30], resolution=480, bpm=125.0)
+        self.assertEqual(ticks, [3840, 4051, 11731, 11761])
+        text = build_probe_chart_text([211, 30], resolution=480, bpm=125.0)
+        self.assertEqual(parse_drum_ticks(text), ticks)
 
 
 class TestFileWrite(unittest.TestCase):
