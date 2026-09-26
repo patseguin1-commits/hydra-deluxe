@@ -49,20 +49,23 @@ namespace hydra::store {
 // the version 4 layout (adds deact_tick); version 3 holds them in the
 // version 5 layout (adds clamp_tick); version 4 holds them in the blob
 // version 6 layout (adds sqout_tick and collected_phrase_ticks, ADR 0014).
-// Only version 4 is written, and only version 4 is decoded. An older node can
+// Version 5 is the version 4 byte layout, but every chord string is the
+// lane-spelled Chord::code instead of the old lookup-table code (ADR 0015).
+// Only version 5 is written, and only version 5 is decoded. An older node can
 // be reached only through an older structure, and the store never decodes
 // one of those (see row_is_ready in record_store.cpp), so the old read paths
 // are dead.
-constexpr uint32_t kPathNodeFormatVersion = 4;
+constexpr uint32_t kPathNodeFormatVersion = 5;
 
 // Bumped when the structure blob's layout changes, and also when the node
 // layout it points at changes. Version 3 is the same byte layout as version
 // 2, but a version-3 structure references node payloads in node format 3
 // (activations carry clamp_tick). Version 4 puts the u64 rules fingerprint
-// right after the version, and references node format 4. This version (and,
+// right after the version, and references node format 4. Version 5 is the
+// version 4 layout referencing node format 5. This version (and,
 // from version 4, the fingerprint after it) is what the store's Ready rule
 // reads off a stored row, so bumping the node layout means bumping this too.
-constexpr uint32_t kPathStructureFormatVersion = 4;
+constexpr uint32_t kPathStructureFormatVersion = 5;
 
 // The 128-bit content hash of a node payload, raw. The structure blob stores
 // these 16 bytes; path_hash() renders the same value as lowercase hex.

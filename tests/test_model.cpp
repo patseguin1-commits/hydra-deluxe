@@ -1,7 +1,7 @@
-// Unit tests for core/model (chord hashing/encoding, squeezes). The
-// chord-table round-trip lives in test_chord_tables.cpp and the transfer
-// scales in test_squeeze_rating.cpp; the cases here pin the string/number
-// forms and hash shapes directly.
+// Unit tests for core/model (chord encoding, squeezes). The chord-code
+// round-trip lives in test_chord_code.cpp and the transfer scales in
+// test_squeeze_rating.cpp; the cases here pin the string/number forms
+// directly.
 
 #include "doctest.h"
 
@@ -19,18 +19,6 @@
 #include "parse/song.h"
 
 using namespace hydra;
-
-TEST_CASE("ChordNote hash matches ChordNote.__hash__") {
-    // 1000*color + 100*dyn + 10*cym + is2x.
-    ChordNote red{NoteColor::Red};  // color 2, dyn 1, cym 1, 2x 0
-    CHECK(red.hash() == 2110);
-    ChordNote green_cym_accent{NoteColor::Green, NoteDynamicType::Accent,
-                               NoteCymbalType::Cymbal, false};
-    CHECK(green_cym_accent.hash() == 5 * 1000 + 3 * 100 + 2 * 10);
-    ChordNote kick2x{NoteColor::Kick, NoteDynamicType::Normal,
-                     NoteCymbalType::Normal, true};
-    CHECK(kick2x.hash() == 1111);
-}
 
 TEST_CASE("basescore matches ChordNote.basescore") {
     CHECK(ChordNote{NoteColor::Red}.basescore() == 50);
@@ -267,23 +255,23 @@ TEST_CASE("ChordNote::str shows the kick's dynamic and its 2x flag") {
               .str() == "YellowCym (Accent)");
 }
 
-TEST_CASE("Chord::code prefixes a ghost/accent kick chord with g/a") {
+TEST_CASE("Chord::code spells a ghost/accent kick in the kick lane") {
     Chord normal;
     normal.add_note(NoteColor::Kick);
     normal.add_note(NoteColor::Red);
-    const std::string base = normal.code();
+    CHECK(normal.code() == "nn...");
 
     Chord ghost;
     ghost.add_note(NoteColor::Kick).dynamictype = NoteDynamicType::Ghost;
     ghost.add_note(NoteColor::Red);
-    CHECK(ghost.code() == "g" + base);
-    CHECK(Chord::from_code("g" + base) == ghost);
+    CHECK(ghost.code() == "gn...");
+    CHECK(Chord::from_code("gn...") == ghost);
 
     Chord accent;
     accent.add_note(NoteColor::Kick).dynamictype = NoteDynamicType::Accent;
     accent.add_note(NoteColor::Red);
-    CHECK(accent.code() == "a" + base);
-    CHECK(Chord::from_code("a" + base) == accent);
+    CHECK(accent.code() == "an...");
+    CHECK(Chord::from_code("an...") == accent);
 
     CHECK(ghost.rowstr() == "[Kick (Ghost) - Red]");
 }

@@ -125,7 +125,6 @@ target_compile_options(hydra_image PRIVATE /W1 /EHsc)
 # ---- hydra_core: everything below the GUI/CLI shells ---------------------
 add_library(hydra_core STATIC
     src/core/timing.cpp
-    src/core/chord_tables.cpp
     src/core/model.cpp
     src/core/scoring.cpp
     src/core/rules.cpp
@@ -305,7 +304,7 @@ endforeach()
 add_executable(hydra_tests
     tests/test_main.cpp
     tests/test_timing.cpp
-    tests/test_chord_tables.cpp
+    tests/test_chord_code.cpp
     tests/test_midi.cpp
     tests/test_model.cpp
     tests/test_squeeze_rating.cpp

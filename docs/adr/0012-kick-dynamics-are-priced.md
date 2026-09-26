@@ -50,6 +50,9 @@ parenthesis: `Kick`, `Kick (Ghost)`, `Kick (2x)`, `Kick (Ghost, 2x)`,
 
 ## The chord code table
 
+Superseded by ADR 0015 (1.8.1): chord codes are spelled out lane by lane and
+the table below no longer exists. Kept as history.
+
 Every chord Hydra can score has a short code string, and stored paths, the
 replay JSON and the analysis chord counts all carry it. A chord with no code
 throws.

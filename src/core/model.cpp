@@ -6,7 +6,6 @@
 #include <limits>
 
 #include "core/backend_value.h"
-#include "core/chord_tables.h"
 
 namespace hydra {
 
@@ -59,12 +58,6 @@ NoteCymbalType cymbal_flip(NoteCymbalType t) {
 
 // ---- ChordNote ----------------------------------------------------------
 
-int64_t ChordNote::hash() const {
-    return 1000 * static_cast<int64_t>(colortype) +
-           100 * static_cast<int64_t>(dynamictype) +
-           10 * static_cast<int64_t>(cymbaltype) + (is2x ? 1 : 0);
-}
-
 bool ChordNote::operator==(const ChordNote& o) const {
     return colortype == o.colortype && dynamictype == o.dynamictype &&
            cymbaltype == o.cymbaltype && is2x == o.is2x;
@@ -101,65 +94,69 @@ int ChordNote::basescore() const {
     return points;
 }
 
-// ---- Chord: CPython tuple hash ------------------------------------------
+// ---- Chord: code --------------------------------------------------------
 
 namespace {
 
-// One tuple element's hash. Each of the five slots is a Python int: -1 for an
-// absent note, or the ChordNote hash (a small positive int) for a present one.
-// PyObject_Hash(int) is the int itself, except hash(-1) == -2 — the only fold
-// that can occur here.
-uint64_t py_int_lane(int64_t slot) {
-    if (slot == -1) return static_cast<uint64_t>(static_cast<int64_t>(-2));
-    return static_cast<uint64_t>(slot);
+// A lane's "upper case" flag: a cymbal on yellow/blue/green, 2x on the kick.
+// Red has neither, so a red note is always lower case.
+bool lane_flag(const ChordNote& note) {
+    return note.colortype == NoteColor::Kick ? note.is2x : note.is_cymbal();
 }
 
-// CPython's tuplehash (Objects/tupleobject.c, xxHash-based, unseeded) for a
-// fixed 5-tuple. Deterministic across runs, which is why the chord encode
-// table can be keyed on it.
-int64_t cpython_tuple_hash5(const int64_t slots[5]) {
-    const uint64_t P1 = 11400714785074694791ULL;
-    const uint64_t P2 = 14029467366897019727ULL;
-    const uint64_t P5 = 2870177450012600261ULL;
-
-    uint64_t acc = P5;
-    for (int i = 0; i < 5; ++i) {
-        uint64_t lane = py_int_lane(slots[i]);
-        acc += lane * P2;
-        acc = (acc << 31) | (acc >> 33);  // rotate left 31
-        acc *= P1;
-    }
-    acc += 5ULL ^ (P5 ^ 3527539ULL);  // len ^ (P5 ^ 3527539)
-    if (acc == static_cast<uint64_t>(-1)) acc = 1546275796ULL;
-    return static_cast<int64_t>(acc);
+bool lane_allows_flag(NoteColor c) {
+    return c == NoteColor::Kick || allows_cymbals(c);
 }
 
 }  // namespace
 
-int64_t Chord::hash() const {
-    int64_t slots[5];
-    for (int i = 0; i < 5; ++i)
-        slots[i] = notemap_[i].has_value() ? notemap_[i]->hash() : -1;
-    return cpython_tuple_hash5(slots);
-}
-
 std::string Chord::code() const {
-    const std::string* s = encode_chord(hash());
-    if (s == nullptr)
-        throw std::out_of_range("chord has no encode-table entry");
-    return *s;
+    std::string out(5, '.');
+    for (int i = 0; i < 5; ++i) {
+        if (!notemap_[i].has_value()) continue;
+        const ChordNote& note = *notemap_[i];
+        // A flag this lane cannot carry (a red cymbal, a 2x pad, a kick
+        // cymbal) never comes out of the parsers; spelling it anyway would
+        // read back as a different chord.
+        const bool stray_flag = note.colortype == NoteColor::Kick
+                                    ? note.is_cymbal()
+                                    : note.is2x || (!allows_cymbals(note.colortype) &&
+                                                    note.is_cymbal());
+        if (stray_flag)
+            throw std::logic_error("chord note has a flag its lane cannot carry");
+        char ch = note.dynamictype == NoteDynamicType::Ghost    ? 'g'
+                  : note.dynamictype == NoteDynamicType::Accent ? 'a'
+                                                                : 'n';
+        if (lane_flag(note)) ch = static_cast<char>(ch - 'a' + 'A');
+        out[i] = ch;
+    }
+    return out;
 }
 
 Chord Chord::from_code(const std::string& code) {
-    const std::vector<ChordNoteFields>* notes = decode_chord(code);
-    if (notes == nullptr)
-        throw std::out_of_range("unknown chord code: " + code);
+    if (code.size() != 5) throw std::out_of_range("unknown chord code: " + code);
 
     Chord chord;
-    for (const ChordNoteFields& nf : *notes) {
-        ChordNote note{static_cast<NoteColor>(nf.color),
-                       static_cast<NoteDynamicType>(nf.dyn),
-                       static_cast<NoteCymbalType>(nf.cym), nf.is2x != 0};
+    for (int i = 0; i < 5; ++i) {
+        const char ch = code[i];
+        if (ch == '.') continue;
+        const NoteColor color = static_cast<NoteColor>(i + 1);
+        const bool flag = ch >= 'A' && ch <= 'Z';
+        const char lower = flag ? static_cast<char>(ch - 'A' + 'a') : ch;
+
+        ChordNote note{color};
+        switch (lower) {
+            case 'n': note.dynamictype = NoteDynamicType::Normal; break;
+            case 'g': note.dynamictype = NoteDynamicType::Ghost; break;
+            case 'a': note.dynamictype = NoteDynamicType::Accent; break;
+            default: throw std::out_of_range("unknown chord code: " + code);
+        }
+        if (flag) {
+            if (!lane_allows_flag(color))
+                throw std::out_of_range("unknown chord code: " + code);
+            if (color == NoteColor::Kick) note.is2x = true;
+            else note.cymbaltype = NoteCymbalType::Cymbal;
+        }
         chord.insert_note(note);
     }
     return chord;

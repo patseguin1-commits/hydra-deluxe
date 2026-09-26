@@ -1,13 +1,13 @@
 // Domain model: charts, chords, squeezes, activations and paths.
 //
 // The note/chord/path/record types the parser fills and the search produces.
-// The *string* forms here (Chord::code, Path::pathstring/pathstring_verbose,
+// The *string* forms here (Path::pathstring/pathstring_verbose,
 // Activation::notationstr) are user-visible and pinned by the tests, so they must
 // match Python byte-for-byte: comma-grouped scores, int() truncation on ms, the
 // exact +/- squeeze symbols and [KRYBG] slot layout.
 //
-// Records are stored in the binary format of store/serialize.h. Chord::code
-// and Chord::from_code stay because the parser and the chord tables need them.
+// Records are stored in the binary format of store/serialize.h. Stored paths
+// carry each chord as its Chord::code, read back by Chord::from_code.
 
 #ifndef HYDRA_CORE_MODEL_H
 #define HYDRA_CORE_MODEL_H
@@ -99,8 +99,6 @@ struct ChordNote {
     NoteCymbalType cymbaltype = NoteCymbalType::Normal;
     bool is2x = false;
 
-    // 1000*color + 100*dyn + 10*cym + is2x, matching ChordNote.__hash__.
-    int64_t hash() const;
     bool operator==(const ChordNote& o) const;
     bool operator!=(const ChordNote& o) const { return !(*this == o); }
     std::string str() const;
@@ -117,13 +115,13 @@ class Chord {
 public:
     Chord() = default;
 
-    // hash(tuple(h)) of the five KRYBG slots, reproducing CPython's tuple hash
-    // exactly (absent slots contribute hash(-1) == -2). The chord encode table
-    // is keyed on this value.
-    int64_t hash() const;
-
-    static Chord from_code(const std::string& code);
+    // The chord spelled one character per lane, in KRYBG order: "." for an
+    // empty lane, otherwise n/g/a for a normal/ghost/accent note, upper case
+    // for a cymbal or a 2x kick. Red + yellow cymbal + green cymbal is
+    // ".nN.N". Every chord a chart can express has one; nothing is looked up.
     std::string code() const;
+    // The reverse of code(). Throws std::out_of_range on a malformed code.
+    static Chord from_code(const std::string& code);
 
     bool operator==(const Chord& o) const;
     bool operator!=(const Chord& o) const { return !(*this == o); }
