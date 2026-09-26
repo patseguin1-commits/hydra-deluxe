@@ -66,7 +66,7 @@ TEST_CASE("PreviewRenderer: bare highway — background outside, lit floor, hori
 
     PreviewScene empty;
     r.set_scene(empty);
-    r.render(1000.0, RenderParams{});
+    r.render(1000.0);
     std::vector<uint8_t> img = warp::read_pixels(dev.Get(), ctx.Get(), r.texture_srv(), W, H);
 
     // Every pixel is opaque (ImGui composites by alpha).
@@ -102,7 +102,7 @@ TEST_CASE("PreviewRenderer: a gem at the strike line adds drawn pixels (WARP)") 
 
     PreviewScene empty;
     r.set_scene(empty);
-    r.render(1000.0, RenderParams{});
+    r.render(1000.0);
     std::vector<uint8_t> bare = warp::read_pixels(dev.Get(), ctx.Get(), r.texture_srv(), W, H);
 
     PreviewScene with_notes;
@@ -112,7 +112,7 @@ TEST_CASE("PreviewRenderer: a gem at the strike line adds drawn pixels (WARP)") 
     with_notes.notes.push_back(note_at(1300.0, PreviewLane::Yellow, true));
     with_notes.song_length_ms = 1300.0;
     r.set_scene(with_notes);
-    r.render(1000.0, RenderParams{});
+    r.render(1000.0);
     std::vector<uint8_t> gems = warp::read_pixels(dev.Get(), ctx.Get(), r.texture_srv(), W, H);
 
     int differing = 0;
@@ -135,7 +135,7 @@ TEST_CASE("PreviewRenderer: SP phrase energy gems and active SP floor change pix
     plain.has_notes = true;
     plain.notes.push_back(note_at(1200.0, PreviewLane::Green));
     r.set_scene(plain);
-    r.render(1000.0, RenderParams{});
+    r.render(1000.0);
     std::vector<uint8_t> a = warp::read_pixels(dev.Get(), ctx.Get(), r.texture_srv(), W, H);
 
     PreviewScene lit = plain;
@@ -156,7 +156,7 @@ TEST_CASE("PreviewRenderer: SP phrase energy gems and active SP floor change pix
     act.sp_end_ms = 2500.0;
     lit.activations.push_back(act);
     r.set_scene(lit);
-    r.render(1000.0, RenderParams{});
+    r.render(1000.0);
     std::vector<uint8_t> b = warp::read_pixels(dev.Get(), ctx.Get(), r.texture_srv(), W, H);
 
     int differing = 0;
@@ -180,7 +180,7 @@ TEST_CASE("PreviewRenderer: resize and a tall target keep the track at the botto
     CHECK(r.height() == 300);
     PreviewScene scene;
     r.set_scene(scene);
-    r.render(0.0, RenderParams{});
+    r.render(0.0);
     std::vector<uint8_t> img = warp::read_pixels(dev.Get(), ctx.Get(), r.texture_srv(), 100, 300);
     CHECK(img.size() == static_cast<size_t>(100) * 300 * 4);
     for (int y = 0; y < 300 - 117 - 2; y += 10) CHECK(is_background(warp::pixel(img, 100, 50, y)));

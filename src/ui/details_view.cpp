@@ -106,7 +106,7 @@ void render_record_status(AppState& app, float width) {
 }
 
 void render_controls(AppState& app) {
-    bool file_ok = file_exists_utf8(app.selected->notespath);
+    bool file_ok = app.selected_file_ok(ImGui::GetTime());
 
     // The missing-file warning line needs one more row when it shows; the
     // backend-limit row needs one more frame of height than the panel had.
@@ -209,8 +209,8 @@ void render_controls(AppState& app) {
         ImGui::TextColored(kWarningColor, "Song file not found.");
         ImGui::SameLine();
         if (ImGui::SmallButton("Rescan library")) {
-            app.request_scan = true;  // the main window starts the scan
-            app.show_details = false;
+            app.request_scan = true;   // the main window starts the scan
+            app.show_details = false;  // close_details() runs on the next frame's edge
             ImGui::CloseCurrentPopup();
         }
     }
@@ -621,6 +621,13 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
         return;
     }
 
+    // No audio output device: the chart previews muted. One line says so and
+    // the highway below draws as usual; the device's own message is a hover away.
+    if (pc->has_audio_warning()) {
+        ImGui::TextColored(kWarningColor, "No audio device found; the preview is muted.");
+        hint(pc->audio_warning().c_str());
+    }
+
     // Transport row: back 5 s, back 5 ticks, play/pause, forward 5 ticks,
     // forward 5 s, a scrubber, and the time readout. Every piece whose text
     // changes while playing sits in a fixed slot (see widgets.h): otherwise
@@ -844,8 +851,7 @@ void pad_dot(const ImVec4& color) {
 void dynamics_table_row(const char* label, const app::DynamicsCounts& c,
                         bool disabled, const ImVec4* dot_color = nullptr) {
     ImGui::TableNextRow();
-    // kDisabledTextColor is tuned for text on a teal button; on the dark panel
-    // it disappears. The style's own disabled text grey reads fine here.
+    // The style's own disabled text grey: it reads on the dark panel.
     if (disabled)
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
 
@@ -1015,9 +1021,10 @@ void render_dynamics_panel(AppState& app) {
 }  // namespace
 
 void render_details_modal(AppState& app) {
-    // Job lifecycle first, every frame -- even with the modal closed or a
+    // Job lifecycles first, every frame -- even with the modal closed or a
     // different tab in front.
     update_analyze_job(app);
+    app.reap_dynamics();
 
     // All of this modal's own state lives on AppState (see DetailsViewState):
     // a static here would outlive the AppState it describes.
@@ -1026,6 +1033,9 @@ void render_details_modal(AppState& app) {
     GenerationWatcher& record_watcher = app.details_ui.record_watcher;
 
     if (app.show_details && !prev_open) ImGui::OpenPopup("SongDetails");
+    // The one teardown, on the open-to-closed edge, whatever closed the
+    // window: its X, the Rescan library button, or the resync below.
+    if (!app.show_details && prev_open) app.close_details();
     prev_open = app.show_details;
     if (!app.show_details) return;
 
@@ -1053,54 +1063,20 @@ void render_details_modal(AppState& app) {
         ImGui::BeginPopupModal(title, &open, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
 
     // `open` is checked unconditionally below (not only when `visible` is
-    // true) because the popup's close button can make BeginPopupModal
-    // itself start returning false on/after the closing frame, without ever
-    // handing back a true-but-open-false frame to react to. Gating the
-    // app.show_details reset on that transition left it permanently true
-    // once a popup was closed -- OpenPopup only fires on show_details'
-    // false->true edge, so no row click could ever reopen the popup again
-    // (rows still "worked", select() still ran, but nothing visible ever
-    // happened, which is what looked like every song becoming unclickable).
-    // Closing the modal abandons any in-flight analysis: with the modal gone
-    // there is nowhere to show its progress or result, and the search would
-    // otherwise keep burning CPU (up to the full Auto-cap budget) invisibly.
-    // The main window reaps the job once the cancel lands.
-    auto cancel_running_analysis = [&app] {
-        if (app.analyze_job && !app.analyze_job->finished()) app.analyze_job->cancel();
-    };
-
-    // Closing the modal also tears down the Preview: its audio device must stop
-    // and its GPU/decode work must not keep running behind a hidden popup.
-    auto close_preview = [&app] {
-        if (app.preview) app.preview->close();
-    };
-
-    // Cancel any in-flight dynamics parse so it doesn't run behind a hidden popup.
-    auto close_dynamics = [&app] {
-        if (app.dynamics_job) { app.dynamics_job->cancel(); app.dynamics_job.reset(); }
-        app.dynamics_result.reset();
-        app.dynamics_key.clear();
-        app.dynamics_store_error.clear();
-    };
-
+    // true) because the popup's close button can make BeginPopupModal itself
+    // start returning false on/after the closing frame, without ever handing
+    // back a true-but-open-false frame to react to. Either way show_details
+    // goes false, and the next frame's edge above runs close_details().
     if (!visible) {
-        // We know app.show_details was true when we called OpenPopup above
-        // (that's the only way to reach this point), so if ImGui says the
-        // popup isn't actually showing, our state has drifted from ImGui's
-        // -- resync unconditionally rather than trusting `open`, which may
-        // never have been written if BeginPopupModal bailed out early.
+        // We know app.show_details was true when we called OpenPopup above,
+        // so if ImGui says the popup isn't showing, our state has drifted
+        // from ImGui's -- resync.
         app.show_details = false;
-        cancel_running_analysis();
-        close_preview();
-        close_dynamics();
         return;
     }
 
     if (!open) {
         app.show_details = false;
-        cancel_running_analysis();
-        close_preview();
-        close_dynamics();
         ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
         return;

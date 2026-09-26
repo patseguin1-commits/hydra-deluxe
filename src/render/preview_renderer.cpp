@@ -17,8 +17,8 @@
 #include <string>
 #include <vector>
 
+#include "core/winstr.h"
 #include "image/decode.h"
-#include "render/file_util.h"
 #include "render/highway_draw.h"
 #include "render/obj_loader.h"
 
@@ -32,6 +32,22 @@ namespace {
 
 void check(HRESULT hr, const char* what) {
     if (FAILED(hr)) throw std::runtime_error(std::string("PreviewRenderer: ") + what);
+}
+
+// A whole asset file, empty when it is missing or unreadable, so each loader
+// below can name the asset in its own message. Reads through core/winstr, so
+// an install folder like C:\Users\Zoë\... works.
+std::vector<uint8_t> asset_bytes(const std::string& utf8_path) {
+    try {
+        return hydra::read_file_bytes(utf8_path);
+    } catch (const std::exception&) {
+        return {};
+    }
+}
+
+std::string asset_text(const std::string& utf8_path) {
+    std::vector<uint8_t> bytes = asset_bytes(utf8_path);
+    return std::string(bytes.begin(), bytes.end());
 }
 
 // Constant buffers, laid out exactly as assets/preview/shaders declare them.
@@ -122,7 +138,6 @@ struct PreviewRenderer::Impl {
     std::array<ComPtr<ID3D11ShaderResourceView>, static_cast<size_t>(TextureId::Count)> textures;
 
     TrackState state;
-    bool have_state = false;
 
     GpuMesh upload(const ObjMesh& m) {
         GpuMesh g;
@@ -140,7 +155,7 @@ struct PreviewRenderer::Impl {
     // Decode an image file and upload it with its rows flipped so that v = 0
     // samples the image's bottom row, as Onyx's GL upload does.
     ComPtr<ID3D11ShaderResourceView> load_texture(const std::string& file) {
-        std::vector<uint8_t> bytes = read_file_bytes(asset_dir + "\\textures\\" + file);
+        std::vector<uint8_t> bytes = asset_bytes(asset_dir + "\\textures\\" + file);
         if (bytes.empty()) throw std::runtime_error("PreviewRenderer: missing texture " + file);
         image::DecodedImage img = image::decode_image(bytes);
         if (img.empty()) throw std::runtime_error("PreviewRenderer: undecodable texture " + file);
@@ -169,7 +184,7 @@ struct PreviewRenderer::Impl {
     }
 
     GpuMesh load_model(const char* file) {
-        std::string text = read_file_text(asset_dir + "\\models\\" + file);
+        std::string text = asset_text(asset_dir + "\\models\\" + file);
         if (text.empty()) throw std::runtime_error(std::string("PreviewRenderer: missing model ") + file);
         return upload(load_obj(text));
     }
@@ -271,14 +286,14 @@ PreviewRenderer::PreviewRenderer(ID3D11Device* device, ID3D11DeviceContext* cont
     d.context = context;
     d.asset_dir = asset_dir;
 
-    std::string cfg_text = read_file_text(asset_dir + "\\3d-config.json");
+    std::string cfg_text = asset_text(asset_dir + "\\3d-config.json");
     if (cfg_text.empty())
         throw std::runtime_error("PreviewRenderer: missing " + asset_dir + "\\3d-config.json");
     d.cfg = load_preview_config(cfg_text);
 
     // Shaders from files, like Onyx loads its GLSL.
-    std::string obj_src = read_file_text(asset_dir + "\\shaders\\object.hlsl");
-    std::string fade_src = read_file_text(asset_dir + "\\shaders\\fade.hlsl");
+    std::string obj_src = asset_text(asset_dir + "\\shaders\\object.hlsl");
+    std::string fade_src = asset_text(asset_dir + "\\shaders\\fade.hlsl");
     if (obj_src.empty() || fade_src.empty())
         throw std::runtime_error("PreviewRenderer: missing shader files in " + asset_dir);
     ComPtr<ID3DBlob> ovs = compile(obj_src, "object.hlsl", "VSMain", "vs_5_0");
@@ -376,18 +391,19 @@ void PreviewRenderer::resize(int width, int height) {
 
 void PreviewRenderer::set_scene(const PreviewScene& scene, const TrackStateOptions& opts) {
     impl_->state = build_track_state(scene, opts);
-    impl_->have_state = true;
 }
 
-void PreviewRenderer::render(double now_ms, const RenderParams& params) {
+void PreviewRenderer::render(double now_ms) {
     Impl& d = *impl_;
     if (!d.final_rtv) return;
     ID3D11DeviceContext* ctx = d.context;
     const PreviewConfig& cfg = d.cfg;
 
     // ---- scene pass: the highway into the (multisampled) track target ----
+    // Onyx's draw code takes a playback speed; Hydra always plays at 1x.
+    constexpr double kPlaybackSpeed = 1.0;
     std::vector<DrawCommand> cmds =
-        build_highway_draws(d.state, cfg, now_ms / 1000.0, params.speed);
+        build_highway_draws(d.state, cfg, now_ms / 1000.0, kPlaybackSpeed);
 
     HighwayCamera cam = make_camera(cfg, static_cast<float>(d.width) / static_cast<float>(d.track_h));
     PerFrame pf = {};

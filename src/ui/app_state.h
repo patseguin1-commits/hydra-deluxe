@@ -78,6 +78,12 @@ struct DetailsViewState {
     double done_at = -1.0;
     bool stored = false;
     std::string store_error;
+    // The chart file's presence (the "Song file not found" line), as of the
+    // last look. Looked at when the window opens and then every
+    // AppState::kFileCheckSeconds, not every frame: on a sleeping or network
+    // drive one look can stall a frame. -1 = look now.
+    bool file_ok = true;
+    double file_checked_at = -1.0;
 };
 
 // What the app reads before it opens the store: the settings, with
@@ -127,6 +133,19 @@ public:
     bool show_details = false;
     void select(const store::ChartLibraryEntry& entry);
 
+    // Everything that must stop when the Song Details window closes. It runs
+    // once, on the window's open-to-closed edge, whatever closed it: the X,
+    // the Rescan library button, or a new selection. An unfinished analysis
+    // is cancelled, the Preview stops and lets go of its audio device, a
+    // finished Dynamics count is kept and an unfinished one is cancelled.
+    // Safe to call when already closed.
+    void close_details();
+
+    // Whether the selected chart's file exists, as of the last look; looks
+    // again once `now` (seconds) is kFileCheckSeconds past it.
+    bool selected_file_ok(double now);
+    static constexpr double kFileCheckSeconds = 2.0;
+
     // The details modal's own per-frame state (see DetailsViewState above).
     DetailsViewState details_ui;
 
@@ -161,6 +180,11 @@ public:
     // the details modal, before the Dynamics tab draws. Keeps store access
     // on the UI thread and out of the render function.
     void update_dynamics();
+
+    // Stores a finished Dynamics parse and drops its job. The details window
+    // calls it every frame, whichever tab shows; a parse that finished while
+    // another tab was up used to be thrown away at close.
+    void reap_dynamics();
 
     // Background jobs (at most one of each kind runs at a time).
     std::unique_ptr<ScanJob> scan_job;

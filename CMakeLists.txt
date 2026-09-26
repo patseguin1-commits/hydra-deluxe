@@ -192,7 +192,6 @@ target_link_libraries(hydra_audio PRIVATE
 # unit-tested; only preview_renderer touches D3D. Kept out of hydra_core like
 # hydra_audio; linked by hydra_ui and hydra_tests.
 add_library(hydra_render STATIC
-    src/render/file_util.cpp
     src/render/obj_loader.cpp
     src/render/preview_config.cpp
     src/render/track_state.cpp
@@ -340,6 +339,8 @@ add_executable(hydra_tests
     tests/test_fill_deadline.cpp
     tests/test_fill_report.cpp
     tests/test_app_state.cpp
+    tests/test_preview_controller.cpp
+    tests/test_utf8_paths.cpp
 )
 # hydra_dm: test_dm_report exercises the leaderboards join and JSON parsers.
 # hydra_audio: test_audio_decode exercises the stem decoders and mixer.

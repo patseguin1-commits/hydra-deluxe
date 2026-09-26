@@ -26,6 +26,10 @@ bool file_exists_utf8(const std::string& utf8_path);
 // The whole file's bytes; throws std::runtime_error when the open fails.
 std::vector<uint8_t> read_file_bytes(const std::string& utf8_path);
 
+// The whole file as text, bytes as they are (no newline translation); throws
+// std::runtime_error when the open fails.
+std::string read_file_text(const std::string& utf8_path);
+
 }  // namespace hydra
 
 #endif  // HYDRA_CORE_WINSTR_H

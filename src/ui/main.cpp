@@ -112,7 +112,6 @@ int main(int argc, char** argv)
     hydra::ui::ImGuiSetupOptions imgui_options;
     imgui_options.dpi_scale = main_scale;
     hydra::ui::setup_imgui(imgui_options);
-    ImGuiIO& io = ImGui::GetIO();
 
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
@@ -212,13 +211,6 @@ int main(int argc, char** argv)
         g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView,
                                                    clear_with_alpha);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-
-        // Draw and present the additional platform windows (viewports).
-        if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
-        {
-            ImGui::UpdatePlatformWindows();
-            ImGui::RenderPlatformWindowsDefault();
-        }
 
         HRESULT hr = g_pSwapChain->Present(1, 0);   // vsync
         g_SwapChainOccluded = (hr == DXGI_STATUS_OCCLUDED);

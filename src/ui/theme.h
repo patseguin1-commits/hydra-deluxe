@@ -34,7 +34,6 @@ inline const ImVec4 kFolderListBg{50 / 255.0f, 50 / 255.0f, 50 / 255.0f, 1.0f};
 // DPG's disabled state is a flat, fully-opaque gray -- not ImGui's default
 // DisabledAlpha fade -- so apply_theme() sets style.DisabledAlpha = 1 and
 // begin_disabled_button()/begin_disabled_input() push these explicitly.
-inline const ImVec4 kDisabledTextColor{50 / 255.0f, 50 / 255.0f, 50 / 255.0f, 1.0f};
 // Lighter than the Python app's (200,200,200): that pairing against the
 // (100,100,100) disabled button was ~3.5:1, under WCAG AA; (235,235,235)
 // reaches ~4.9:1 and the gray button face still reads as disabled.

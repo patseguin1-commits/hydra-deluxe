@@ -47,7 +47,6 @@ void setup_imgui(const ImGuiSetupOptions& options) {
     style.ScaleAllSizes(main_scale);
     style.FontScaleDpi = main_scale;
     io.ConfigDpiScaleFonts = true;
-    io.ConfigDpiScaleViewports = true;
     g_ui_scale = main_scale;  // for the views' explicit pixel sizes
 
     // Fonts (resource/ is copied beside the exe by the build; see

@@ -27,7 +27,10 @@ void PreviewLoadJob::run() {
     run_guarded([this] {
         // Re-parse the chart and locate its audio (the note stream and stems
         // are never stored), then decode + mix to one 48 kHz stereo buffer.
+        // Closing the details window joins this thread on the UI thread, so
+        // the job looks at its cancel flag between steps and between stems.
         step_.store(Step::Reading);
+        throw_if_cancelled();
         app::PreviewSource source =
             app::resolve_preview_source(entry_.notespath, pro_, bass2x_, difficulty_, rules_);
         // A chart with no charting at this difficulty would otherwise build an
@@ -36,13 +39,18 @@ void PreviewLoadJob::run() {
         // wording analysis uses.
         if (source.song.is_empty())
             throw ChartFileError(no_notes_message(difficulty_, pro_));
+        throw_if_cancelled();
         step_.store(Step::Decoding);
         audio::DecodedAudio mixed = audio::decode_and_mix(
             source.stems, /*out_rate=*/48000, /*out_channels=*/2, [this](int done, int total) {
                 stems_total_.store(total);
                 stems_done_.store(done);
                 if (done == total) step_.store(Step::Mixing);
+                // Called before the first stem and after each one, outside the
+                // decoder's per-stem catch, so a cancel stops the load here.
+                throw_if_cancelled();
             });
+        throw_if_cancelled();
         double offset_ms = source.audio_offset_ms;
         if (offset_ms < 0.0) {
             audio::pad_front_ms(mixed, -offset_ms);

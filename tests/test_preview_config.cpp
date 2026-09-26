@@ -6,7 +6,7 @@
 
 #include <string>
 
-#include "render/file_util.h"
+#include "core/winstr.h"
 #include "render/preview_config.h"
 
 #ifndef HYDRA_ASSET_DIR
@@ -84,7 +84,7 @@ TEST_CASE("PreviewConfig defaults are Onyx's 3d-config.yml values") {
 }
 
 TEST_CASE("the shipped 3d-config.json loads to the Onyx values") {
-    std::string text = read_file_text(std::string(HYDRA_ASSET_DIR) + "/3d-config.json");
+    std::string text = hydra::read_file_text(std::string(HYDRA_ASSET_DIR) + "/3d-config.json");
     REQUIRE(!text.empty());
     PreviewConfig c = load_preview_config(text);
     check_is_onyx(c);

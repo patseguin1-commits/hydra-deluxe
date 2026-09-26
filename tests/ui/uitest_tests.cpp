@@ -874,6 +874,32 @@ void test_squeezed_out_uncounted(ImGuiTestContext* ctx) {
     IM_CHECK(text.find("squeezed out (uncounted)") != std::string::npos);
 }
 
+// Hiding the details window by any route tears it down. The "Rescan library"
+// button used to set show_details = false directly, which skipped the
+// teardown: the Preview kept its audio device and kept playing.
+void test_details_close_teardown(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_preview(ctx)) return;
+    ctx->ItemClick("**/Play");
+    IM_CHECK(h.app->preview->playing());
+
+    // Exactly what the Rescan library button does. The button itself only
+    // shows when the chart file is missing, which never happens here.
+    h.app->request_scan = true;
+    h.app->show_details = false;
+    ctx->Yield(3);
+    IM_CHECK(!h.app->preview->active());
+    IM_CHECK(!h.app->preview->playing());
+
+    // The rescan the button asked for runs; finish it so the app is idle.
+    IM_CHECK(wait_until(ctx, [&] {
+        return h.app->scan_job && h.app->scan_job->snapshot().finished;
+    }, 60));
+    ctx->SetRef("//Scanning charts");
+    ctx->ItemClick("Continue");
+    ctx->Yield(2);
+}
+
 }  // namespace
 
 void register_tests(Harness& h) {
@@ -900,6 +926,7 @@ void register_tests(Harness& h) {
         {"dynamics-stored", test_dynamics_stored},
         {"rules-error", test_rules_error},
         {"squeezed_out_uncounted", test_squeezed_out_uncounted},
+        {"details-close-teardown", test_details_close_teardown},
     };
     for (const Entry& e : entries) {
         ImGuiTest* t = IM_REGISTER_TEST(h.engine, "hydra", e.name);

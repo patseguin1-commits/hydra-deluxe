@@ -6,7 +6,7 @@
 #include <cmath>
 #include <string>
 
-#include "render/file_util.h"
+#include "core/winstr.h"
 #include "render/obj_loader.h"
 
 #ifndef HYDRA_ASSET_DIR
@@ -151,10 +151,10 @@ TEST_CASE("the copied Onyx drum models load with their known extents") {
     const std::string dir = std::string(HYDRA_ASSET_DIR) + "/models/";
     float mn[3], mx[3];
 
-    ObjMesh kick = load_obj(read_file_text(dir + "drum-kick.obj"));
+    ObjMesh kick = load_obj(hydra::read_file_text(dir + "drum-kick.obj"));
     CHECK(kick.triangle_count() == 8);
 
-    ObjMesh tom = load_obj(read_file_text(dir + "drum-tom.obj"));
+    ObjMesh tom = load_obj(hydra::read_file_text(dir + "drum-tom.obj"));
     // 126 quads + two 14-gons (the top and bottom rims) = 252 + 24 triangles.
     CHECK(tom.triangle_count() == 252 + 24);
     mesh_bounds(tom, mn, mx);
@@ -164,7 +164,7 @@ TEST_CASE("the copied Onyx drum models load with their known extents") {
     CHECK(mx[1] == doctest::Approx(0.309f).epsilon(0.01));
     CHECK(mx[2] == doctest::Approx(0.233f).epsilon(0.01));
 
-    ObjMesh cymbal = load_obj(read_file_text(dir + "drum-cymbal.obj"));
+    ObjMesh cymbal = load_obj(hydra::read_file_text(dir + "drum-cymbal.obj"));
     // 352 quads + 32 triangles + one 32-gon = 704 + 32 + 30 triangles.
     CHECK(cymbal.triangle_count() == 704 + 32 + 30);
     mesh_bounds(cymbal, mn, mx);

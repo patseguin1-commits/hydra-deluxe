@@ -30,7 +30,7 @@
 #include "image/decode.h"
 #include "json.hpp"
 #include "parse/song.h"
-#include "render/file_util.h"
+#include "core/winstr.h"
 #include "render/preview_renderer.h"
 #include "warp_util.h"
 
@@ -101,7 +101,7 @@ std::vector<uint8_t> render_chart(const std::string& chart, double time_ms, int 
     TrackStateOptions opts;
     opts.pro = pro;
     r.set_scene(scene, opts);
-    r.render(time_ms, RenderParams{});
+    r.render(time_ms);
     return warp::read_pixels(dev.Get(), ctx.Get(), r.texture_srv(), w, h);
 }
 
@@ -126,11 +126,11 @@ std::vector<float> half_res(const std::vector<uint8_t>& rgba, int w, int h, int&
 
 TEST_CASE("preview golden: a Hydra frame matches the Onyx screenshot") {
     const std::string spec_path = kFixtureDir + "/golden.json";
-    std::string spec_text = read_file_text(spec_path);
-    if (spec_text.empty()) {
+    if (!file_exists_utf8(spec_path)) {
         MESSAGE("golden fixture absent (" << spec_path << "): skipped");
         return;
     }
+    std::string spec_text = read_file_text(spec_path);
     nlohmann::json spec = nlohmann::json::parse(spec_text);
     const std::string chart = kFixtureDir + "/" + spec.value("chart", "notes.mid");
     double time_ms = spec.value("time_ms", 0.0);

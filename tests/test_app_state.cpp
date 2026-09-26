@@ -20,6 +20,7 @@
 #include "app/dynamics_breakdown.h"
 #include "core/model.h"
 #include "core/winstr.h"
+#include "corpus_util.h"
 #include "store/record_store.h"
 #include "ui/app_state.h"
 #include "ui/generation.h"
@@ -315,4 +316,50 @@ TEST_CASE("update_dynamics uses a stored row with the current count stamp") {
 
     CHECK(app->dynamics_result.has_value());
     CHECK(app->dynamics_job == nullptr);  // no recount
+}
+
+// A Dynamics count that finished while another tab showed is stored when the
+// window closes, not thrown away. Before, only the Dynamics tab collected the
+// job, so the next open parsed the chart again.
+TEST_CASE("close_details keeps a Dynamics count that finished on another tab") {
+    ScratchPaths paths("appstate_dyn_close");
+    std::unique_ptr<AppState> app = app_on(paths);
+    app->selected->notespath = corpus::first_chart_with_suffix(".chart");
+    app->show_details = true;
+
+    app->update_dynamics();  // the Dynamics tab was shown once: the parse starts
+    REQUIRE(app->dynamics_job != nullptr);
+    for (int i = 0; i < 1200 && !app->dynamics_job->finished(); ++i) Sleep(50);
+    REQUIRE(app->dynamics_job->finished());
+    REQUIRE(app->dynamics_job->ok());
+
+    // The user went back to Paths, so update_dynamics never ran again.
+    app->close_details();
+
+    CHECK_FALSE(app->show_details);
+    CHECK(app->dynamics_job == nullptr);
+    CHECK_FALSE(app->dynamics_result.has_value());
+    const hydra::store::DynamicsKey key = hydra::app::dynamics_store_key(
+        library_entry(0).md5, app->settings.difficulty(), app->settings.view_prodrums);
+    CHECK(hydra::app::load_stored_dynamics(*app->store, key).has_value());
+}
+
+// The "Song file not found" check asks the disk when the window opens and
+// then every two seconds, not on every frame.
+TEST_CASE("the chart-file check runs on open and then every two seconds") {
+    ScratchPaths paths("appstate_fileok");
+    std::unique_ptr<AppState> app = app_on(paths);
+    const std::string chart = temp_path("fileok_chart", ".chart");
+    { std::ofstream f(chart); f << "[Song]\n"; }
+    app->selected->notespath = chart;
+
+    CHECK(app->selected_file_ok(10.0));        // first look
+    std::remove(chart.c_str());
+    CHECK(app->selected_file_ok(11.0));        // one second later: not asked again
+    CHECK_FALSE(app->selected_file_ok(12.5));  // two seconds on: asked, and gone
+
+    { std::ofstream f(chart); f << "[Song]\n"; }
+    app->close_details();                      // the next open looks at once
+    CHECK(app->selected_file_ok(12.6));
+    std::remove(chart.c_str());
 }
