@@ -9,22 +9,11 @@
 
 namespace hydra::ui {
 
+// Every watcher lives on the same AppState as the counter it watches
+// (DetailsViewState, LibraryViewState), so a plain count from 0 is enough.
 struct Generation {
-    // Each counter starts at a process-unique value. The views' watchers are
-    // function statics that outlive any one AppState (the UI test runner
-    // builds a fresh AppState per test); with every counter restarting at 0,
-    // a watcher that had seen the old app's value 1 would treat the new app's
-    // first bump to 1 as "already seen" and silently drop that event.
-    int n = next_start();
+    int n = 0;
     void bump() { ++n; }
-
-private:
-    static int next_start() {
-        static int next = 0;
-        int start = next;
-        next += 1 << 20;
-        return start;
-    }
 };
 
 // `seen` defaults to -1 so the first changed() call observes the counter's

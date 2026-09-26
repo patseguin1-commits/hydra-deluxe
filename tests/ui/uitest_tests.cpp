@@ -97,7 +97,9 @@ void test_analyze(ImGuiTestContext* ctx) {
     IM_CHECK(wait_until(ctx, [&] { return h.app->settings.sp_cap == 8; }, 5));
     IM_CHECK(h.app->current_page.summaries[0].state == hydra::store::RecordStatus::NotAnalyzed);
     IM_CHECK(!h.app->viewed.record.has_value());
-    IM_CHECK(hydra::app::Settings::load_file(h.ini_path).sp_cap == 8);
+    IM_CHECK(wait_until(ctx, [&] {
+        return hydra::app::Settings::load_file(h.ini_path).sp_cap == 8;
+    }, 5));
     ctx->ItemInputValue("**/##spcapvalue", 4);
     IM_CHECK(wait_until(ctx, [&] { return h.app->settings.sp_cap == 4; }, 5));
     IM_CHECK(h.app->current_page.summaries[0].state == hydra::store::RecordStatus::Ready);
@@ -874,6 +876,46 @@ void test_squeezed_out_uncounted(ImGuiTestContext* ctx) {
     IM_CHECK(text.find("squeezed out (uncounted)") != std::string::npos);
 }
 
+// The library view's own state (the search text, the dmleaderboards filter,
+// the status fade, the folder confirm) belongs to the AppState. When it lived
+// in function statics, the next test's fresh app still showed the last test's
+// search text and filter.
+void test_library_state_per_app(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    ctx->SetRef("//Hydra");
+    ctx->ItemInputValue("##search", "zzqx");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->search == "zzqx"; }, 5));
+    ctx->ItemClick("Compare dmleaderboards user...");
+    IM_CHECK(wait_until(ctx, [&] { return !h.app->dm_users.empty(); }, 10));
+    ctx->SetRef("//Compare dmleaderboards user");
+    ctx->ItemInputValue("##dmfilter", "zzqx");
+    ctx->Yield(2);
+    IM_CHECK(visible_text(h).find("alice") == std::string::npos);
+    ctx->ItemClick("Close");
+    ctx->Yield(2);
+
+    // A fresh app: both boxes start empty. ImGui's text log shows an input
+    // box's contents, so leftover text would be on screen.
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    IM_CHECK(h.app->search.empty());
+    IM_CHECK(visible_text(h).find("zzqx") == std::string::npos);
+    ctx->SetRef("//Hydra");
+    ctx->ItemClick("Compare dmleaderboards user...");
+    IM_CHECK(wait_until(ctx, [&] { return !h.app->dm_users.empty(); }, 10));
+    IM_CHECK(wait_until(ctx, [&] {
+        return visible_text(h).find("alice") != std::string::npos;
+    }, 5));
+    IM_CHECK(visible_text(h).find("zzqx") == std::string::npos);
+    ctx->SetRef("//Compare dmleaderboards user");
+    ctx->ItemClick("Close");
+    ctx->Yield(2);
+}
+
 }  // namespace
 
 void register_tests(Harness& h) {
@@ -900,6 +942,7 @@ void register_tests(Harness& h) {
         {"dynamics-stored", test_dynamics_stored},
         {"rules-error", test_rules_error},
         {"squeezed_out_uncounted", test_squeezed_out_uncounted},
+        {"library-state-per-app", test_library_state_per_app},
     };
     for (const Entry& e : entries) {
         ImGuiTest* t = IM_REGISTER_TEST(h.engine, "hydra", e.name);

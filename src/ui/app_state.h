@@ -14,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "app/analysis.h"
@@ -80,6 +81,29 @@ struct DetailsViewState {
     std::string store_error;
 };
 
+// Per-frame UI state of the main window's library view. Owned here, not as
+// statics in the draw code, for the same reason as DetailsViewState: a static
+// outlives this AppState, so the UI test runner's next app inherited the last
+// test's search text and dmleaderboards filter.
+struct LibraryViewState {
+    // The status line's fade. The watcher starts at "already seen" for this
+    // app's counter (0), so app startup does not start a fade.
+    GenerationWatcher status_watcher{/*seen=*/0};
+    double status_shown_at = -1.0;
+    // The folder waiting on the "Remove folder?" confirm.
+    std::optional<size_t> confirm_remove;
+    // The search box's text, whether it was filled from `search` yet, and
+    // when it was last typed in (the library re-queries 0.25 s after).
+    char search_buf[256] = "";
+    bool search_synced = false;
+    double search_edited_at = -1.0;
+    // The dmleaderboards picker's name filter.
+    char dm_filter[128] = "";
+    // Whether the path report file exists, as of the last look.
+    bool report_exists = false;
+    double report_checked_at = -1.0;  // -1 = look now
+};
+
 // What the app reads before it opens the store: the settings, with
 // hydra_rules.ini already loaded, and the loader's error if the file was bad.
 struct StartupSettings {
@@ -129,6 +153,14 @@ public:
 
     // The details modal's own per-frame state (see DetailsViewState above).
     DetailsViewState details_ui;
+    // The library view's own per-frame state (see LibraryViewState above).
+    LibraryViewState library_ui;
+
+    // Whether the path report file exists, as of the last look; looks again
+    // once `now` (seconds) is kReportCheckSeconds past it, or at once after
+    // library_ui.report_checked_at is reset to -1.
+    bool report_file_shown(double now);
+    static constexpr double kReportCheckSeconds = 2.0;
 
     // The stored-record lookup for `selected` under the current chartmode,
     // reloaded on selection and after a fresh analysis. It carries the status
@@ -231,6 +263,14 @@ public:
     // the library page while leaving `viewed` pointing at the old record.
     void commit_settings();
 
+    // The number boxes' form of commit_settings: the same refresh at once,
+    // but the INI waits for flush_settings. A held +/- button changes the
+    // value every frame, and each change used to rewrite the file.
+    void edit_settings();
+    // Writes the INI if an edit_settings change is not saved yet. run_frame
+    // calls it once no widget is active, which is when an edit has ended.
+    void flush_settings();
+
 private:
     explicit AppState(StartupSettings start);
     ID3D11Device* render_device_ = nullptr;
@@ -241,6 +281,25 @@ private:
     std::string committed_chartmode_;
     store::CapQuery committed_cap_;
     store::Lens committed_lens_;
+
+    // An edit_settings change the INI does not have yet.
+    bool settings_unsaved_ = false;
+    void save_settings();
+    // The refresh half of commit_settings.
+    void apply_settings();
+    // Re-reads each row's Best Path summary for the current page only.
+    void refresh_summaries();
+
+    // The number boxes step through settings one value at a time, and each
+    // step used to decode the chart's record again. `viewed_key_` is what
+    // `viewed` answers; lookups the boxes stepped away from are parked here
+    // and come back without asking the store. Cleared whenever a record may
+    // have changed under them: a new selection or a stored analysis.
+    std::optional<store::RecordKey> viewed_key_;
+    std::vector<std::pair<store::RecordKey, store::RecordLookup>> parked_lookups_;
+    static constexpr size_t kParkedLookups = 16;
+    // Shows the lookup for the current settings: parked if seen, read otherwise.
+    void show_record_for_settings();
 };
 
 }  // namespace hydra::ui
