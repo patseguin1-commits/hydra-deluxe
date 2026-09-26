@@ -50,8 +50,8 @@ std::string ini_path() {
 }
 
 std::unique_ptr<store::RecordStore> open_store(const std::string& db,
-                                               uint64_t rules_fingerprint) {
-    return std::make_unique<store::RecordStore>(db, rules_fingerprint);
+                                               core::RulesStamp rules) {
+    return std::make_unique<store::RecordStore>(db, rules);
 }
 
 std::string asset_dir() {
@@ -159,10 +159,6 @@ AnalysisSettings Settings::to_analysis_settings() const {
     s.depth_value = depth_value;
     s.ms_filter = mslimit_enabled ? std::optional<double>(mslimit_value) : std::nullopt;
     s.sp_cap = sp_cap;
-    // Bound the Auto ladder so a heavy chart can't hang the app for minutes.
-    // The budget is auto_budget_s in hydra_rules.ini (the user's choice). A
-    // fixed cap is a single run and needs no budget.
-    s.time_budget_s = sp_cap ? std::nullopt : std::optional<double>(rules.auto_budget_s);
     s.rules = rules;
     return s;
 }

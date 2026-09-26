@@ -52,3 +52,28 @@ The search pays one arena push per phrase crossed on the SP track, per path.
 The limit was 3% on hydra_bench's corpus timing (best of two runs each, cap 4
 and Auto at depth 4). The change was only committed within that limit; a run
 past it stops for the user's call, and no cheaper variant exists.
+
+## Amendment, 2026-09-26: the Auto budget and the Auto ladder
+
+The first version put every rules field into one fingerprint, so any edit to
+hydra_rules.ini made the whole library Stale. Two fields were over-reach
+(user decision 7 of the 2026-09-26 audit plan).
+
+The Auto time budget is a wall-clock limit. Two runs under the same budget
+can settle on different rungs on a busy machine, so the fingerprint could
+never promise a repeatable answer for it. It is in no fingerprint now. It
+also had two homes: the search read `SearchSettings::time_budget_s` while the
+fingerprint hashed `Rules::auto_budget_s`, so a run with no budget still
+stamped 120 s. `Rules::auto_budget_s` is now the only home, and nullopt means
+no budget.
+
+The Auto ladder only changes what an Auto run does. A record now carries one
+of two fingerprints: `Rules::fingerprint()` (every rule except the ladder and
+the budget) for a fixed-cap run, and `Rules::auto_fingerprint()` (that plus
+the ladder) for an Auto run. The store accepts either (`core::RulesStamp`),
+in C++ (`structure_is_current`) and in SQL (`kRowReadySql`, now
+`IN (?, ?)`). A ladder edit marks only Auto runs Stale.
+
+The fingerprint's text changed, so every stored record reads Stale once more
+after this lands. It ships with the record-format bump of the same plan,
+which asks for the same one re-analysis.

@@ -96,6 +96,9 @@ TEST_CASE("records round-trip through RecordStore across the corpus and config m
                 settings.depth_mode = cfg.dmode;
                 settings.depth_value = cfg.dvalue;
                 settings.ms_filter = cfg.ms;
+                // No budget: every Auto rung runs to the end, so the result
+                // never depends on how busy the machine is.
+                settings.rules.auto_budget_s = std::nullopt;
                 record = analyze_chart(song, settings);
             } catch (const ChartFileError&) {
                 continue;  // charts the engine rejects have no row to store
@@ -215,6 +218,8 @@ TEST_CASE("stored transfer scales equal a live recompute after a store round tri
                 settings.depth_mode = cfg.dmode;
                 settings.depth_value = cfg.dvalue;
                 settings.ms_filter = cfg.ms;
+                // No budget, as before this field moved into the rules.
+                settings.rules.auto_budget_s = std::nullopt;
                 record = analyze_chart(song, settings);
             } catch (const ChartFileError&) {
                 continue;
@@ -832,14 +837,14 @@ TEST_CASE("a row analyzed under other rules reads Stale until the rules match ag
         CHECK(store.get_record(key).status == RecordStatus::Ready);
     }
     {
-        RecordStore store(db, other.fingerprint());
+        RecordStore store(db, core::RulesStamp::of(other));
         CHECK(store.get_record(key).status == RecordStatus::Stale);
         CHECK_FALSE(store.has_record(key));
     }
     {
         // A store gated on "no usable rules" (a bad hydra_rules.ini) reads
         // nothing as Ready.
-        RecordStore store(db, core::kNoRulesFingerprint);
+        RecordStore store(db, core::RulesStamp::none());
         CHECK(store.get_record(key).status == RecordStatus::Stale);
     }
     {
@@ -1709,4 +1714,47 @@ TEST_CASE("get_summaries answers a page the same as get_summary row by row") {
         }
     }
     CHECK(store.get_summaries({}, "mode", CapQuery::at(4), Lens{}).empty());
+}
+
+// ---- rules fingerprint scope (2026-09-26 audit, Task 10) -------------------
+
+TEST_CASE("editing the Auto ladder marks only Auto runs Stale") {
+    // User decision 7: the ladder only changes what an Auto run does, so a
+    // fixed-cap row stays Ready when it changes, and the budget changes
+    // nothing at all.
+    core::Rules taller = core::default_rules();
+    taller.auto_cap_ladder = {16, 32, 64, 128, 256, 512, 1024};
+    const RecordKey fixed{"h", "fixed", CapQuery::at(32)};
+    const RecordKey autorun{"h", "auto", CapQuery::automatic()};
+    const std::string db = temp_db("ladder");
+    std::remove(db.c_str());
+    {
+        RecordStore store(db);
+        store.add_song("h", "Song", "Artist", "Charter", fixture().song);
+        store.add_record(fixed, at_cap(32));  // the fixture ran at a fixed cap
+        HydraRecord auto_run = at_cap(32);
+        auto_run.rules_fingerprint = core::default_rules().auto_fingerprint();
+        store.add_record(autorun, auto_run);
+        CHECK(store.get_record(fixed).status == RecordStatus::Ready);
+        CHECK(store.get_record(autorun).status == RecordStatus::Ready);
+    }
+    {
+        RecordStore store(db, core::RulesStamp::of(taller));
+        CHECK(store.get_record(fixed).status == RecordStatus::Ready);
+        CHECK(store.has_record(fixed));
+        const RecordLookup a = store.get_record(autorun);
+        CHECK(a.status == RecordStatus::Stale);
+        CHECK(a.stale_rules);
+        CHECK_FALSE(a.stale_build);
+        CHECK_FALSE(store.has_record(autorun));
+    }
+    {
+        core::Rules quicker = core::default_rules();
+        quicker.auto_budget_s = 5.0;
+        RecordStore store(db, core::RulesStamp::of(quicker));
+        CHECK(store.get_record(fixed).status == RecordStatus::Ready);
+        CHECK(store.get_record(autorun).status == RecordStatus::Ready);
+    }
+    std::error_code ec;
+    std::filesystem::remove(std::filesystem::u8path(db), ec);
 }

@@ -196,7 +196,7 @@ What each line does:
 - **`sqout_rule`** (default `first_note`): what a squeeze-out costs. `first_note` removes the Star Power doubling from one note of the chord (the lowest-value one). `whole_chord` removes it from every note in the chord.
 - **`max_tied_paths`** (default `4`): how many paths Hydra keeps when several reach the same score. More paths means longer lists and slower analysis.
 - **`auto_cap_ladder`** (default `16,32,64,128,256,512`): the SP caps Auto tries, in rising order, until the score stops changing. Separate them with commas.
-- **`auto_budget_s`** (default `120`): how many seconds Auto may spend on one chart before it stops climbing the ladder.
+- **`auto_budget_s`** (default `120`): how many seconds Auto may spend on one chart before it stops climbing the ladder. Changing it never marks a result stale.
 - **`fill_cooldown_measures`** (default `4`): for charts with no authored fills, how many measures must pass after an activation point before Hydra places the next one.
 - **`fill_max_distance_beats`** (default `0.5`): for charts with no authored fills, how far from a measure line a note can sit and still get a fill.
 - **`fill_length_measures`** (default `0.5`): for charts with no authored fills, how long each fill Hydra places is, in measures.
@@ -204,7 +204,7 @@ What each line does:
 
 A value Hydra can't read, or a key it doesn't know, is an error that names the key. The command line tools print the error and stop with exit code 2. The app still opens and shows the error, but Analyze stays off until you fix the file and restart Hydra. Hydra never analyzes on the defaults behind your back.
 
-Every analysis result remembers the rules it was made with. After you change the file, results made under the old rules show **`(Stale)`** until you re-analyze them. Switching the rules back brings those results back.
+Every analysis result remembers the rules it was made with. After you change the file, results made under the old rules show **`(Stale)`** until you re-analyze them. Switching the rules back brings those results back. Two keys are exceptions. `auto_cap_ladder` only changes what Auto does, so editing it marks only results Auto made as stale; results at a fixed SP cap stay. `auto_budget_s` never marks anything stale, because a time limit can't make a result repeatable anyway.
 
 ## Command line tools
 

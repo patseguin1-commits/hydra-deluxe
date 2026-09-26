@@ -295,20 +295,20 @@ TEST_CASE("to_analysis_settings maps the cap and its Auto budget") {
     s.mslimit_enabled = true;
     s.mslimit_value = 20;
 
-    // A fixed cap: single run, no time budget.
+    // A fixed cap: a single run. The rules still carry the Auto budget; only
+    // an Auto run reads it (analyze_chart).
     s.sp_cap = 16;
     AnalysisSettings a = s.to_analysis_settings();
     CHECK(a.depth_mode == hydra::DepthMode::Points);
     CHECK(a.depth_value == 5000);
     CHECK(a.ms_filter == 20.0);
     CHECK(a.sp_cap == 16);
-    CHECK_FALSE(a.time_budget_s.has_value());
 
-    // Auto: the ladder and its budget apply.
+    // Auto: the ladder and its budget come along in the rules.
     s.sp_cap = std::nullopt;
     a = s.to_analysis_settings();
     CHECK_FALSE(a.sp_cap.has_value());
-    CHECK(a.time_budget_s.has_value());
+    CHECK(a.rules.auto_budget_s == s.rules.auto_budget_s);
 
     // Disabled ms limit maps to no filter.
     s.mslimit_enabled = false;

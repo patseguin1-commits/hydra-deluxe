@@ -249,11 +249,11 @@ public:
     // dbpath may be ":memory:" for an ephemeral store (used by tests). A db
     // from Hydra 1.6 or older keeps its old records table, unread: its charts
     // read Not analyzed (user decision 2026-09-26).
-    // rules_fingerprint: core::Rules::fingerprint() of the rules this process
-    // runs under. A row stamped with any other fingerprint reads Stale.
-    // core::kNoRulesFingerprint (a bad hydra_rules.ini) makes every row Stale.
+    // rules_fingerprint: core::RulesStamp::of() the rules this process runs
+    // under. A row stamped with neither of its two fingerprints reads Stale.
+    // core::RulesStamp::none() (a bad hydra_rules.ini) makes every row Stale.
     explicit RecordStore(const std::string& dbpath,
-                         uint64_t rules_fingerprint = core::default_rules().fingerprint());
+                         core::RulesStamp rules_fingerprint = core::default_stamp());
     ~RecordStore();
 
     RecordStore(const RecordStore&) = delete;
@@ -409,9 +409,10 @@ public:
 
 private:
     sqlite3* db_ = nullptr;
-    // The fingerprint of the rules this process runs under; a row stamped
-    // with any other reads Stale.
-    uint64_t rules_fingerprint_;
+    // The two fingerprints of the rules this process runs under (fixed-cap
+    // and Auto); a row stamped with neither reads Stale. Computed once, when
+    // the store opens.
+    core::RulesStamp rules_fingerprint_;
     // The rule: this lock covers sqlite calls and nothing else -- decoding a
     // blob and calling a caller's callback happen outside it. A prepared
     // statement is compiled, stepped, reset and finalized with the lock held,

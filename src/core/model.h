@@ -448,12 +448,14 @@ struct HydraRecord {
     std::optional<double> ms_limit;
     std::optional<int> sp_cap;
     bool sp_cap_converged = true;
-    // core::Rules::fingerprint() of the rules the search ran under (blob v6,
-    // path structure v4). A record built in memory starts with the default
-    // rules' fingerprint; analyze_chart stamps the real one. An older blob
-    // reads back core::kNoRulesFingerprint, which matches no rules, so it can
-    // never pass as current.
-    uint64_t rules_fingerprint = core::default_rules().fingerprint();
+    // The fingerprint of the rules the search ran under (blob v6, path
+    // structure v4): Rules::fingerprint() for a fixed-cap run,
+    // Rules::auto_fingerprint() for an Auto run. A record built in memory
+    // starts with the default rules' fixed-cap fingerprint, computed once
+    // (core::default_stamp), not once per record decoded; analyze_chart
+    // stamps the real one. An older blob reads back core::kNoRulesFingerprint,
+    // which matches no rules, so it can never pass as current.
+    uint64_t rules_fingerprint = core::default_stamp().fixed;
     std::vector<Path> paths;
 
     // The best all-0 path: the highest-scoring path whose activations all

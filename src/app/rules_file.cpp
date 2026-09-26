@@ -81,8 +81,9 @@ core::Rules load_rules_file(const std::filesystem::path& path) {
             if (r.auto_cap_ladder.empty()) bad(where, key, v, "a rising list of caps");
         }
         else if (key == "auto_budget_s") {
-            r.auto_budget_s = to_double(where, key, v, 0.0);
-            if (r.auto_budget_s == 0.0) bad(where, key, v, "above zero");
+            const double budget = to_double(where, key, v, 0.0);
+            if (budget == 0.0) bad(where, key, v, "above zero");
+            r.auto_budget_s = budget;
         }
         else if (key == "fill_cooldown_measures") r.fill_cooldown_measures = to_int(where, key, v, 1);
         else if (key == "fill_max_distance_beats") r.fill_max_distance_beats = to_double(where, key, v, 0.0);
