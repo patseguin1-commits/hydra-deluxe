@@ -194,9 +194,7 @@ void AppState::start_batch(bool redo) {
     // The job loads the (possibly search-filtered) item list on its own
     // thread; doing the unbounded SELECT here froze a frame on big libraries.
     std::optional<std::string> search_opt = search.empty() ? std::nullopt : std::optional(search);
-    batch_job = std::make_unique<BatchJob>(search_opt, settings.chartmode_key(),
-                                           settings.lens(),
-                                           settings.to_analysis_settings(), *store, redo);
+    batch_job = std::make_unique<BatchJob>(search_opt, settings.batch_run(), *store, redo);
     report_started = false;
     report_outcome_shown = false;
     batch_job->start();

@@ -145,6 +145,11 @@ struct Settings {
     // The identity of one chart's record under the current settings: this
     // hash, the current chartmode, the current SP cap and the current lens.
     store::RecordKey record_key(const std::string& hyhash) const;
+
+    // Everything a batch run under these settings needs: the search settings,
+    // and the chartmode and lens its results are filed under. All three come
+    // from this one Settings, so they cannot disagree.
+    BatchRun batch_run() const;
 };
 
 }  // namespace hydra::app

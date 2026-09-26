@@ -111,9 +111,10 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "%s\n", e.what());
         return 2;
     }
-    hydra::app::AnalysisSettings analysis = settings.to_analysis_settings();
-    analysis.legacy_fill_deadline = legacy_fills;
-    std::string chartmode = settings.chartmode_key();
+    hydra::app::BatchRun run = settings.batch_run();
+    run.settings.legacy_fill_deadline = legacy_fills;
+    const hydra::app::AnalysisSettings& analysis = run.settings;
+    const std::string& chartmode = run.chartmode;
     std::string db = dbpath ? *dbpath : hydra::app::db_path();
 
     // A legacy run scores fills by a rule the app does not know about, and the
@@ -184,33 +185,34 @@ int main(int argc, char** argv) {
     bool total_known = false;
     std::vector<std::string> failures;
 
-    hydra::app::run_batch(
-        scanitems, chartmode, settings.lens(), analysis, store, redo,
-        hydra::app::batch_worker_count(),
-        [&](const hydra::app::BatchProgress& p) {
-            if (!total_known) {
-                total = p.total;
-                skipped = static_cast<int>(scanitems.size()) - p.total;
-                total_known = true;
-            }
-        },
-        [&](const std::string& title, const std::string& error) {
-            ++failed;
-            ++done;
-            failures.push_back(title + ": " + error);
-            std::printf("[%d/%d] FAILED %s: %s\n", done, total, title.c_str(),
-                        error.c_str());
-        },
-        [&](const hydra::app::ScanItem& item, const hydra::store::PreparedRow& row) {
-            ++analyzed;
-            ++done;
-            std::string label = item.artist + " - " + item.title;
-            std::string score =
-                row.summary.score ? hydra::group_thousands(*row.summary.score) : "-";
-            std::printf("[%d/%d] %10s  %s %s\n", done, total, score.c_str(),
-                        clip_utf8(label, 52).c_str(), clip_utf8(row.bestpath, 36).c_str());
-            std::fflush(stdout);
-        });
+    hydra::app::BatchCallbacks callbacks;
+    callbacks.on_progress = [&](const hydra::app::BatchProgress& p) {
+        if (!total_known) {
+            total = p.total;
+            skipped = static_cast<int>(scanitems.size()) - p.total;
+            total_known = true;
+        }
+    };
+    callbacks.on_error = [&](const std::string& title, const std::string& error) {
+        ++failed;
+        ++done;
+        failures.push_back(title + ": " + error);
+        std::printf("[%d/%d] FAILED %s: %s\n", done, total, title.c_str(),
+                    error.c_str());
+    };
+    callbacks.on_result = [&](const hydra::app::ScanItem& item,
+                              const hydra::store::PreparedRow& row) {
+        ++analyzed;
+        ++done;
+        std::string label = item.artist + " - " + item.title;
+        std::string score =
+            row.summary.score ? hydra::group_thousands(*row.summary.score) : "-";
+        std::printf("[%d/%d] %10s  %s %s\n", done, total, score.c_str(),
+                    clip_utf8(label, 52).c_str(), clip_utf8(row.bestpath, 36).c_str());
+        std::fflush(stdout);
+    };
+    hydra::app::run_batch(scanitems, run, store, redo, hydra::app::batch_worker_count(),
+                          callbacks);
 
     double elapsed =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();

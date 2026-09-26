@@ -197,4 +197,8 @@ store::RecordKey Settings::record_key(const std::string& hyhash) const {
     return store::RecordKey{hyhash, chartmode_key(), cap_query(), lens()};
 }
 
+BatchRun Settings::batch_run() const {
+    return BatchRun{chartmode_key(), lens(), to_analysis_settings()};
+}
+
 }  // namespace hydra::app

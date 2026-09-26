@@ -88,13 +88,10 @@ void ScanJob::run() {
 
 // ---- BatchJob ---------------------------------------------------------
 
-BatchJob::BatchJob(std::optional<std::string> search, std::string chartmode,
-                   store::Lens lens, app::AnalysisSettings settings,
+BatchJob::BatchJob(std::optional<std::string> search, app::BatchRun run,
                    store::RecordStore& store, bool redo)
     : search_(std::move(search)),
-      chartmode_(std::move(chartmode)),
-      lens_(std::move(lens)),
-      settings_(std::move(settings)),
+      run_(std::move(run)),
       store_(store),
       redo_(redo),
       workers_(app::batch_worker_count()) {}
@@ -136,24 +133,24 @@ void BatchJob::run() {
 
     bool total_known = false;
 
-    app::run_batch(
-        items_, chartmode_, lens_, settings_, store_, redo_, workers_,
-        [this, &total_known](const app::BatchProgress& p) {
-            std::lock_guard<std::mutex> lock(mu_);
-            snap_.total = p.total;
-            snap_.completed = p.completed;
-            snap_.current_title = p.current_title;
-            if (!total_known) {
-                snap_.skipped = static_cast<int>(items_.size()) - p.total;
-                total_known = true;
-            }
-        },
-        [this](const std::string& title, const std::string& error) {
-            std::lock_guard<std::mutex> lock(mu_);
-            ++snap_.failed;
-            snap_.failures.push_back(title + ": " + error);
-        },
-        /*on_result=*/nullptr, &cancel_);
+    app::BatchCallbacks callbacks;
+    callbacks.on_progress = [this, &total_known](const app::BatchProgress& p) {
+        std::lock_guard<std::mutex> lock(mu_);
+        snap_.total = p.total;
+        snap_.completed = p.completed;
+        snap_.current_title = p.current_title;
+        if (!total_known) {
+            snap_.skipped = static_cast<int>(items_.size()) - p.total;
+            total_known = true;
+        }
+    };
+    callbacks.on_error = [this](const std::string& title, const std::string& error) {
+        std::lock_guard<std::mutex> lock(mu_);
+        ++snap_.failed;
+        snap_.failures.push_back(title + ": " + error);
+    };
+    callbacks.cancel = &cancel_;
+    app::run_batch(items_, run_, store_, redo_, workers_, callbacks);
 
     std::lock_guard<std::mutex> lock(mu_);
     snap_.current_title.clear();
@@ -161,13 +158,6 @@ void BatchJob::run() {
 }
 
 // ---- AnalyzeJob -------------------------------------------------------
-
-namespace {
-// Thrown out of the search's progress callback to abort a cancelled analysis
-// — the same unwind path pather.cpp's CapBudgetExceeded takes, so the engine
-// is already known to survive it.
-struct AnalysisCancelled {};
-}  // namespace
 
 AnalyzeJob::AnalyzeJob(store::ChartLibraryEntry song, store::RecordKey key,
                        app::AnalysisSettings settings)
@@ -186,11 +176,11 @@ void AnalyzeJob::start() {
                     result_ = app::analyze_chart_file(
                         song_.notespath, settings_, [this](float f) {
                             if (cancel_.load(std::memory_order_relaxed))
-                                throw AnalysisCancelled{};
+                                throw app::AnalysisCancelled{};
                             progress_.store(f, std::memory_order_relaxed);
                         });
                     return true;
-                } catch (const AnalysisCancelled&) {
+                } catch (const app::AnalysisCancelled&) {
                     return false;  // no error text: the UI discards a cancelled job
                 }
             });

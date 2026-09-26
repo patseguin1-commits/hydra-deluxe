@@ -9,17 +9,24 @@
 #endif
 #include <windows.h>
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <future>
 #include <map>
 #include <sstream>
+#include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
 #include "app/analysis.h"
+#include "app/work_pool.h"
 #include "core/winstr.h"
 #include "corpus_util.h"
 #include "midi_util.h"
@@ -173,22 +180,169 @@ TEST_CASE("run_batch files results under the lens it is given") {
     }
     REQUIRE(!chart.empty());
 
-    AnalysisSettings settings;
-    settings.depth_mode = hydra::DepthMode::Scores;
-    settings.depth_value = 10;
-    settings.ms_filter = 10.0;
-    const hydra::store::Lens lens =
-        hydra::store::Lens::from(std::optional<int>(10), 0, 10);
+    BatchRun run;
+    run.chartmode = "lens-test";
+    run.lens = hydra::store::Lens::from(std::optional<int>(10), 0, 10);
+    run.settings.depth_mode = hydra::DepthMode::Scores;
+    run.settings.depth_value = 10;
+    run.settings.ms_filter = 10.0;
 
     ScanItem item;
     item.md5 = hash_chart_file(chart);
     item.title = "t";
     item.notespath = chart;
     hydra::store::RecordStore store(":memory:");
-    run_batch({item}, "lens-test", lens, settings, store, /*redo=*/false, 1);
+    run_batch({item}, run, store, /*redo=*/false, 1);
 
-    const hydra::store::CapQuery cap = hydra::store::CapQuery::from_setting(settings.sp_cap);
-    CHECK(store.has_record(hydra::store::RecordKey{item.md5, "lens-test", cap, lens}));
+    const hydra::store::CapQuery cap =
+        hydra::store::CapQuery::from_setting(run.settings.sp_cap);
+    CHECK(store.has_record(hydra::store::RecordKey{item.md5, "lens-test", cap, run.lens}));
+}
+
+TEST_CASE("run_work_pool hands every item to the consumer once") {
+    std::vector<int> seen(100, 0);
+    run_work_pool<size_t>(
+        100, 8, nullptr, [](size_t i) { return i; }, [&](size_t&& i) { ++seen[i]; });
+    for (int n : seen) CHECK(n == 1);
+}
+
+TEST_CASE("run_work_pool: a cancel mid-run never strands the consumer") {
+    // Hundreds of short runs, each cancelled from inside the work. The old
+    // batch pool could leave its consumer waiting forever when every worker
+    // saw the cancel between items, so a hang is the failure this guards. The
+    // watchdog turns a hang into a failed check instead of a stuck suite.
+    std::promise<bool> finished;
+    std::future<bool> outcome = finished.get_future();
+    std::thread([p = std::move(finished)]() mutable {
+        bool every_item_consumed = true;
+        for (int round = 0; round < 500; ++round) {
+            std::atomic<bool> cancel{false};
+            std::atomic<int> worked{0};
+            int consumed = 0;
+            run_work_pool<int>(
+                64, 8, &cancel,
+                [&](size_t i) {
+                    ++worked;
+                    if (i == 3) cancel = true;
+                    return static_cast<int>(i);
+                },
+                [&](int&&) { ++consumed; });
+            // Every item a worker started reached the consumer.
+            if (consumed != worked.load()) every_item_consumed = false;
+        }
+        p.set_value(every_item_consumed);
+    }).detach();
+
+    REQUIRE_MESSAGE(outcome.wait_for(std::chrono::seconds(30)) == std::future_status::ready,
+                    "run_work_pool never returned: its consumer was left waiting");
+    CHECK(outcome.get());
+}
+
+namespace {
+
+// Items for a fake analyzer: nothing is read from disk.
+std::vector<ScanItem> fake_items(int n) {
+    std::vector<ScanItem> items;
+    for (int i = 0; i < n; ++i) {
+        ScanItem item;
+        item.md5 = "fake" + std::to_string(i);
+        item.title = "fake " + std::to_string(i);
+        item.notespath = "fake_" + std::to_string(i) + ".chart";
+        items.push_back(item);
+    }
+    return items;
+}
+
+}  // namespace
+
+TEST_CASE("run_batch: cancel stops running searches within seconds") {
+    // A stand-in for a heavy chart: it runs for a minute, reporting progress
+    // every millisecond the way the engine's sweep does. Only a progress
+    // callback that throws on cancel can stop it early.
+    std::atomic<int> started{0};
+    BatchCallbacks callbacks;
+    callbacks.analyze = [&started](const std::string&, const AnalysisSettings&,
+                                   const std::function<void(float)>& on_progress)
+        -> AnalysisResult {
+        ++started;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        while (std::chrono::steady_clock::now() < until) {
+            if (on_progress) on_progress(0.5f);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        throw std::runtime_error("the fake search ran its full minute");
+    };
+    std::atomic<bool> cancel{false};
+    callbacks.cancel = &cancel;
+    int errors = 0, results = 0;
+    callbacks.on_error = [&errors](const std::string&, const std::string&) { ++errors; };
+    callbacks.on_result = [&results](const ScanItem&, const hydra::store::PreparedRow&) {
+        ++results;
+    };
+
+    // Press cancel once all four workers are inside a search.
+    std::thread canceller([&] {
+        const auto give_up = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (started.load() < 4 && std::chrono::steady_clock::now() < give_up)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        cancel = true;
+    });
+
+    hydra::store::RecordStore store(":memory:");
+    BatchRun run;
+    run.chartmode = "cancel-test";
+    const auto t0 = std::chrono::steady_clock::now();
+    run_batch(fake_items(16), run, store, /*redo=*/false, /*worker_count=*/4, callbacks);
+    const double seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    canceller.join();
+
+    CHECK(started.load() == 4);  // no chart started after the cancel
+    CHECK(seconds < 5.0);        // without the cancel check this takes 60 s
+    CHECK(errors == 0);          // a stopped search is not a failure...
+    CHECK(results == 0);         // ...and not a result
+    CHECK(store.counts().second == 0);
+}
+
+TEST_CASE("run_batch: a cancelled real search is neither a result nor a failure") {
+    std::string chart;
+    for (const std::string& p : corpus::chart_paths()) {
+        if (!hydra::load_songpath(p, true, true).is_empty()) { chart = p; break; }
+    }
+    REQUIRE(!chart.empty());
+
+    ScanItem item;
+    item.md5 = hash_chart_file(chart);
+    item.title = "t";
+    item.notespath = chart;
+
+    std::atomic<bool> cancel{false};
+    BatchCallbacks callbacks;
+    callbacks.cancel = &cancel;
+    // The real analysis, with cancel pressed at the search's first progress
+    // tick. The throw has to unwind the engine, the pather and the all-0 pass
+    // without any of them catching it.
+    callbacks.analyze = [&cancel](const std::string& path, const AnalysisSettings& s,
+                                  const std::function<void(float)>& on_progress) {
+        return analyze_chart_file(path, s, [&](float f) {
+            cancel = true;
+            on_progress(f);
+        });
+    };
+    int errors = 0, results = 0;
+    callbacks.on_error = [&errors](const std::string&, const std::string&) { ++errors; };
+    callbacks.on_result = [&results](const ScanItem&, const hydra::store::PreparedRow&) {
+        ++results;
+    };
+
+    hydra::store::RecordStore store(":memory:");
+    BatchRun run;
+    run.chartmode = "cancel-test";
+    run_batch({item}, run, store, /*redo=*/false, 1, callbacks);
+
+    CHECK(errors == 0);
+    CHECK(results == 0);
+    CHECK(store.counts().second == 0);
 }
 
 namespace {
