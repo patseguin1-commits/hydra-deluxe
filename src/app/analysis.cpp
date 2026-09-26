@@ -15,6 +15,7 @@
 #include <set>
 #include <thread>
 #include <tuple>
+#include <unordered_set>
 
 #include "app/dynamics_breakdown.h"
 #include "app/work_pool.h"
@@ -542,6 +543,8 @@ struct WorkResult {
     ScanItem item;
     std::optional<store::PreparedRow> row;
     std::optional<AnalysisResult> analysis;
+    // Counted on the worker, so the consumer only writes.
+    std::optional<store::DynamicsEntry> dynamics;
     std::string error;
     // The search stopped at a cancel: neither a result nor a failure.
     bool cancelled = false;
@@ -560,11 +563,13 @@ void run_batch(const std::vector<ScanItem>& items, const BatchRun& run,
     // ms limit and score range, so stale rows, other caps' rows and other
     // settings' rows are re-run rather than skipped.
     const store::CapQuery cap = store::CapQuery::from_setting(settings.sp_cap);
+    // One query for the whole library, not one per chart.
+    const std::unordered_set<std::string> analyzed =
+        redo ? std::unordered_set<std::string>{}
+             : store.analyzed_hashes(run.chartmode, cap, run.lens);
     std::vector<const ScanItem*> todo;
     for (const ScanItem& item : items) {
-        if (!redo &&
-            store.has_record(store::RecordKey{item.md5, run.chartmode, cap, run.lens}))
-            continue;
+        if (analyzed.count(item.md5)) continue;
         todo.push_back(&item);
     }
 
@@ -597,6 +602,9 @@ void run_batch(const std::vector<ScanItem>& items, const BatchRun& run,
                 AnalysisResult ar = analyze(item->notespath, settings, check_cancel);
                 wr.row = store::prepare_row(
                     store::RecordKey{item->md5, run.chartmode, cap, run.lens}, ar.record);
+                wr.dynamics = dynamics_entry_from_analysis(
+                    item->md5, ar.song, settings.bass2x, settings.difficulty,
+                    settings.prodrums);
                 wr.analysis = std::move(ar);
             } catch (const AnalysisCancelled&) {
                 wr.cancelled = true;
@@ -615,12 +623,8 @@ void run_batch(const std::vector<ScanItem>& items, const BatchRun& run,
             if (!wr.error.empty()) {
                 if (callbacks.on_error) callbacks.on_error(wr.item.title, wr.error);
             } else {
-                store.add_song(wr.item.md5, wr.item.title, wr.item.artist, wr.item.charter,
-                               wr.analysis->song);
-                store.add_row(*wr.row);
-                store_dynamics_from_analysis(store, wr.item.md5, wr.analysis->song,
-                                             settings.bass2x, settings.difficulty,
-                                             settings.prodrums);
+                store.save_analysis(wr.item.md5, wr.item.title, wr.item.artist,
+                                    wr.item.charter, wr.analysis->song, *wr.row, wr.dynamics);
                 if (callbacks.on_result) callbacks.on_result(wr.item, *wr.row);
             }
 

@@ -87,10 +87,15 @@ void AppState::refresh_summaries() {
     // Resolve each row's Best Path summary once here instead of per row per
     // frame in the render loop (a SQLite query at 60fps x 200 rows, on the
     // render thread, against the same mutex the batch workers hold).
+    // One query for the whole page, not one per row.
+    std::vector<std::string> hashes;
+    hashes.reserve(current_page.rows.size());
+    for (const store::ChartLibraryEntry& row : current_page.rows) hashes.push_back(row.md5);
+    std::vector<store::SummaryLookup> lookups = store->get_summaries(
+        hashes, settings.chartmode_key(), settings.cap_query(), settings.lens());
     current_page.summaries.clear();
-    current_page.summaries.reserve(current_page.rows.size());
-    for (const store::ChartLibraryEntry& row : current_page.rows) {
-        store::SummaryLookup summary = store->get_summary(settings.record_key(row.md5));
+    current_page.summaries.reserve(lookups.size());
+    for (store::SummaryLookup& summary : lookups) {
         LibraryPage::RowSummary rs;
         rs.state = summary.status;
         rs.bestpath = std::move(summary.bestpath);
@@ -298,15 +303,15 @@ std::string AppState::store_finished_analysis() {
         // modal mid-analysis, click another row).
         const store::ChartLibraryEntry& song = analyze_job->song();
         app::AnalysisResult result = analyze_job->take_result();
-        store->add_song(song.md5, song.title, song.artist, song.charter,
-                        result.song);
-        store->add_record(analyze_job->key(), result.record);
         // Key the dynamics by the settings the job snapshotted, not the
         // current ones: the user may have moved the difficulty box since it
         // started.
         const app::AnalysisSettings& as = analyze_job->settings();
-        app::store_dynamics_from_analysis(*store, song.md5, result.song, as.bass2x,
-                                          as.difficulty, as.prodrums);
+        store->save_analysis(song.md5, song.title, song.artist, song.charter, result.song,
+                             store::prepare_row(analyze_job->key(), result.record),
+                             app::dynamics_entry_from_analysis(song.md5, result.song,
+                                                               as.bass2x, as.difficulty,
+                                                               as.prodrums));
         parked_lookups_.clear();  // a record just changed
         refresh_viewed_record();
         refresh_page();  // the library row's Best Path cell is cached per page
