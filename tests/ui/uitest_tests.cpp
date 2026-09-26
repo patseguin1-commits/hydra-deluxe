@@ -942,6 +942,211 @@ void test_library_state_per_app(ImGuiTestContext* ctx) {
     ctx->Yield(2);
 }
 
+// The dmleaderboards comparison, end to end: the two refusals, the name
+// filter, and every button of the finished report.
+void test_dm_compare_flow(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    ctx->SetRef("//Hydra");
+
+    // The ladder plays by Clone Hero's rules at Expert. Any other cap or
+    // difficulty refuses with a status line and opens nothing.
+    h.app->settings.sp_cap = 8;
+    h.app->commit_settings();
+    ctx->ItemClick("Compare dmleaderboards user...");
+    ctx->Yield(2);
+    IM_CHECK(!h.app->dm_picker_open);
+    IM_CHECK(visible_text(h).find("needs SP cap 4") != std::string::npos);
+    h.app->settings.sp_cap = 4;
+    h.app->commit_settings();
+
+    ctx->ComboClick("##difficulty/Hard");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->settings.view_difficulty == "Hard"; }, 5));
+    ctx->ItemClick("Compare dmleaderboards user...");
+    ctx->Yield(2);
+    IM_CHECK(!h.app->dm_picker_open);
+    IM_CHECK(visible_text(h).find("needs Expert difficulty") != std::string::npos);
+    ctx->ComboClick("##difficulty/Expert");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->settings.view_difficulty == "Expert"; }, 5));
+
+    // The picker opens on the canned ladder; the filter narrows it as you
+    // type, ignoring case.
+    ctx->ItemClick("Compare dmleaderboards user...");
+    IM_CHECK(wait_until(ctx, [&] { return !h.app->dm_users.empty(); }, 10));
+    ctx->SetRef("//Compare dmleaderboards user");
+    ctx->ItemInputValue("##dmfilter", "");  // an earlier test may have left text
+    IM_CHECK(wait_until(ctx, [&] { return visible_text(h).find("alice") != std::string::npos; }, 5));
+    ctx->ItemInputValue("##dmfilter", "bob");
+    ctx->Yield(2);
+    IM_CHECK(visible_text(h).find("alice") == std::string::npos);
+    ctx->ItemInputValue("##dmfilter", "ALI");
+    ctx->Yield(2);
+    IM_CHECK(visible_text(h).find("alice") != std::string::npos);
+
+    // Pick alice: the report builds, the choice is remembered, and with
+    // auto-open off nothing opens until asked.
+    ctx->ItemClick("**/###111");
+    IM_CHECK(wait_until(ctx, [&] {
+        return h.app->dm_report_job && h.app->dm_report_job->finished();
+    }, 60));
+    IM_CHECK(h.app->dm_report_job->ok());
+    IM_CHECK_STR_EQ(h.app->settings.dm_last_user.c_str(), "111");
+    IM_CHECK_STR_EQ(hydra::app::Settings::load_file(h.ini_path).dm_last_user.c_str(), "111");
+    IM_CHECK_EQ(h.opened_urls.size(), (size_t)0);
+    ctx->ItemClick("Open report again");
+    IM_CHECK_EQ(h.opened_urls.size(), (size_t)1);
+    IM_CHECK(h.opened_urls[0] == hydra::app::dm_report_html_path());
+
+    // Compare another: back to the list, the finished report dropped.
+    ctx->ItemClick("Compare another");
+    ctx->Yield(2);
+    IM_CHECK(h.app->dm_report_job == nullptr);
+    IM_CHECK(h.app->dm_picker_open);
+    IM_CHECK(visible_text(h).find("Pick a player") != std::string::npos);
+
+    // Close: the picker goes away.
+    ctx->ItemClick("Close");
+    ctx->Yield(2);
+    IM_CHECK(!h.app->dm_picker_open);
+}
+
+// The path report's buttons: the main window's "Open path report" appears
+// once a report exists, "Open automatically" persists and then opens the
+// next report by itself, and "redo existing" re-analyzes a stored chart.
+void test_report_buttons(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    ctx->SetRef("//Hydra");
+    IM_CHECK(!ctx->ItemExists("Open path report"));  // no report built yet
+
+    // Batch just the first chart (the search narrows the batch).
+    std::string title = h.app->current_page.rows[0].title;
+    ctx->ItemInputValue("##search", title.c_str());
+    IM_CHECK(wait_until(ctx, [&] { return h.app->search == title; }, 5));
+    auto run_batch = [&] {
+        char label[96];
+        std::snprintf(label, sizeof(label), "Analyze search (%lld)",
+                      (long long)h.app->current_page.total_count);
+        ctx->SetRef("//Hydra");
+        ctx->ItemClick(label);
+        ctx->SetRef("//Analyzing");
+        ctx->ItemClick("Start");
+        return wait_until(ctx, [&] {
+                   return h.app->batch_job && h.app->batch_job->snapshot().finished;
+               }, 300) &&
+               wait_until(ctx, [&] {
+                   return h.app->report_job && h.app->report_job->finished();
+               }, 60);
+    };
+    IM_CHECK(run_batch());
+    IM_CHECK_EQ(h.opened_urls.size(), (size_t)0);  // auto-open is off
+
+    // Tick "Open automatically" in the finished modal: it persists at once.
+    ctx->ItemClick("Open automatically");
+    IM_CHECK(h.app->settings.auto_open_report);
+    IM_CHECK(hydra::app::Settings::load_file(h.ini_path).auto_open_report);
+    ctx->ItemClick("Continue");
+    ctx->Yield(2);
+
+    // The main window now offers the report, and opens it on a click.
+    ctx->SetRef("//Hydra");
+    IM_CHECK(wait_until(ctx, [&] { return ctx->ItemExists("Open path report"); }, 5));
+    ctx->ItemClick("Open path report");
+    IM_CHECK_EQ(h.opened_urls.size(), (size_t)1);
+    IM_CHECK(h.opened_urls[0] == hydra::app::report_html_path());
+
+    // "redo existing" re-analyzes the stored chart, and the confirm says so.
+    ctx->ItemCheck("redo existing");
+    IM_CHECK(h.app->batch_redo);
+    char label[96];
+    std::snprintf(label, sizeof(label), "Analyze search (%lld)",
+                  (long long)h.app->current_page.total_count);
+    ctx->ItemClick(label);
+    ctx->Yield(2);
+    IM_CHECK(visible_text(h).find("will be re-analyzed") != std::string::npos);
+    ctx->SetRef("//Analyzing");
+    ctx->ItemClick("Cancel");
+    ctx->Yield(2);
+    IM_CHECK(run_batch());
+    IM_CHECK_EQ(h.app->batch_job->snapshot().skipped, 0);  // nothing skipped: redone
+
+    // With auto-open on, the new report opened by itself.
+    IM_CHECK_EQ(h.opened_urls.size(), (size_t)2);
+    ctx->ItemClick("Continue");
+    ctx->Yield(2);
+    ctx->SetRef("//Hydra");
+    ctx->ItemUncheck("redo existing");
+}
+
+// The View row and the library's own controls: Pro Drums, the page arrows,
+// backing out of "Analyze library", and removing a song folder.
+void test_view_settings(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    ctx->SetRef("//Hydra");
+
+    // The page arrows move one page each way.
+    IM_CHECK(h.app->current_page.total_count > h.app->rows_per_page);  // 2+ pages
+    IM_CHECK_EQ(h.app->table_viewpage, 0);
+    ctx->ItemClick("##pageright");
+    IM_CHECK_EQ(h.app->table_viewpage, 1);
+    ctx->ItemClick("##pageleft");
+    IM_CHECK_EQ(h.app->table_viewpage, 0);
+
+    // Pro Drums off is a different chart mode: persisted at once, and the
+    // library starts over at page one.
+    ctx->ItemClick("##pageright");
+    IM_CHECK_EQ(h.app->table_viewpage, 1);
+    IM_CHECK(h.app->settings.view_prodrums);
+    ctx->ItemClick("Pro Drums");
+    IM_CHECK(!h.app->settings.view_prodrums);
+    IM_CHECK(!hydra::app::Settings::load_file(h.ini_path).view_prodrums);
+    IM_CHECK(h.app->settings.chartmode_key().find("Pro Drums") == std::string::npos);
+    IM_CHECK_EQ(h.app->table_viewpage, 0);
+    ctx->ItemClick("Pro Drums");
+    IM_CHECK(h.app->settings.view_prodrums);
+
+    // "Analyze library" asks first; Cancel starts nothing.
+    ctx->ItemClick("Analyze library");
+    ctx->SetRef("//Analyzing");
+    IM_CHECK(visible_text(h).find("will be skipped") != std::string::npos);
+    ctx->ItemClick("Cancel");
+    ctx->Yield(2);
+    IM_CHECK(h.app->batch_job == nullptr);
+    IM_CHECK(!h.app->batch_confirm_pending);
+
+    // Removing a song folder goes through a confirm. Cancel keeps it;
+    // Remove drops it, persists that, and turns the scan button off.
+    ctx->SetRef("//Hydra");
+    IM_CHECK_EQ(h.app->settings.chartfolders.size(), (size_t)1);
+    ctx->ItemClick("Manage folders... (1)");
+    ctx->SetRef("//Song folders");
+    ctx->ItemClick("**/X");
+    ctx->SetRef("//Remove folder?");
+    ctx->ItemClick("Cancel");
+    ctx->Yield(2);
+    IM_CHECK_EQ(h.app->settings.chartfolders.size(), (size_t)1);
+    ctx->SetRef("//Song folders");
+    ctx->ItemClick("**/X");
+    ctx->SetRef("//Remove folder?");
+    ctx->ItemClick("Remove");
+    ctx->Yield(2);
+    IM_CHECK(h.app->settings.chartfolders.empty());
+    IM_CHECK(hydra::app::Settings::load_file(h.ini_path).chartfolders.empty());
+    IM_CHECK(!h.app->settings.is_rescan);
+    ctx->SetRef("//Song folders");
+    ctx->ItemClick("Close");
+    ctx->Yield(2);
+    ctx->SetRef("//Hydra");
+    IM_CHECK((ctx->ItemInfo("Scan charts").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+}
+
 }  // namespace
 
 void register_tests(Harness& h) {
@@ -970,6 +1175,9 @@ void register_tests(Harness& h) {
         {"squeezed_out_uncounted", test_squeezed_out_uncounted},
         {"details-close-teardown", test_details_close_teardown},
         {"library-state-per-app", test_library_state_per_app},
+        {"dm-compare-flow", test_dm_compare_flow},
+        {"report-buttons", test_report_buttons},
+        {"view-settings", test_view_settings},
     };
     for (const Entry& e : entries) {
         ImGuiTest* t = IM_REGISTER_TEST(h.engine, "hydra", e.name);
