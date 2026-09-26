@@ -203,14 +203,14 @@ TEST_CASE("window: strict bounds, and a synthesized instant when empty") {
     scene.solos = {span(900.0, 3100.0)};
     TrackState st = build_track_state(scene, TrackStateOptions{});
 
-    std::vector<TrackInstant> w = st.window(1.0, 3.0);  // excludes both ends
+    TrackWindow w = st.window(1.0, 3.0);  // excludes both ends
     REQUIRE(w.size() == 1);
     CHECK(w[0].t == doctest::Approx(2.0));
     CHECK(w[0].solo == Toggle::On);
 
     // Nothing between 2.1 and 2.9: the synthesized midpoint instant carries
     // the ongoing solo.
-    std::vector<TrackInstant> empty = st.window(2.1, 2.9);
+    TrackWindow empty = st.window(2.1, 2.9);
     REQUIRE(empty.size() == 1);
     CHECK(empty[0].t == doctest::Approx(2.5));
     CHECK(empty[0].solo == Toggle::On);
@@ -218,7 +218,7 @@ TEST_CASE("window: strict bounds, and a synthesized instant when empty") {
     CHECK_FALSE(empty[0].beat.has_value());
 
     // Outside every span: synthesized Empty.
-    std::vector<TrackInstant> before = st.window(0.1, 0.5);
+    TrackWindow before = st.window(0.1, 0.5);
     REQUIRE(before.size() == 1);
     CHECK(before[0].solo == Toggle::Empty);
 }
@@ -233,7 +233,7 @@ TEST_CASE("make_toggle_bounds: covers [near, far], merges equal neighbours") {
     CHECK(find(st.instants(), 2.0)->solo == Toggle::On);
     CHECK(find(st.instants(), 2.0005)->solo == Toggle::On);
 
-    std::vector<TrackInstant> w = st.window(0.5, 4.0);
+    TrackWindow w = st.window(0.5, 4.0);
     std::vector<ToggleSpan> spans =
         st.make_toggle_bounds(w, 0.5, 4.0, &TrackInstant::solo);
     // off [0.5,1.0), on [1.0, 3.0005), off to 4.0
@@ -248,7 +248,7 @@ TEST_CASE("make_toggle_bounds: covers [near, far], merges equal neighbours") {
     CHECK_FALSE(spans[2].on);
 
     // A window opening mid-span starts "on".
-    std::vector<TrackInstant> mid = st.window(1.5, 2.5);
+    TrackWindow mid = st.window(1.5, 2.5);
     std::vector<ToggleSpan> mid_spans =
         st.make_toggle_bounds(mid, 1.5, 2.5, &TrackInstant::solo);
     REQUIRE(mid_spans.size() == 1);
@@ -298,4 +298,24 @@ TEST_CASE("build_track_state: spans need the song timing") {
     PreviewScene plain;
     plain.notes = {note(1000.0, PreviewLane::Red)};
     CHECK(build_track_state(plain, TrackStateOptions{}).instants().size() == 1);
+}
+
+// The renderer asks for this window every frame. It used to be a vector of
+// copies, each instant with its own vector of notes.
+TEST_CASE("window: a view into the state, not a copy") {
+    PreviewScene scene = timed_scene();
+    scene.notes = {note(1000.0, PreviewLane::Red), note(2000.0, PreviewLane::Red),
+                   note(3000.0, PreviewLane::Red)};
+    TrackState st = build_track_state(scene, TrackStateOptions{});
+
+    TrackWindow w = st.window(0.5, 3.5);
+    const TrackInstant* in_state = find(st.instants(), 2.0);
+    REQUIRE(in_state != nullptr);
+    const TrackInstant* in_window = nullptr;
+    for (const TrackInstant& i : w)
+        if (i.t == doctest::Approx(2.0)) in_window = &i;
+    CHECK(in_window == in_state);
+
+    // Walking it backwards reaches the same objects.
+    CHECK(&*w.rbegin() == &w[w.size() - 1]);
 }

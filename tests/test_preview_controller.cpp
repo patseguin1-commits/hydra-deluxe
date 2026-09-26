@@ -17,6 +17,8 @@
 #include <string>
 #include <vector>
 
+#include "app/analysis.h"
+#include "app/preview_view.h"
 #include "audio/device.h"
 #include "core/winstr.h"
 #include "corpus_util.h"
@@ -110,7 +112,7 @@ TEST_CASE("with no audio device the Preview still loads, muted, with a warning")
             -> std::unique_ptr<hydra::audio::PreviewAudioDevice> {
             throw std::runtime_error("PreviewAudioDevice: ma_device_init failed");
         });
-    pc.open(entry_for(chart_with_audio()), true, true, Difficulty::Expert, nullptr, 4);
+    pc.open(entry_for(chart_with_audio()), true, true, Difficulty::Expert, nullptr, "", 4);
     for (int i = 0; i < 1200 && pc.loading(); ++i) {
         pc.poll();
         Sleep(50);
@@ -126,4 +128,52 @@ TEST_CASE("with no audio device the Preview still loads, muted, with a warning")
 
     pc.close();
     CHECK(pc.audio_warning().empty());
+}
+
+// Picking another path with the Preview open used to rebuild the scene inside
+// open(), on the UI thread. It now builds on a job and lands on a later poll().
+TEST_CASE("switching paths builds the new overlay off the UI thread") {
+    using namespace hydra;
+    using namespace hydra::app;
+    AnalysisSettings settings;
+    settings.depth_mode = DepthMode::Scores;
+    settings.depth_value = 2;
+    settings.ms_filter = 10.0;
+    std::string chart;
+    std::optional<AnalysisResult> analyzed;
+    for (const std::string& p : corpus::chart_paths()) {
+        try {
+            AnalysisResult r = analyze_chart_file(p, settings);
+            if (!r.record.paths.empty()) {
+                chart = p;
+                analyzed.emplace(std::move(r));
+                break;
+            }
+        } catch (const std::exception&) {
+        }
+    }
+    REQUIRE(analyzed.has_value());
+    const Path& best = analyzed->record.best_path();
+    const std::string best_key = path_overlay_key(&best);
+
+    PreviewController pc(nullptr, nullptr);
+    pc.open(entry_for(chart), true, true, Difficulty::Expert, nullptr, "", 4);
+    for (int i = 0; i < 1200 && pc.loading(); ++i) {
+        pc.poll();
+        Sleep(50);
+    }
+    REQUIRE_FALSE(pc.loading());
+    const std::string before = pc.overlay_path_key();
+
+    // open() returns at once: the old overlay is still up, and nothing reloads.
+    pc.open(entry_for(chart), true, true, Difficulty::Expert, &best, best_key, 4);
+    CHECK(pc.overlay_path_key() == before);
+    CHECK_FALSE(pc.loading());
+
+    // The new overlay lands on a later poll.
+    for (int i = 0; i < 1200 && pc.overlay_path_key().rfind(best_key, 0) != 0; ++i) {
+        pc.poll();
+        Sleep(10);
+    }
+    CHECK(pc.overlay_path_key().rfind(best_key, 0) == 0);
 }

@@ -12,6 +12,8 @@
 #define HYDRA_RENDER_TRACK_STATE_H
 
 #include <optional>
+#include <cstddef>
+#include <iterator>
 #include <utility>
 #include <vector>
 
@@ -59,6 +61,35 @@ struct ToggleSpan {
     bool on = false;
 };
 
+// The instants one frame draws, near < t < far, as a view into the track
+// state: nothing is copied. When no instant falls inside, it holds one
+// synthesized instant at the window's midpoint instead (Onyx's zoomMap
+// fallback). Valid while the TrackState it came from is alive and unchanged.
+class TrackWindow {
+public:
+    TrackWindow(const TrackInstant* first, const TrackInstant* last)
+        : first_(first), last_(last) {}
+    explicit TrackWindow(TrackInstant synthesized) : synth_(std::move(synthesized)) {}
+
+    const TrackInstant* begin() const { return synth_ ? &*synth_ : first_; }
+    const TrackInstant* end() const { return synth_ ? &*synth_ + 1 : last_; }
+    std::reverse_iterator<const TrackInstant*> rbegin() const {
+        return std::reverse_iterator<const TrackInstant*>(end());
+    }
+    std::reverse_iterator<const TrackInstant*> rend() const {
+        return std::reverse_iterator<const TrackInstant*>(begin());
+    }
+    size_t size() const { return static_cast<size_t>(end() - begin()); }
+    bool empty() const { return size() == 0; }
+    const TrackInstant& front() const { return *begin(); }
+    const TrackInstant& operator[](size_t i) const { return begin()[i]; }
+
+private:
+    const TrackInstant* first_ = nullptr;
+    const TrackInstant* last_ = nullptr;
+    std::optional<TrackInstant> synth_;
+};
+
 class TrackState {
 public:
     TrackState() = default;
@@ -68,11 +99,11 @@ public:
     // Onyx's zoomMap: the instants with near < t < far. When none fall inside,
     // one synthesized instant at the window's midpoint carries the
     // ongoing/absent state of every span so the floor and lanes still draw.
-    std::vector<TrackInstant> window(double near_s, double far_s) const;
+    TrackWindow window(double near_s, double far_s) const;
 
     // Onyx's makeToggleBounds over one span field: consecutive spans covering
     // [near, far] with that field on or off, adjacent equal states merged.
-    std::vector<ToggleSpan> make_toggle_bounds(const std::vector<TrackInstant>& win,
+    std::vector<ToggleSpan> make_toggle_bounds(const TrackWindow& win,
                                                double near_s, double far_s,
                                                Toggle TrackInstant::*field) const;
 

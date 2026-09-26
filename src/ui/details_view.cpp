@@ -86,7 +86,7 @@ void render_record_status(AppState& app, float width) {
     ImGui::BeginChild("songanalysis", ImVec2(width, px(200)), ImGuiChildFlags_Borders);
     ImGui::SeparatorText("Stored result");
 
-    app::RecordStatusView status = app::build_record_status(app.viewed);
+    const app::RecordStatusView& status = app.details_ui.paths_tab.status(app.viewed, app.record_generation.n);
     switch (status.state) {
         case store::RecordStatus::NotAnalyzed:
             ImGui::TextDisabled("Not analyzed yet.");
@@ -253,16 +253,15 @@ void warnable_text(const app::TextLine& line) {
     if (line.warn) ImGui::PopStyleColor();
 }
 
-void render_multsqueeze_section(const Path* path) {
+void render_multsqueeze_section(const std::vector<app::MultSqueezeView>& squeezes) {
     if (begin_section("Multiplier squeezes")) {
-        std::vector<app::MultSqueezeView> squeezes = app::build_multsqueezes(*path);
         if (squeezes.empty()) {
             ImGui::TextDisabled("None.");
         } else {
             for (size_t i = 0; i < squeezes.size(); ++i) {
                 const app::MultSqueezeView& msq = squeezes[i];
-                // Keyed on the index, not the element address: the view-model
-                // vector is rebuilt per frame, so its addresses are unstable.
+                // Keyed on the index, not the element address: the cached vector
+                // is rebuilt whenever the path changes, so its addresses move.
                 ImGui::PushID(static_cast<int>(i));
                 if (ImGui::TreeNode(msq.label.c_str())) {
                     ImGui::PushFont(g_mono_font, 0.0f);
@@ -277,15 +276,8 @@ void render_multsqueeze_section(const Path* path) {
     }
 }
 
-void render_activations_section(const Path* path, const HydraRecord& record,
-                                const SongTiming* timing,
-                                const Settings& settings) {
+void render_activations_section(const app::ActivationsView& view) {
     if (begin_section("Activations")) {
-        app::ActivationsView view = app::build_activations(
-            *path, record, timing,
-            static_cast<double>(settings.hit_window_ms),
-            settings.backend_limit(), settings.rules);
-
         if (view.acts.empty()) ImGui::TextDisabled("None.");
         for (const app::ActivationDetailsView& av : view.acts) {
             if (av.difficult) ImGui::PushStyleColor(ImGuiCol_Text, kWarningColor);
@@ -366,18 +358,16 @@ void render_activations_section(const Path* path, const HydraRecord& record,
     }
 }
 
-void render_score_breakdown_section(const Path* path) {
+void render_score_breakdown_section(const std::vector<std::string>& breakdown) {
     if (begin_section("Score breakdown")) {
-        for (const std::string& line : app::build_score_breakdown(*path))
-            ImGui::TextUnformatted(line.c_str());
+        for (const std::string& line : breakdown) ImGui::TextUnformatted(line.c_str());
         end_section();
     }
 }
 
 // `copied_at` (when "Copied!" last flashed) is owned by AppState's
 // DetailsViewState and passed by reference, so it dies with the app state.
-void render_path_details(const Path* path, const HydraRecord& record,
-                         const SongTiming* timing, const Settings& settings,
+void render_path_details(const Path* path, const app::PathsTabCache::Details& details,
                          double& copied_at) {
     ImGui::PushFont(nullptr, 0.0f);  // default font for the button, like Python's MainFont
     if (ImGui::Button("Copy path string", ImVec2(px(180), px(30)))) {
@@ -392,9 +382,9 @@ void render_path_details(const Path* path, const HydraRecord& record,
     ImGui::PopFont();
     ImGui::Spacing();
 
-    render_multsqueeze_section(path);
-    render_activations_section(path, record, timing, settings);
-    render_score_breakdown_section(path);
+    render_multsqueeze_section(details.squeezes);
+    render_activations_section(details.activations);
+    render_score_breakdown_section(details.breakdown);
 }
 
 // Path list on the left + details on the right, grouped into score tiers.
@@ -403,7 +393,8 @@ void render_path_details(const Path* path, const HydraRecord& record,
 // One selectable path row: pathstring on the left, difficulty (ms) right-
 // aligned, warning-colored when the path is difficult. Mirrors the two-column
 // dpg.table row hydra_app.py builds per path.
-void render_path_row(const Path* p, const Path*& selected_path) {
+void render_path_row(const Path* p, const app::PathsTabCache::Row& row,
+                     const Path*& selected_path) {
     ImGui::PushID(p);
     // Zero CellPadding: a per-row table's default (4,2) padding made rows
     // visibly looser/taller than the plain-text list this replaces (and than
@@ -424,15 +415,14 @@ void render_path_row(const Path* p, const Path*& selected_path) {
         // Long paths clip at the column edge; row_selectable offers the full
         // string on hover (only over the path column -- the ms column speaks
         // for itself).
-        if (row_selectable(p->pathstring().c_str(), p == selected_path))
+        if (row_selectable(row.label.c_str(), p == selected_path))
             selected_path = p;
 
-        app::PathRowView row = app::build_path_row(*p);
-        if (!row.ms.empty()) {
+        if (!row.cell.ms.empty()) {
             ImGui::TableSetColumnIndex(1);
-            if (row.warn) ImGui::PushStyleColor(ImGuiCol_Text, kWarningColor);
-            ImGui::TextUnformatted(row.ms.c_str());
-            if (row.warn) ImGui::PopStyleColor();
+            if (row.cell.warn) ImGui::PushStyleColor(ImGuiCol_Text, kWarningColor);
+            ImGui::TextUnformatted(row.cell.ms.c_str());
+            if (row.cell.warn) ImGui::PopStyleColor();
         }
         ImGui::EndTable();
     }
@@ -447,8 +437,9 @@ void render_path_row(const Path* p, const Path*& selected_path) {
 // dpg.add_tree_node(label=f"{current_score:,}") grouping. The grouping (and
 // the all-0 section's visibility rule) comes from app::build_path_list.
 void render_path_panel(AppState& app, const Path*& selected_path) {
+    app::PathsTabCache& cache = app.details_ui.paths_tab;
     ImGui::BeginChild("pathlist", ImVec2(px(600), 0), ImGuiChildFlags_Borders);
-    app::PathListView list = app::build_path_list(*app.viewed.record);
+    const app::PathListView& list = cache.list(*app.viewed.record, app.record_generation.n);
 
     int tier = 0;
     for (const app::PathGroupView& group : list.groups) {
@@ -467,7 +458,7 @@ void render_path_panel(AppState& app, const Path*& selected_path) {
         ImGui::PopID();
 
         if (tree_open) {
-            for (const Path* p : group.paths) render_path_row(p, selected_path);
+            for (const Path* p : group.paths) render_path_row(p, cache.row(p), selected_path);
             ImGui::TreePop();
         }
     }
@@ -481,7 +472,7 @@ void render_path_panel(AppState& app, const Path*& selected_path) {
                                       ImGuiTreeNodeFlags_DefaultOpen);
         ImGui::PopFont();
         if (open) {
-            for (const Path* p : list.allzero) render_path_row(p, selected_path);
+            for (const Path* p : list.allzero) render_path_row(p, cache.row(p), selected_path);
             ImGui::TreePop();
         }
         ImGui::PopID();
@@ -490,10 +481,14 @@ void render_path_panel(AppState& app, const Path*& selected_path) {
 
     ImGui::SameLine();
     ImGui::BeginChild("pathdetails", ImVec2(0, 0), ImGuiChildFlags_Borders);
-    if (selected_path)
-        render_path_details(selected_path, *app.viewed.record,
-                           app.viewed.timing ? &*app.viewed.timing : nullptr,
-                           app.settings, app.details_ui.copied_at);
+    if (selected_path) {
+        const app::PathsTabCache::Details& details = cache.details(
+            *selected_path, *app.viewed.record, app.record_generation.n,
+            app.viewed.timing ? &*app.viewed.timing : nullptr,
+            static_cast<double>(app.settings.hit_window_ms), app.settings.backend_limit(),
+            app.settings.rules);
+        render_path_details(selected_path, details, app.details_ui.copied_at);
+    }
     ImGui::EndChild();
 }
 
@@ -604,8 +599,18 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
     const int sp_cap = app.viewed.status == store::RecordStatus::Ready
                            ? app.viewed.record->sp_cap.value_or(kCloneHeroSpCap)
                            : kCloneHeroSpCap;
+    // The overlay key is the path's verbose string: rebuilt when the
+    // selection or the record changes, not every frame.
+    DetailsViewState& ui = app.details_ui;
+    if (selected_path != ui.overlay_key_path ||
+        app.record_generation.n != ui.overlay_key_generation) {
+        ui.overlay_key = hydra::app::path_overlay_key(selected_path);
+        ui.overlay_key_path = selected_path;
+        ui.overlay_key_generation = app.record_generation.n;
+    }
     pc->open(*app.selected, app.settings.view_prodrums, app.settings.effective_bass2x(),
-             app.settings.difficulty(), selected_path, sp_cap, app.settings.rules);
+             app.settings.difficulty(), selected_path, ui.overlay_key, sp_cap,
+             app.settings.rules);
     pc->poll();
 
     if (pc->has_error()) {
@@ -1102,10 +1107,10 @@ void render_details_modal(AppState& app) {
 
     // Ctrl+C copies the selected path -- unless a text input has focus, which
     // keeps its own copy behavior.
-    std::string copytext = selected_path ? selected_path->pathstring_verbose() : "";
-    if (!copytext.empty() && !ImGui::GetIO().WantTextInput &&
+    // Built only when the chord is pressed, not every frame just in case.
+    if (selected_path && !ImGui::GetIO().WantTextInput &&
         ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_C))
-        ImGui::SetClipboardText(copytext.c_str());
+        ImGui::SetClipboardText(selected_path->pathstring_verbose().c_str());
 
     // Song info / record-status panels scale with the popup's width
     // (itself sized off the viewport, see below) instead of a fixed pixel

@@ -6,6 +6,7 @@
 #include "doctest.h"
 
 #include <map>
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -509,4 +510,91 @@ TEST_CASE("build_multsqueezes: one labeled entry per squeeze") {
         CHECK(v[i].label.find(" pts):   ") != std::string::npos);
         CHECK(v[i].howto == best.multsqueezes[i].howto());
     }
+}
+
+TEST_CASE("PathsTabCache: views are built once and rebuilt only when their inputs move") {
+    const AnalysisResult& ar = analyzed();
+    const HydraRecord& rec = ar.record;
+    const SongTiming& timing = ar.song.timing();
+    PathsTabCache cache;
+
+    // The list: once per record generation, however many frames ask.
+    for (int frame = 0; frame < 5; ++frame) cache.list(rec, 7);
+    CHECK(cache.list_builds() == 1);
+    const PathListView& list = cache.list(rec, 8);  // the record was re-read
+    CHECK(cache.list_builds() == 2);
+
+    // Every listed row carries the path's own label and ms cell.
+    for (const PathGroupView& g : list.groups)
+        for (const Path* p : g.paths) {
+            CHECK(cache.row(p).label == p->pathstring());
+            CHECK(cache.row(p).cell.ms == build_path_row(*p).ms);
+        }
+
+    // The details: once per (path, record, hit window, backend limit).
+    const Path& best = rec.best_path();
+    for (int frame = 0; frame < 5; ++frame)
+        cache.details(best, rec, 8, &timing, 70.0, std::nullopt, core::default_rules());
+    CHECK(cache.details_builds() == 1);
+    cache.details(best, rec, 8, &timing, 71.0, std::nullopt, core::default_rules());
+    CHECK(cache.details_builds() == 2);
+    cache.details(best, rec, 8, &timing, 71.0, 30.0, core::default_rules());
+    CHECK(cache.details_builds() == 3);
+    cache.details(best, rec, 9, &timing, 71.0, 30.0, core::default_rules());
+    CHECK(cache.details_builds() == 4);
+    std::vector<const Path*> all = rec.all_paths();
+    if (all.size() > 1) {
+        cache.details(*all[1], rec, 9, &timing, 71.0, 30.0, core::default_rules());
+        CHECK(cache.details_builds() == 5);
+    }
+
+    // What the cache hands back is what a fresh build gives.
+    const PathsTabCache::Details& d =
+        cache.details(best, rec, 9, &timing, 71.0, 30.0, core::default_rules());
+    CHECK(d.breakdown == build_score_breakdown(best));
+    CHECK(d.squeezes.size() == build_multsqueezes(best).size());
+    CHECK(d.activations.acts.size() ==
+          build_activations(best, rec, &timing, 71.0, 30.0).acts.size());
+
+    // The stored-result lines: once per record generation.
+    store::RecordLookup lookup;
+    lookup.status = store::RecordStatus::Ready;
+    lookup.record = rec;
+    for (int frame = 0; frame < 5; ++frame) cache.status(lookup, 9);
+    CHECK(cache.status_builds() == 1);
+    CHECK(cache.status(lookup, 9).lines == build_record_status(lookup).lines);
+}
+
+TEST_CASE("PathsTabCache: 600 cached frames cost far less than 600 rebuilds") {
+    using clock = std::chrono::steady_clock;
+    const AnalysisResult& ar = analyzed();
+    const HydraRecord& rec = ar.record;
+    const SongTiming& timing = ar.song.timing();
+    const Path& best = rec.best_path();
+
+    // What a Paths frame did before: every view, every row label.
+    const clock::time_point t0 = clock::now();
+    for (int frame = 0; frame < 600; ++frame) {
+        PathListView list = build_path_list(rec);
+        for (const Path* p : rec.all_paths()) {
+            std::string label = p->pathstring();
+            PathRowView row = build_path_row(*p);
+        }
+        std::vector<MultSqueezeView> sq = build_multsqueezes(best);
+        ActivationsView acts = build_activations(best, rec, &timing, 70.0);
+        std::vector<std::string> bd = build_score_breakdown(best);
+    }
+    const clock::time_point t1 = clock::now();
+    PathsTabCache cache;
+    for (int frame = 0; frame < 600; ++frame) {
+        cache.list(rec, 1);
+        cache.details(best, rec, 1, &timing, 70.0, std::nullopt, core::default_rules());
+    }
+    const clock::time_point t2 = clock::now();
+
+    const double rebuilt_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    const double cached_ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
+    MESSAGE("600 rebuilt frames: " << rebuilt_ms << " ms; 600 cached frames: " << cached_ms
+                                   << " ms");
+    CHECK(cached_ms * 10.0 < rebuilt_ms);
 }

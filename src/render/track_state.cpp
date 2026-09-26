@@ -170,20 +170,21 @@ TrackInstant TrackState::synthesize(double t) const {
     return inst;
 }
 
-std::vector<TrackInstant> TrackState::window(double near_s, double far_s) const {
-    std::vector<TrackInstant> out;
+TrackWindow TrackState::window(double near_s, double far_s) const {
     auto lo = std::upper_bound(instants_.begin(), instants_.end(), near_s,
                                [](double t, const TrackInstant& i) { return t < i.t; });
-    for (auto it = lo; it != instants_.end() && it->t < far_s; ++it) out.push_back(*it);
+    auto hi = lo;
+    while (hi != instants_.end() && hi->t < far_s) ++hi;
     // Onyx writes the synthesized key as `t1 + (t2 + t1) / 2`, which lands
     // past t2; it never reads that key, only the state (its neighbours'
     // before/after). We place it at the midpoint so the state is evaluated
     // strictly inside the window, which is the same state Onyx carries.
-    if (out.empty()) out.push_back(synthesize((near_s + far_s) / 2.0));
-    return out;
+    if (lo == hi) return TrackWindow(synthesize((near_s + far_s) / 2.0));
+    const TrackInstant* base = instants_.data();
+    return TrackWindow(base + (lo - instants_.begin()), base + (hi - instants_.begin()));
 }
 
-std::vector<ToggleSpan> TrackState::make_toggle_bounds(const std::vector<TrackInstant>& win,
+std::vector<ToggleSpan> TrackState::make_toggle_bounds(const TrackWindow& win,
                                                        double near_s, double far_s,
                                                        Toggle TrackInstant::*field) const {
     std::vector<ToggleSpan> spans;

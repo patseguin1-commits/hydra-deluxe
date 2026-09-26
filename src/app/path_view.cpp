@@ -82,7 +82,8 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
     ActivationsView view;
     const double W = hit_window_ms;
 
-    for (const Activation& act : path.all_activations()) {
+    const ActivationWalk acts = path.walk_activations();
+    for (const Activation& act : acts) {
         ActivationDetailsView av;
 
         // The row layout, including the literal tabs:
@@ -397,6 +398,56 @@ PathListView build_path_list(const HydraRecord& record) {
                                   ")";
     }
     return view;
+}
+
+const RecordStatusView& PathsTabCache::status(const store::RecordLookup& lookup,
+                                               int record_generation) {
+    if (record_generation != status_generation_) {
+        status_ = build_record_status(lookup);
+        status_generation_ = record_generation;
+        ++status_builds_;
+    }
+    return status_;
+}
+
+const PathListView& PathsTabCache::list(const HydraRecord& record, int record_generation) {
+    if (record_generation != list_generation_) {
+        list_ = build_path_list(record);
+        rows_.clear();
+        auto add_row = [this](const Path* p) {
+            rows_[p] = Row{p->pathstring(), build_path_row(*p)};
+        };
+        for (const PathGroupView& g : list_.groups)
+            for (const Path* p : g.paths) add_row(p);
+        for (const Path* p : list_.allzero) add_row(p);
+        list_generation_ = record_generation;
+        ++list_builds_;
+    }
+    return list_;
+}
+
+const PathsTabCache::Row& PathsTabCache::row(const Path* path) const {
+    return rows_.at(path);
+}
+
+const PathsTabCache::Details& PathsTabCache::details(
+    const Path& path, const HydraRecord& record, int record_generation,
+    const SongTiming* timing, double hit_window_ms, std::optional<double> backend_limit_ms,
+    const core::Rules& rules) {
+    if (record_generation != details_generation_ || &path != details_path_ ||
+        hit_window_ms != details_hit_window_ms_ ||
+        backend_limit_ms != details_backend_limit_ms_) {
+        details_.squeezes = build_multsqueezes(path);
+        details_.activations =
+            build_activations(path, record, timing, hit_window_ms, backend_limit_ms, rules);
+        details_.breakdown = build_score_breakdown(path);
+        details_generation_ = record_generation;
+        details_path_ = &path;
+        details_hit_window_ms_ = hit_window_ms;
+        details_backend_limit_ms_ = backend_limit_ms;
+        ++details_builds_;
+    }
+    return details_;
 }
 
 }  // namespace hydra::app
