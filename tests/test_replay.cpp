@@ -43,11 +43,11 @@ TEST_CASE("replay reproduces the engine's score for every corpus path") {
     const app::AnalysisSettings cfg = app::Settings().to_analysis_settings();
 
     for (const std::string& path : corpus::chart_paths()) {
-        Song song = load_songpath(path, cfg.prodrums, cfg.bass2x, cfg.difficulty);
+        const Song& song = corpus::song(path, cfg.prodrums, cfg.bass2x, cfg.difficulty);
         if (song.is_empty()) continue;
         ++charts;
 
-        HydraRecord rec = analyze_chart(song, cfg);
+        const HydraRecord& rec = corpus::analyzed(path, cfg);
 
         for (const Path* p : rec.all_paths()) {
             ++paths;
@@ -112,11 +112,11 @@ TEST_CASE("targeted search reproduces every corpus path") {
     const app::AnalysisSettings cfg = app::Settings().to_analysis_settings();
 
     for (const std::string& path : corpus::chart_paths()) {
-        Song song = load_songpath(path, cfg.prodrums, cfg.bass2x, cfg.difficulty);
+        const Song& song = corpus::song(path, cfg.prodrums, cfg.bass2x, cfg.difficulty);
         if (song.is_empty()) continue;
         ++charts;
 
-        HydraRecord rec = analyze_chart(song, cfg);
+        const HydraRecord& rec = corpus::analyzed(path, cfg);
 
         for (const Path* p : rec.all_paths()) {
             ++paths;
@@ -182,9 +182,9 @@ TEST_CASE("targeted search rejects a tick that is not a fill") {
     const app::AnalysisSettings cfg = app::Settings().to_analysis_settings();
 
     for (const std::string& path : corpus::chart_paths()) {
-        Song song = load_songpath(path, cfg.prodrums, cfg.bass2x, cfg.difficulty);
+        const Song& song = corpus::song(path, cfg.prodrums, cfg.bass2x, cfg.difficulty);
         if (song.is_empty()) continue;
-        HydraRecord rec = analyze_chart(song, cfg);
+        const HydraRecord& rec = corpus::analyzed(path, cfg);
         if (rec.paths.empty()) continue;
         const std::vector<Activation> acts = rec.best_path().all_activations();
         if (acts.empty()) continue;
@@ -310,9 +310,9 @@ TEST_CASE("windows read from a path JSON match the ones read from the record") {
 
     int checked = 0;
     for (const std::string& chart : corpus::chart_paths()) {
-        Song song = load_songpath(chart, cfg.prodrums, cfg.bass2x, cfg.difficulty);
+        const Song& song = corpus::song(chart, cfg.prodrums, cfg.bass2x, cfg.difficulty);
         if (song.is_empty()) continue;
-        HydraRecord rec = analyze_chart(song, cfg);
+        const HydraRecord& rec = corpus::analyzed(chart, cfg);
         if (rec.paths.empty()) continue;
 
         const std::vector<const Path*> all = rec.all_paths();
@@ -346,9 +346,9 @@ TEST_CASE("paths_json writes every field the dump readers use") {
 
     bool checked = false;
     for (const std::string& chart : corpus::chart_paths()) {
-        Song song = load_songpath(chart, cfg.prodrums, cfg.bass2x, cfg.difficulty);
+        const Song& song = corpus::song(chart, cfg.prodrums, cfg.bass2x, cfg.difficulty);
         if (song.is_empty()) continue;
-        HydraRecord rec = analyze_chart(song, cfg);
+        const HydraRecord& rec = corpus::analyzed(chart, cfg);
         const std::vector<const Path*> all = rec.all_paths();
         if (all.empty() || all[0]->all_activations().empty()) continue;
 

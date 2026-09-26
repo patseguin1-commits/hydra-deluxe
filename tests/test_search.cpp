@@ -28,7 +28,7 @@ TEST_CASE("search invariants hold across the corpus and config knobs") {
     int charts = 0, mismatches = 0;
 
     for (const std::string& path : corpus::chart_paths()) {
-        Song song = load_songpath(path, true, true);
+        const Song& song = corpus::song(path, true, true);
         if (song.is_empty()) continue;
         ++charts;
 
@@ -42,11 +42,11 @@ TEST_CASE("search invariants hold across the corpus and config knobs") {
             cfg.depth_mode = DepthMode::Scores;
             cfg.depth_value = 0;
             cfg.ms_filter = std::nullopt;
-            HydraRecord shallow = analyze_chart(song, cfg);
+            const HydraRecord& shallow = corpus::analyzed(path, cfg);
             cfg.depth_value = 200;
-            HydraRecord deep = analyze_chart(song, cfg);
+            const HydraRecord& deep = corpus::analyzed(path, cfg);
             cfg.ms_filter = 20.0;
-            HydraRecord filtered = analyze_chart(song, cfg);
+            const HydraRecord& filtered = corpus::analyzed(path, cfg);
 
             if (shallow.paths.empty()) {
                 d = "no paths";
@@ -107,7 +107,7 @@ TEST_CASE("search invariants hold across the corpus and config knobs") {
 TEST_CASE("the graph finds the chart's multiplier squeezes once, in chart order") {
     int charts = 0, with_squeezes = 0, analyzed = 0;
     for (const std::string& path : corpus::chart_paths()) {
-        Song song = load_songpath(path, true, true);
+        const Song& song = corpus::song(path, true, true);
         if (song.is_empty()) continue;
         ++charts;
 
@@ -131,7 +131,7 @@ TEST_CASE("the graph finds the chart's multiplier squeezes once, in chart order"
             SearchSettings cfg;
             cfg.sp_cap = 4;
             cfg.depth_value = 0;
-            CHECK_MESSAGE(analyze_chart(song, cfg).multsqueezes == want, path);
+            CHECK_MESSAGE(corpus::analyzed(path, cfg).multsqueezes == want, path);
             ++analyzed;
         }
     }
@@ -143,7 +143,7 @@ TEST_CASE("legacy fill deadline analyzes a chart end to end") {
     int analyzed = 0;
 
     for (const std::string& path : corpus::chart_paths()) {
-        Song song = load_songpath(path, true, true);
+        const Song& song = corpus::song(path, true, true);
         if (song.is_empty()) continue;
 
         std::optional<HydraRecord> legacy;
@@ -175,17 +175,17 @@ TEST_CASE("stored transfer scales match the display-layer recomputation") {
     int charts = 0, acts = 0, nonflat = 0, mismatches = 0;
 
     for (const std::string& path : corpus::chart_paths()) {
-        Song song = load_songpath(path, true, true);
+        const Song& song = corpus::song(path, true, true);
         if (song.is_empty()) continue;
 
-        std::optional<HydraRecord> record;
+        const HydraRecord* record = nullptr;
         try {
             SearchSettings cfg;
             cfg.sp_cap = 4;
             cfg.depth_mode = DepthMode::Scores;
             cfg.depth_value = 4;
             cfg.ms_filter = std::nullopt;
-            record = analyze_chart(song, cfg);
+            record = &corpus::analyzed(path, cfg);
         } catch (const ChartFileError&) {
             continue;
         }
@@ -265,17 +265,17 @@ TEST_CASE("no activation keeps backends past its squeezed-out note") {
     int charts = 0, sqout_acts = 0, mismatches = 0;
 
     for (const std::string& path : corpus::chart_paths()) {
-        Song song = load_songpath(path, true, true);
+        const Song& song = corpus::song(path, true, true);
         if (song.is_empty()) continue;
 
-        std::optional<HydraRecord> record;
+        const HydraRecord* record = nullptr;
         try {
             SearchSettings cfg;
             cfg.sp_cap = 4;
             cfg.depth_mode = DepthMode::Scores;
             cfg.depth_value = 4;
             cfg.ms_filter = std::nullopt;
-            record = analyze_chart(song, cfg);
+            record = &corpus::analyzed(path, cfg);
         } catch (const ChartFileError&) {
             continue;
         }
@@ -328,7 +328,7 @@ TEST_CASE("search_allzero returns only all-0 paths inside the 0 ms limit") {
     int checks = 0, mismatches = 0, found = 0;
 
     for (const std::string& path : corpus::chart_paths()) {
-        Song song = load_songpath(path, true, true);
+        const Song& song = corpus::song(path, true, true);
         if (song.is_empty()) continue;
 
         ScoreGraph graph(song, 4);
@@ -846,7 +846,7 @@ TEST_CASE("collected phrases: two phrases under a full meter are both recorded, 
 TEST_CASE("collected phrases: the corpus agrees with the squeezes and the SP end") {
     int sqouts_seen = 0;
     for (const std::string& path : corpus::chart_paths()) {
-        Song song = load_songpath(path, true, true);
+        const Song& song = corpus::song(path, true, true);
         if (song.is_empty()) continue;
         ScoreGraph graph(song, 4);
         for (const Path& p : run_search(graph, EngineOptions{DepthMode::Scores, 1})) {

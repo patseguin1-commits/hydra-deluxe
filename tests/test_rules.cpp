@@ -178,7 +178,7 @@ TEST_CASE("rules: the leeway changes what the engine counts") {
 
     bool any_moved = false;
     for (const std::string& path : corpus::chart_paths()) {
-        Song song = load_songpath(path, true, true);
+        const Song& song = corpus::song(path, true, true);
         if (song.is_empty()) continue;
         auto best = [&](const core::Rules& r) {
             ScoreGraph graph(song, 4, FillDeadlineRule::Ch11, r);
@@ -202,7 +202,7 @@ TEST_CASE("rules: max_tied_paths caps the tied paths the engine keeps") {
     one.max_tied_paths = 1;
     int charts = 0;
     for (const std::string& path : corpus::chart_paths()) {
-        Song song = load_songpath(path, true, true);
+        const Song& song = corpus::song(path, true, true);
         if (song.is_empty()) continue;
         ScoreGraph graph(song, 4, FillDeadlineRule::Ch11, one);
         std::vector<Path> paths = run_search(graph, EngineOptions{});
