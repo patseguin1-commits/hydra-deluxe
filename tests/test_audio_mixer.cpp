@@ -4,7 +4,9 @@
 
 #include "doctest.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <string>
 #include <utility>
 #include <vector>
@@ -61,6 +63,36 @@ double estimate_freq_hz(const DecodedAudio& a, int channel) {
     }
     double dur = static_cast<double>(hi - lo) / a.sample_rate;
     return (crossings / 2.0) / dur;
+}
+
+// Today's mixer, rebuilt from the public API: convert every stem on its own
+// (a one-stem mix is 0.0f plus the converted stem), keep every converted copy,
+// then sum them in stem order into a zeroed buffer as long as the longest.
+// The one-at-a-time mixer must match it bit for bit.
+DecodedAudio reference_mix(const std::vector<DecodedAudio>& stems, int rate,
+                           int channels) {
+    std::vector<std::vector<float>> converted;
+    std::size_t longest = 0;
+    for (const DecodedAudio& s : stems) {
+        converted.push_back(mix_stems({s}, rate, channels).samples);
+        longest = std::max(longest, converted.back().size());
+    }
+    DecodedAudio out;
+    out.sample_rate = rate;
+    out.channels = channels;
+    out.samples.assign(longest, 0.0f);
+    for (const std::vector<float>& c : converted)
+        for (std::size_t i = 0; i < c.size(); ++i) out.samples[i] += c[i];
+    return out;
+}
+
+// Same format and the same float bits, sample for sample.
+bool same_bits(const DecodedAudio& a, const DecodedAudio& b) {
+    if (a.sample_rate != b.sample_rate || a.channels != b.channels) return false;
+    if (a.samples.size() != b.samples.size()) return false;
+    return a.samples.empty() ||
+           std::memcmp(a.samples.data(), b.samples.data(),
+                       a.samples.size() * sizeof(float)) == 0;
 }
 
 }  // namespace
@@ -132,4 +164,43 @@ TEST_CASE("decode_and_mix decodes each stem, skips undecodable ones") {
     DecodedAudio none = decode_and_mix({junk}, 48000, 2);
     CHECK(none.samples.empty());
     CHECK(none.channels == 2);
+}
+
+TEST_CASE("mix_stems matches the convert-all-then-sum mix bit for bit") {
+    // Mixed rates, channel counts and lengths, so resampling, upmixing and
+    // the grow-with-silence path all run. The middle stem is the longest.
+    DecodedAudio a = synth_tone(300.0, 24000, 0.5);   // mono 24 kHz, short
+    DecodedAudio b = synth_tone(440.0, 44100, 1.2);   // mono 44.1 kHz, longest
+    DecodedAudio c = make_pcm(std::vector<float>(48000 * 2, 0.25f), 2, 48000);
+    const std::vector<DecodedAudio> stems = {a, b, c};
+
+    CHECK(same_bits(mix_stems(stems, 48000, 2), reference_mix(stems, 48000, 2)));
+    CHECK(same_bits(mix_stems(stems, 44100, 1), reference_mix(stems, 44100, 1)));
+}
+
+TEST_CASE("decode_and_mix matches decoding every stem then mixing") {
+    hydra::app::PreviewAudioStem ogg;
+    ogg.label = "song";
+    ogg.path = std::string(HYDRA_TESTDATA_DIR) + "/audio/sine220.ogg";
+    hydra::app::PreviewAudioStem mp3;
+    mp3.label = "drums";
+    mp3.bytes = read_fixture("sine220.mp3");
+    hydra::app::PreviewAudioStem opus;
+    opus.label = "guitar";
+    opus.bytes = read_fixture("sine220.opus");
+    hydra::app::PreviewAudioStem junk;
+    junk.label = "broken";
+    junk.bytes = {'n', 'o', 't', ' ', 'a', 'u', 'd', 'i', 'o'};
+    const std::vector<hydra::app::PreviewAudioStem> stems = {ogg, junk, mp3, opus};
+
+    std::vector<DecodedAudio> decoded;
+    for (const hydra::app::PreviewAudioStem& s : stems) {
+        try {
+            decoded.push_back(decode_stem(s));
+        } catch (const std::exception&) {
+        }
+    }
+    REQUIRE(decoded.size() == 3);
+
+    CHECK(same_bits(decode_and_mix(stems, 48000, 2), mix_stems(decoded, 48000, 2)));
 }

@@ -18,6 +18,7 @@
 #include <cstring>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "app/preview_source.h"
@@ -90,10 +91,25 @@ struct SngFile {
 // Build a .sng exactly as load_songpath_sng reads it: 10 prefix bytes, a
 // 16-byte XOR mask, a metadata block, then a file table whose contents live at
 // absolute offsets, every file's bytes XOR-masked by mask[j%16]^(j&0xff).
-std::vector<uint8_t> make_sng(const std::vector<SngFile>& files) {
+std::vector<uint8_t> make_sng(
+    const std::vector<SngFile>& files,
+    const std::vector<std::pair<std::string, std::string>>& metadata = {}) {
     uint8_t mask[16];
     for (int i = 0; i < 16; ++i) mask[i] = static_cast<uint8_t>(i * 13 + 7);
+    // No pairs: the old 20 junk bytes, which read as no metadata at all, so
+    // every existing fixture stays byte-identical. With pairs: a real block,
+    // u64 count then (u32 length + bytes) key and value strings.
     std::vector<uint8_t> meta(20, 0xAB);
+    if (!metadata.empty()) {
+        meta.clear();
+        push_u64(meta, metadata.size());
+        for (const auto& [key, value] : metadata) {
+            push_u32(meta, static_cast<uint32_t>(key.size()));
+            meta.insert(meta.end(), key.begin(), key.end());
+            push_u32(meta, static_cast<uint32_t>(value.size()));
+            meta.insert(meta.end(), value.begin(), value.end());
+        }
+    }
 
     size_t table_bytes = 0;
     for (const SngFile& f : files) table_bytes += 1 + f.name.size() + 8 + 8;
@@ -162,6 +178,16 @@ std::vector<uint8_t> make_srb(const std::vector<uint8_t>& notes,
         out.insert(out.end(), s.begin(), s.end());
     }
     return out;
+}
+
+// multidiff's chart with an Offset line in its [Song] section.
+std::vector<uint8_t> chart_with_offset(const std::string& seconds) {
+    std::string s = multidiff::chart_text();
+    const std::string anchor = "  Resolution = 192\n";
+    const size_t at = s.find(anchor);
+    REQUIRE(at != std::string::npos);
+    s.insert(at + anchor.size(), "  Offset = " + seconds + "\n");
+    return bytes_of(s);
 }
 
 }  // namespace
@@ -358,4 +384,43 @@ TEST_CASE("resolve_preview_source reads delay from a song.ini in any case") {
     const PreviewSource src =
         resolve_preview_source(dir + "\\notes.chart", true, true, Difficulty::Expert);
     CHECK(src.audio_offset_ms == doctest::Approx(500.0));
+}
+
+TEST_CASE("sng_delay_ms reads the delay key in any case") {
+    const std::vector<uint8_t> notes = multidiff::chart_bytes();
+    const std::vector<uint8_t> upper = make_sng({{"notes.chart", notes}}, {{"DELAY", "-120"}});
+    REQUIRE(sng_delay_ms(upper).has_value());
+    CHECK(*sng_delay_ms(upper) == doctest::Approx(-120.0));
+
+    CHECK_FALSE(sng_delay_ms(make_sng({{"notes.chart", notes}}, {{"delay", "soon"}})).has_value());
+    CHECK_FALSE(sng_delay_ms(make_sng({{"notes.chart", notes}}, {{"name", "X"}})).has_value());
+    CHECK_FALSE(sng_delay_ms(make_sng({{"notes.chart", notes}})).has_value());
+}
+
+TEST_CASE("resolve_preview_source: a .sng's metadata delay replaces the chart Offset") {
+    const std::vector<uint8_t> notes = chart_with_offset("0.25");
+
+    const std::string with_delay = fixture_dir() + "\\delay500.sng";
+    write_bytes(with_delay, make_sng({{"notes.chart", notes}}, {{"name", "X"}, {"delay", "500"}}));
+    CHECK(resolve_preview_source(with_delay, true, true).audio_offset_ms ==
+          doctest::Approx(500.0));
+
+    // A delay of 0 counts as unset (the Lunaris rule), whatever the key's case.
+    const std::string zero_delay = fixture_dir() + "\\delay0.sng";
+    write_bytes(zero_delay, make_sng({{"notes.chart", notes}}, {{"Delay", "0"}}));
+    CHECK(resolve_preview_source(zero_delay, true, true).audio_offset_ms ==
+          doctest::Approx(250.0));
+
+    // No delay key at all: the chart's Offset applies.
+    const std::string no_delay = fixture_dir() + "\\nodelay.sng";
+    write_bytes(no_delay, make_sng({{"notes.chart", notes}}, {{"name", "X"}}));
+    CHECK(resolve_preview_source(no_delay, true, true).audio_offset_ms ==
+          doctest::Approx(250.0));
+}
+
+TEST_CASE("resolve_preview_source: a .srb uses its chart's Offset") {
+    const std::string path = fixture_dir() + "\\offset.srb";
+    write_bytes(path, make_srb(chart_with_offset("0.25"), {}, "notes.chart"));
+    CHECK(resolve_preview_source(path, true, true).audio_offset_ms ==
+          doctest::Approx(250.0));
 }

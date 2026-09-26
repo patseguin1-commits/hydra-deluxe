@@ -147,6 +147,34 @@ std::string find_song_ini(const std::string& folder) {
     return found;
 }
 
+// A delay string in milliseconds, or nullopt when it is not wholly a number.
+// Shared by song.ini's delay and a .sng's metadata delay.
+std::optional<double> parse_delay_ms(const std::string& text) {
+    try {
+        size_t used = 0;
+        const double ms = std::stod(text, &used);
+        if (used != text.size()) return std::nullopt;
+        return ms;
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+}
+
+// The audio entries of an already-read .sng, XOR-demasked.
+std::vector<PreviewAudioStem> sng_audio_from(const std::vector<uint8_t>& buf) {
+    std::vector<PreviewAudioStem> stems;
+    for (const SngFileEntry& e : sng_read_file_table(buf)) {
+        if (!is_audio_filename(e.name)) continue;
+        std::optional<std::vector<uint8_t>> bytes = sng_decode_file(buf, e);
+        if (!bytes) continue;  // corrupt entry
+        PreviewAudioStem s;
+        s.label = stem_of(e.name);
+        s.bytes = std::move(*bytes);
+        stems.push_back(std::move(s));
+    }
+    return stems;
+}
+
 // +1: a positive delay or Offset makes the notes come later than the music,
 // so the audio runs ahead of chart time. Confirmed at the game (Task 17
 // step 1, Thornhill "Limbo": delay = 1016 put the notes 1018 ms later).
@@ -200,18 +228,14 @@ std::vector<PreviewAudioStem> find_loose_audio(const std::string& folder) {
 }
 
 std::vector<PreviewAudioStem> extract_sng_audio(const std::string& path) {
-    std::vector<PreviewAudioStem> stems;
-    std::vector<uint8_t> buf = read_file_bytes(path);
-    for (const SngFileEntry& e : sng_read_file_table(buf)) {
-        if (!is_audio_filename(e.name)) continue;
-        std::optional<std::vector<uint8_t>> bytes = sng_decode_file(buf, e);
-        if (!bytes) continue;  // corrupt entry
-        PreviewAudioStem s;
-        s.label = stem_of(e.name);
-        s.bytes = std::move(*bytes);
-        stems.push_back(std::move(s));
-    }
-    return stems;
+    return sng_audio_from(read_file_bytes(path));
+}
+
+std::optional<double> sng_delay_ms(const std::vector<uint8_t>& sng_bytes) {
+    std::optional<double> delay;
+    for (const auto& [key, value] : sng_read_metadata(sng_bytes))
+        if (to_lower(key) == "delay") delay = parse_delay_ms(value);
+    return delay;
 }
 
 std::vector<PreviewAudioStem> extract_srb_audio(const std::string& path) {
@@ -302,14 +326,7 @@ std::optional<double> read_ini_delay_ms(const std::string& ini_path) {
     }
     const auto it = ini.find("delay");
     if (it == ini.end()) return std::nullopt;
-    try {
-        size_t used = 0;
-        const double ms = std::stod(it->second, &used);
-        if (used != it->second.size()) return std::nullopt;
-        return ms;
-    } catch (const std::exception&) {
-        return std::nullopt;
-    }
+    return parse_delay_ms(it->second);
 }
 
 // song.ini's delay replaces the chart's Offset: the delay = 500 copy of
@@ -327,13 +344,19 @@ PreviewSource resolve_preview_source(const std::string& notespath, bool pro,
                                      bool bass2x, Difficulty difficulty,
                                      const core::Rules& rules) {
     PreviewSource src{load_songpath(notespath, pro, bass2x, difficulty, rules), {}};
-    if (ends_with_ci(notespath, ".sng"))
-        src.stems = extract_sng_audio(notespath);
-    else if (ends_with_ci(notespath, ".srb")) {
+    if (ends_with_ci(notespath, ".sng")) {
+        // One read serves both the audio and the metadata delay.
+        const std::vector<uint8_t> buf = read_file_bytes(notespath);
+        src.stems = sng_audio_from(buf);
+        src.audio_offset_ms = preview_audio_offset_ms(sng_delay_ms(buf), src.song.chart_offset_s);
+    } else if (ends_with_ci(notespath, ".srb")) {
         src.stems = extract_srb_audio(notespath);
         // If decryption fails (wrong key, corrupt file, etc.) fall back to
         // loose audio files beside the .srb, same as a folder chart.
         if (src.stems.empty()) src.stems = find_loose_audio(dir_name(notespath));
+        // A .srb's metadata has no delay field (parse/srb.h), so only the
+        // chart's Offset counts.
+        src.audio_offset_ms = preview_audio_offset_ms(std::nullopt, src.song.chart_offset_s);
     } else {
         const std::string folder = dir_name(notespath);
         src.stems = find_loose_audio(folder);

@@ -35,7 +35,6 @@ std::atomic<bool> g_headless{false};
 }
 
 void set_headless(bool headless) { g_headless.store(headless); }
-bool headless() { return g_headless.load(); }
 
 struct PreviewAudioDevice::Impl {
     Playback playback;
@@ -46,7 +45,7 @@ struct PreviewAudioDevice::Impl {
 
 PreviewAudioDevice::PreviewAudioDevice(int channels, int sample_rate, Source source)
     : impl_(new Impl{Playback{std::move(source)}, {}, false, false}) {
-    if (g_headless.load()) return;  // inited stays false: start/stop only flip state
+    if (g_headless.load()) return;  // inited stays false: start only flips state
     ma_device_config config = ma_device_config_init(ma_device_type_playback);
     config.playback.format = ma_format_f32;
     config.playback.channels = static_cast<ma_uint32>(channels);
@@ -76,14 +75,5 @@ void PreviewAudioDevice::start() {
     }
     if (ma_device_start(&impl_->device) == MA_SUCCESS) impl_->started = true;
 }
-
-void PreviewAudioDevice::stop() {
-    if (impl_ && impl_->started) {
-        if (impl_->inited) ma_device_stop(&impl_->device);
-        impl_->started = false;
-    }
-}
-
-bool PreviewAudioDevice::running() const { return impl_ && impl_->started; }
 
 }  // namespace hydra::audio

@@ -3,7 +3,9 @@
 // A chart often ships several stems (song, drums, guitar, ...) and no combined
 // file, so the Preview must sum them into one signal to play. Stems decode at
 // their own sample rates and channel counts (see audio/decode.h), so the mixer
-// converts each to a common output format, then adds them sample for sample.
+// converts each to a common output format and adds it into the mix, one stem
+// at a time: only one decoded stem and its converted copy are alive beside the
+// mix, never all of them.
 // The mixed length is the longest stem's; shorter stems contribute silence past
 // their end. Summing can push peaks past [-1, 1]; clamping is the player's job,
 // not the mixer's, so the raw sum is preserved here for testability.

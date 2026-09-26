@@ -157,6 +157,9 @@ DecodedAudio decode_ogg_opus(const uint8_t* data, std::size_t size) {
         long skip_remaining = 0;
         long packet_index = 0;
         const int kMaxFrame = 5760;  // 120 ms at 48 kHz, the largest Opus packet
+        // One decode buffer for the whole stream, sized once the OpusHead
+        // gives the channel count. Every packet decodes into it.
+        std::vector<float> pcm;
 
         ogg_page og;
         while (ogg_sync_pageout(&oy, &og) == 1) {
@@ -185,14 +188,13 @@ DecodedAudio decode_ogg_opus(const uint8_t* data, std::size_t size) {
                         throw std::runtime_error(
                             "decode_audio: opus_decoder_create failed");
                     out.channels = channels;
+                    pcm.resize(static_cast<std::size_t>(kMaxFrame) * channels);
                 } else if (packet_index == 1) {
                     // OpusTags comment header — nothing to decode.
                 } else {
-                    std::vector<float> tmp(static_cast<std::size_t>(kMaxFrame) *
-                                           channels);
                     int n = opus_decode_float(dec, op.packet,
                                               static_cast<opus_int32>(op.bytes),
-                                              tmp.data(), kMaxFrame, 0);
+                                              pcm.data(), kMaxFrame, 0);
                     if (n < 0)
                         throw std::runtime_error("decode_audio: opus_decode failed");
                     int start = 0;
@@ -204,8 +206,8 @@ DecodedAudio decode_ogg_opus(const uint8_t* data, std::size_t size) {
                     }
                     out.samples.insert(
                         out.samples.end(),
-                        tmp.begin() + static_cast<std::size_t>(start) * channels,
-                        tmp.begin() + static_cast<std::size_t>(n) * channels);
+                        pcm.begin() + static_cast<std::size_t>(start) * channels,
+                        pcm.begin() + static_cast<std::size_t>(n) * channels);
                 }
                 ++packet_index;
             }
