@@ -106,12 +106,24 @@ struct AnalysisResult {
 };
 // on_progress, if set, is called from the calling thread with a monotonic 0..1
 // fraction as the search sweeps the chart — for a single-chart progress bar.
+// It may throw AnalysisCancelled to stop the search.
 AnalysisResult analyze_chart_file(const std::string& filepath,
                                   const AnalysisSettings& settings,
                                   const std::function<void(float)>& on_progress = {});
 
-// One unit of batch work: analyze a ScanItem's chart and store the result
-// under `chartmode`. Skips charts that already have a record unless `redo`.
+// Thrown out of a search's progress callback to stop a cancelled analysis.
+// It does not derive from std::exception, so no catch (const std::exception&)
+// on the way out (the all-0 pass in search/pather.cpp has one) swallows it.
+// The single-chart Analyze job and run_batch both stop searches with it.
+struct AnalysisCancelled {};
+
+// Analyzes one chart file. analyze_chart_file is the real one; run_batch
+// takes another only from a test.
+using ChartAnalyzer = std::function<AnalysisResult(
+    const std::string& path, const AnalysisSettings& settings,
+    const std::function<void(float)>& on_progress)>;
+
+// How far a batch run has got.
 struct BatchProgress {
     int completed = 0;
     int total = 0;
@@ -123,26 +135,39 @@ struct BatchProgress {
 // chart can reach hundreds of MB) stays bounded.
 int batch_worker_count();
 
-// Runs analyze_chart_file + store::prepare_row for every item across a
-// std::thread pool, writing results into `store` from the calling thread (a
-// RecordStore is safe to call from any one thread at a time, but SQLite
-// writes are serialized here to keep the store simple).
-//
-// on_progress, on_error and on_result, if set, are invoked from the calling
-// thread only (never from a worker) as each result comes back — safe to touch
-// UI state. on_result fires after the row is written to the store, with the
-// row it wrote (the batch CLI prints score/bestpath from it).
-// `lens` is the store key the caller's settings file results under: pass `Settings::lens()`.
-void run_batch(const std::vector<ScanItem>& items, const std::string& chartmode,
-               const store::Lens& lens,
-               const AnalysisSettings& settings, store::RecordStore& store, bool redo,
-               int worker_count,
-               const std::function<void(const BatchProgress&)>& on_progress = nullptr,
-               const std::function<void(const std::string& title, const std::string& error)>&
-                   on_error = nullptr,
-               const std::function<void(const ScanItem&, const store::PreparedRow&)>&
-                   on_result = nullptr,
-               const std::atomic<bool>* cancel = nullptr);
+// Everything one batch run is: the search settings, and the chart mode and
+// lens its results are filed under. Settings::batch_run() fills all three
+// from one Settings, so they cannot disagree. Building one by hand is for
+// tests.
+struct BatchRun {
+    std::string chartmode;
+    store::Lens lens;
+    AnalysisSettings settings;
+};
+
+// Progress, result and cancel hooks for run_batch. The three callbacks fire
+// on the calling thread only (never a worker), so they may touch UI state.
+struct BatchCallbacks {
+    std::function<void(const BatchProgress&)> on_progress;
+    std::function<void(const std::string& title, const std::string& error)> on_error;
+    // Fires after the row is written to the store, with the row it wrote (the
+    // batch CLI prints score and best path from it).
+    std::function<void(const ScanItem&, const store::PreparedRow&)> on_result;
+    // Setting *cancel stops the run. No new chart starts, and a running search
+    // stops at its next progress tick. A stopped chart is neither a result nor
+    // a failure, and nothing more is written once the cancel is seen.
+    const std::atomic<bool>* cancel = nullptr;
+    // What analyzes one chart. Empty means analyze_chart_file.
+    ChartAnalyzer analyze;
+};
+
+// Runs the analysis + store::prepare_row for every item on a
+// batch_worker_count()-sized pool (app/work_pool.h), writing results into
+// `store` from the calling thread only. Skips a chart that already has a
+// record under `run` unless `redo`.
+void run_batch(const std::vector<ScanItem>& items, const BatchRun& run,
+               store::RecordStore& store, bool redo, int worker_count,
+               const BatchCallbacks& callbacks = {});
 
 }  // namespace hydra::app
 

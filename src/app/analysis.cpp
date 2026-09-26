@@ -17,6 +17,7 @@
 #include <tuple>
 
 #include "app/dynamics_breakdown.h"
+#include "app/work_pool.h"
 #include "core/winstr.h"
 #include "parse/srb.h"
 #include "parse/chart_files.h"
@@ -427,103 +428,62 @@ std::pair<std::vector<ScanItem>, std::vector<std::string>> discover_charts(
             bool cached = false;
             std::string error;
         };
-        std::mutex q_mu;
-        std::condition_variable q_cv;
-        std::deque<ReadNote> notes_q;
-        std::atomic<size_t> next{0};
-        std::atomic<int> workers_live{0};
-
-        int nworkers = std::max(1, std::min(batch_worker_count(), total));
-        std::vector<std::thread> pool;
-        pool.reserve(static_cast<size_t>(nworkers));
-        workers_live.store(nworkers);
-        for (int w = 0; w < nworkers; ++w) {
-            pool.emplace_back([&]() {
-                // One CNG provider per worker, reused across every file it
-                // hashes. Created lazily so an all-cache-hits rescan never
-                // touches CNG at all.
-                std::optional<Md5Provider> md5;
-
-                for (;;) {
-                    size_t i = next.fetch_add(1);
-                    if (i >= pending.size()) break;
-                    if (cancel && cancel->load()) break;
-
-                    const PendingChart& pc = pending[i];
-                    ReadNote note;
-                    try {
-                        if (cache) {
-                            auto it = cache->find(pc.notes_path);
-                            if (it != cache->end() && it->second.sig == pc.sig) {
-                                results[i] = ScanItem{it->second.md5, it->second.title,
-                                                      it->second.artist, it->second.charter,
-                                                      pc.notes_path, pc.rootfolder, pc.sig};
-                                note.cached = true;
-                            }
-                        }
-                        if (!results[i]) {
-                            if (!md5) md5.emplace();
-                            ScanItem item;
-                            if (pc.kind != ChartKind::Folder) {
-                                HashedFile hf =
-                                    stream_md5(md5->handle(), pc.notes_path, kSngHeadCapture);
-                                item.md5 = std::move(hf.md5);
-                                std::tie(item.title, item.artist, item.charter) =
-                                    pc.kind == ChartKind::Sng
-                                        ? parse_sng_metadata(hf.head)
-                                        : parse_srb_metadata(hf.head);
-                            } else {
-                                HashedFile hf = stream_md5(md5->handle(), pc.notes_path, 0);
-                                item.md5 = std::move(hf.md5);
-                                std::tie(item.title, item.artist, item.charter) =
-                                    read_metadata_ini(pc.ini_path);
-                            }
-                            item.notespath = pc.notes_path;
-                            item.rootfolder = pc.rootfolder;
-                            item.sig = pc.sig;
-                            results[i] = std::move(item);
-                        }
-                    } catch (const std::exception& e) {
-                        note.error = e.what();
-                    }
-
-                    {
-                        std::lock_guard<std::mutex> lock(q_mu);
-                        notes_q.push_back(std::move(note));
-                    }
-                    q_cv.notify_one();
-                }
-
-                // Last worker out wakes the consumer even if the queue is
-                // empty (cancel can leave claimed items unpushed; the
-                // consumer must not wait for them forever).
-                if (workers_live.fetch_sub(1) == 1) q_cv.notify_one();
-            });
-        }
-
-        // Consume on the calling thread: progress/error callbacks fire here
-        // only, mirroring run_batch's worker/consumer split.
         int done = 0, cached_count = 0;
-        for (;;) {
-            ReadNote note;
-            {
-                std::unique_lock<std::mutex> lock(q_mu);
-                q_cv.wait(lock, [&] {
-                    return !notes_q.empty() || workers_live.load() == 0;
-                });
-                if (notes_q.empty()) break;  // workers gone, nothing left
-                note = std::move(notes_q.front());
-                notes_q.pop_front();
-            }
+        run_work_pool<ReadNote>(
+            pending.size(), batch_worker_count(), cancel,
+            [&](size_t i) {
+                // One CNG provider per worker thread, reused across every file
+                // it hashes and closed when the worker exits. Created lazily
+                // so an all-cache-hits rescan never touches CNG at all.
+                thread_local std::optional<Md5Provider> md5;
 
-            ++done;
-            if (note.cached) ++cached_count;
-            if (!note.error.empty()) errors.push_back(std::move(note.error));
-            if (callbacks.on_charts) callbacks.on_charts(done, total, cached_count);
-            if (done == total) break;
-        }
-
-        for (std::thread& t : pool) t.join();
+                const PendingChart& pc = pending[i];
+                ReadNote note;
+                try {
+                    if (cache) {
+                        auto it = cache->find(pc.notes_path);
+                        if (it != cache->end() && it->second.sig == pc.sig) {
+                            results[i] = ScanItem{it->second.md5, it->second.title,
+                                                  it->second.artist, it->second.charter,
+                                                  pc.notes_path, pc.rootfolder, pc.sig};
+                            note.cached = true;
+                        }
+                    }
+                    if (!results[i]) {
+                        if (!md5) md5.emplace();
+                        ScanItem item;
+                        if (pc.kind != ChartKind::Folder) {
+                            HashedFile hf =
+                                stream_md5(md5->handle(), pc.notes_path, kSngHeadCapture);
+                            item.md5 = std::move(hf.md5);
+                            std::tie(item.title, item.artist, item.charter) =
+                                pc.kind == ChartKind::Sng
+                                    ? parse_sng_metadata(hf.head)
+                                    : parse_srb_metadata(hf.head);
+                        } else {
+                            HashedFile hf = stream_md5(md5->handle(), pc.notes_path, 0);
+                            item.md5 = std::move(hf.md5);
+                            std::tie(item.title, item.artist, item.charter) =
+                                read_metadata_ini(pc.ini_path);
+                        }
+                        item.notespath = pc.notes_path;
+                        item.rootfolder = pc.rootfolder;
+                        item.sig = pc.sig;
+                        results[i] = std::move(item);
+                    }
+                } catch (const std::exception& e) {
+                    note.error = e.what();
+                }
+                return note;
+            },
+            // Progress and error callbacks fire here, on the calling thread
+            // only, as they do for run_batch.
+            [&](ReadNote&& note) {
+                ++done;
+                if (note.cached) ++cached_count;
+                if (!note.error.empty()) errors.push_back(std::move(note.error));
+                if (callbacks.on_charts) callbacks.on_charts(done, total, cached_count);
+            });
     }
 
     std::vector<ScanItem> scanitems;
@@ -592,18 +552,18 @@ struct WorkResult {
     std::optional<store::PreparedRow> row;
     std::optional<AnalysisResult> analysis;
     std::string error;
+    // The search stopped at a cancel: neither a result nor a failure.
+    bool cancelled = false;
 };
 
 }  // namespace
 
-void run_batch(const std::vector<ScanItem>& items, const std::string& chartmode,
-              const store::Lens& lens,
-              const AnalysisSettings& settings, store::RecordStore& store, bool redo,
-              int worker_count,
-              const std::function<void(const BatchProgress&)>& on_progress,
-              const std::function<void(const std::string&, const std::string&)>& on_error,
-              const std::function<void(const ScanItem&, const store::PreparedRow&)>& on_result,
-              const std::atomic<bool>* cancel) {
+void run_batch(const std::vector<ScanItem>& items, const BatchRun& run,
+               store::RecordStore& store, bool redo, int worker_count,
+               const BatchCallbacks& callbacks) {
+    const AnalysisSettings& settings = run.settings;
+    const std::atomic<bool>* cancel = callbacks.cancel;
+
     // "Already has a result" means a current-version record at the cap this
     // run would produce (Auto: any record above 4 bars) AND under this run's
     // ms limit and score range, so stale rows, other caps' rows and other
@@ -611,83 +571,72 @@ void run_batch(const std::vector<ScanItem>& items, const std::string& chartmode,
     const store::CapQuery cap = store::CapQuery::from_setting(settings.sp_cap);
     std::vector<const ScanItem*> todo;
     for (const ScanItem& item : items) {
-        if (!redo && store.has_record(store::RecordKey{item.md5, chartmode, cap, lens}))
+        if (!redo &&
+            store.has_record(store::RecordKey{item.md5, run.chartmode, cap, run.lens}))
             continue;
         todo.push_back(&item);
     }
 
     BatchProgress progress;
     progress.total = static_cast<int>(todo.size());
-    if (on_progress) on_progress(progress);
+    if (callbacks.on_progress) callbacks.on_progress(progress);
     if (todo.empty()) return;
 
-    std::mutex result_mu;
-    std::condition_variable result_cv;
-    std::deque<WorkResult> results;
-    std::atomic<size_t> next{0};
-
-    int nworkers = std::max(1, worker_count);
-    std::vector<std::thread> pool;
-    pool.reserve(static_cast<size_t>(nworkers));
-    for (int w = 0; w < nworkers; ++w) {
-        pool.emplace_back([&]() {
-            for (;;) {
-                size_t i = next.fetch_add(1);
-                if (i >= todo.size()) break;
-                if (cancel && cancel->load()) break;
-
-                const ScanItem* item = todo[i];
-                WorkResult wr;
-                wr.item = *item;
-                try {
-                    AnalysisResult ar = analyze_chart_file(item->notespath, settings);
-                    wr.row = store::prepare_row(
-                        store::RecordKey{item->md5, chartmode, cap, lens}, ar.record);
-                    wr.analysis = std::move(ar);
-                } catch (const std::exception& e) {
-                    wr.error = e.what();
-                }
-
-                {
-                    std::lock_guard<std::mutex> lock(result_mu);
-                    results.push_back(std::move(wr));
-                }
-                result_cv.notify_one();
-            }
-        });
-    }
+    // A running search checks for cancel in its progress callback. Throwing
+    // AnalysisCancelled there unwinds it at the next tick (the engine reports
+    // every half percent of the chart), the way the single-chart Analyze
+    // button stops. With no cancel flag there is nothing to check, so the
+    // search gets no callback at all, exactly as before.
+    std::function<void(float)> check_cancel;
+    if (cancel)
+        check_cancel = [cancel](float) {
+            if (cancel->load(std::memory_order_relaxed)) throw AnalysisCancelled{};
+        };
+    const ChartAnalyzer analyze =
+        callbacks.analyze ? callbacks.analyze : ChartAnalyzer(analyze_chart_file);
 
     int completed = 0;
-    while (completed < static_cast<int>(todo.size())) {
-        WorkResult wr;
-        {
-            std::unique_lock<std::mutex> lock(result_mu);
-            result_cv.wait(lock, [&] { return !results.empty(); });
-            wr = std::move(results.front());
-            results.pop_front();
-        }
+    run_work_pool<WorkResult>(
+        todo.size(), worker_count, cancel,
+        [&](size_t i) {
+            const ScanItem* item = todo[i];
+            WorkResult wr;
+            wr.item = *item;
+            try {
+                AnalysisResult ar = analyze(item->notespath, settings, check_cancel);
+                wr.row = store::prepare_row(
+                    store::RecordKey{item->md5, run.chartmode, cap, run.lens}, ar.record);
+                wr.analysis = std::move(ar);
+            } catch (const AnalysisCancelled&) {
+                wr.cancelled = true;
+            } catch (const std::exception& e) {
+                wr.error = e.what();
+            }
+            return wr;
+        },
+        [&](WorkResult&& wr) {
+            // Once cancel is seen nothing more is written or reported, as
+            // before. A search stopped part-way is not a failure, and a result
+            // that finished alongside the cancel is dropped.
+            if (wr.cancelled || (cancel && cancel->load())) return;
 
-        ++completed;
-        if (!wr.error.empty()) {
-            if (on_error) on_error(wr.item.title, wr.error);
-        } else {
-            store.add_song(wr.item.md5, wr.item.title, wr.item.artist, wr.item.charter,
-                           wr.analysis->song);
-            store.add_row(*wr.row);
-            store_dynamics_from_analysis(store, wr.item.md5, wr.analysis->song,
-                                         settings.bass2x, settings.difficulty,
-                                         settings.prodrums);
-            if (on_result) on_result(wr.item, *wr.row);
-        }
+            ++completed;
+            if (!wr.error.empty()) {
+                if (callbacks.on_error) callbacks.on_error(wr.item.title, wr.error);
+            } else {
+                store.add_song(wr.item.md5, wr.item.title, wr.item.artist, wr.item.charter,
+                               wr.analysis->song);
+                store.add_row(*wr.row);
+                store_dynamics_from_analysis(store, wr.item.md5, wr.analysis->song,
+                                             settings.bass2x, settings.difficulty,
+                                             settings.prodrums);
+                if (callbacks.on_result) callbacks.on_result(wr.item, *wr.row);
+            }
 
-        progress.completed = completed;
-        progress.current_title = wr.item.title;
-        if (on_progress) on_progress(progress);
-
-        if (cancel && cancel->load()) break;
-    }
-
-    for (std::thread& t : pool) t.join();
+            progress.completed = completed;
+            progress.current_title = wr.item.title;
+            if (callbacks.on_progress) callbacks.on_progress(progress);
+        });
 }
 
 }  // namespace hydra::app

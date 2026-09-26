@@ -230,6 +230,26 @@ TEST_CASE("record_key carries the chartmode, the SP cap and the lens") {
     CHECK(s.lens() == store::Lens::from(std::nullopt, 1, 5000));
 }
 
+TEST_CASE("batch_run bundles one Settings' chartmode, lens and search settings") {
+    Settings s;
+    s.view_difficulty = "Hard";
+    s.view_prodrums = false;
+    s.mslimit_enabled = false;
+    s.depth_mode = 1;
+    s.depth_value = 5000;
+    s.sp_cap = std::nullopt;
+
+    const hydra::app::BatchRun run = s.batch_run();
+    CHECK(run.chartmode == s.chartmode_key());
+    CHECK(run.lens == s.lens());
+    CHECK(run.settings.difficulty == hydra::Difficulty::Hard);
+    CHECK(run.settings.prodrums == false);
+    CHECK(!run.settings.ms_filter.has_value());
+    CHECK(run.settings.depth_mode == hydra::DepthMode::Points);
+    CHECK(run.settings.depth_value == 5000);
+    CHECK(!run.settings.sp_cap.has_value());
+}
+
 TEST_CASE("sp_cap round-trips as a number or auto; pre-1.6 keys are ignored") {
     const std::string path = temp_ini("spcap");
 
