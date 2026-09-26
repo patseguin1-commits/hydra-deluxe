@@ -201,7 +201,7 @@ std::vector<DrawCommand> build_highway_draws(const TrackState& state, const Prev
     const double near_t = z_to_time(cfg, now_s, T.z_past, speed);
     auto z_of = [&](double t) { return static_cast<float>(time_to_z(cfg, now_s, t, speed)); };
 
-    const std::vector<TrackInstant> win = state.window(near_t, far_t);
+    const TrackWindow win = state.window(near_t, far_t);
 
     // 1. Floor: one flat per stretch of (solo, active SP) state. Onyx tints
     //    the floor for solos only; the active SP window is Hydra's addition,

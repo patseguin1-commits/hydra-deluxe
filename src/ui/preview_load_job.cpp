@@ -102,4 +102,24 @@ std::string PreviewLoadJob::Progress::label() const {
     return "";
 }
 
+PreviewSceneJob::PreviewSceneJob(std::shared_ptr<const Song> song, std::optional<Path> path,
+                                 int sp_cap, core::Rules rules, std::string key)
+    : song_(std::move(song)),
+      path_(std::move(path)),
+      sp_cap_(sp_cap),
+      rules_(std::move(rules)),
+      key_(std::move(key)) {}
+
+void PreviewSceneJob::start() { spawn([this] { run(); }); }
+
+void PreviewSceneJob::run() {
+    run_guarded([this] {
+        throw_if_cancelled();  // a newer selection already replaced this one
+        scene_ = app::build_preview_scene(*song_, path_ ? &*path_ : nullptr, sp_cap_, rules_);
+        return true;
+    });
+}
+
+app::PreviewScene PreviewSceneJob::take_scene() { return std::move(*scene_); }
+
 }  // namespace hydra::ui

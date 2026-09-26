@@ -298,7 +298,8 @@ PreviewScene build_preview_scene(const Song& song, const Path* path, int sp_cap,
 
     // Overlay: the path's activations, ms resolved against the song's timing.
     if (path != nullptr) {
-        for (const Activation& a : path->all_activations()) {
+        const ActivationWalk acts = path->walk_activations();
+        for (const Activation& a : acts) {
             if (!a.timecode.has_value()) continue;
             PreviewActivation pa;
             pa.tick = a.timecode->ticks();

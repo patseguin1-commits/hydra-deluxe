@@ -21,6 +21,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "app/preview_view.h"
 #include "core/model.h"  // Path
@@ -40,6 +41,7 @@ class PreviewAudioDevice;
 namespace hydra::ui {
 
 class PreviewLoadJob;
+class PreviewSceneJob;
 
 class PreviewController {
 public:
@@ -51,13 +53,16 @@ public:
 
     // (Re)start the preview for `entry`. Called every frame the Preview tab is
     // shown. `path` (may be null) supplies the path overlay; it is copied, so
-    // the caller's Path need not outlive the call. Already open for the same
-    // chart and the same path and SP cap: a no-op. Same chart, different path
-    // or a changed `sp_cap`: the overlay is swapped in place off the retained
-    // song — no re-parse, no audio re-decode, playback position untouched.
+    // the caller's Path need not outlive the call. `path_key` is
+    // app::path_overlay_key(path), which the caller builds once per selection
+    // (it is too heavy to build per frame). Already open for the same chart,
+    // path key and SP cap: a no-op. Same chart, different path or cap: the new
+    // overlay is built on a background job off the retained song and swapped
+    // in by a later poll() — no re-parse, no audio re-decode, playback
+    // position untouched; the old overlay stays up until then.
     void open(const store::ChartLibraryEntry& entry, bool pro, bool bass2x,
-              Difficulty difficulty, const Path* path, int sp_cap,
-              const core::Rules& rules = core::default_rules());
+              Difficulty difficulty, const Path* path, const std::string& path_key,
+              int sp_cap, const core::Rules& rules = core::default_rules());
     // Stop audio, drop the scene/transport, and join the load thread. Keeps the
     // renderer for reuse. Safe to call when nothing is open.
     void close();
@@ -176,9 +181,16 @@ private:
     // scene the same way a path change does. The two keys differ only while a
     // load is in flight and the Paths tab (or the cap) changed the selection
     // under it; poll() closes the gap.
-    std::optional<Song> song_;
+    std::shared_ptr<const Song> song_;  // shared read-only with scene jobs
     std::optional<Path> path_;
+    std::string requested_path_key_;  // the path half of path_key_, as open() got it
     std::string path_key_;        // key of path_ + sp_cap_
+    // The overlay being built for a new selection, and replaced ones still
+    // finishing (dropped by poll() once done, so replacing one never joins
+    // its thread on the UI thread).
+    std::unique_ptr<PreviewSceneJob> scene_job_;
+    std::vector<std::unique_ptr<PreviewSceneJob>> retired_scene_jobs_;
+    void start_scene_job();
     std::string job_path_key_;    // key the in-flight job was started with
     std::string scene_path_key_;  // key scene_'s overlay was built from
 

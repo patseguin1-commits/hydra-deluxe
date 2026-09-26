@@ -7,6 +7,7 @@
 #define HYDRA_UI_PREVIEW_LOAD_JOB_H
 
 #include <atomic>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -80,6 +81,31 @@ private:
     std::atomic<Step> step_{Step::Reading};
     std::atomic<int> stems_done_{0};
     std::atomic<int> stems_total_{0};
+};
+
+// Rebuilds the Preview scene for a new path overlay off the UI thread. The
+// song is shared with the controller, read-only, so nothing is re-parsed and
+// the audio is left alone. `key` is the overlay key the scene is built for.
+class PreviewSceneJob : public ResultJobBase {
+public:
+    PreviewSceneJob(std::shared_ptr<const Song> song, std::optional<Path> path, int sp_cap,
+                    core::Rules rules, std::string key);
+    ~PreviewSceneJob() { shutdown(); }
+
+    void start();
+    // Valid once finished() && ok(); moves the scene out (call once).
+    app::PreviewScene take_scene();
+    const std::string& key() const { return key_; }
+
+private:
+    void run();
+
+    std::shared_ptr<const Song> song_;
+    std::optional<Path> path_;
+    int sp_cap_;
+    core::Rules rules_;
+    std::string key_;
+    std::optional<app::PreviewScene> scene_;
 };
 
 }  // namespace hydra::ui

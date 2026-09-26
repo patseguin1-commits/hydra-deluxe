@@ -20,6 +20,7 @@
 #include "app/analysis.h"
 #include "app/config.h"
 #include "app/dynamics_breakdown.h"
+#include "app/path_view.h"
 #include "core/rules.h"
 #include "store/record_store.h"
 #include "ui/dm_jobs.h"
@@ -79,6 +80,13 @@ struct DetailsViewState {
     double done_at = -1.0;
     bool stored = false;
     std::string store_error;
+    // The Paths tab's built views, kept between frames (app::PathsTabCache).
+    app::PathsTabCache paths_tab;
+    // The Preview overlay's key for selected_path (app::path_overlay_key),
+    // built when the selection or the record changes instead of every frame.
+    std::string overlay_key;
+    const Path* overlay_key_path = nullptr;
+    int overlay_key_generation = -1;
     // The chart file's presence (the "Song file not found" line), as of the
     // last look. Looked at when the window opens and then every
     // AppState::kFileCheckSeconds, not every frame: on a sleeping or network

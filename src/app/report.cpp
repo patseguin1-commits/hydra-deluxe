@@ -278,7 +278,8 @@ std::vector<ReportRow> collect_rows(store::RecordStore& store, int64_t max_paths
             row.ms = s.hardest_ms;
             row.tier = label;
             row.tok = token;
-            for (const Activation& a : path->all_activations())
+            const ActivationWalk acts = path->walk_activations();
+            for (const Activation& a : acts)
                 if (a.e_offset.has_value() && a.skips.has_value()) {
                     std::optional<double> ediff = a.e_difficulty();
                     if (ediff.has_value() && (!row.efill || *ediff > *row.efill))

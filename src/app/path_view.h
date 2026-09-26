@@ -13,6 +13,7 @@
 
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "core/model.h"
@@ -125,6 +126,61 @@ struct PathListView {
 };
 // Pointers into `record`; valid until the record is modified or moved.
 PathListView build_path_list(const HydraRecord& record);
+
+// ---- the Paths tab's views, kept between frames -----------------------------
+
+// The Paths tab's views, built once and kept until what they show changes.
+// The tab used to rebuild all of them every frame (60 times a second): the
+// list, every row's pathstring, every activation's rating. Each view here is
+// rebuilt only when its inputs move: the record (by its generation number),
+// the selected path, or the two display settings the ratings read. The rules
+// are left out of the key because they only change when Hydra restarts.
+// Pointers inside point into the record, like build_path_list's.
+class PathsTabCache {
+public:
+    struct Row {
+        std::string label;  // the path's pathstring
+        PathRowView cell;   // the right-aligned ms cell
+    };
+    struct Details {
+        std::vector<MultSqueezeView> squeezes;
+        ActivationsView activations;
+        std::vector<std::string> breakdown;
+    };
+
+    // The stored-result panel's lines for `lookup`.
+    const RecordStatusView& status(const store::RecordLookup& lookup, int record_generation);
+    // The path list for `record`, with every listed path's row.
+    const PathListView& list(const HydraRecord& record, int record_generation);
+    // The row of a path in the last list() (the all-0 section included).
+    const Row& row(const Path* path) const;
+    // The selected path's squeezes, activations and score breakdown.
+    const Details& details(const Path& path, const HydraRecord& record, int record_generation,
+                           const SongTiming* timing, double hit_window_ms,
+                           std::optional<double> backend_limit_ms, const core::Rules& rules);
+
+    // How many times each view was built; for tests.
+    int status_builds() const { return status_builds_; }
+    int list_builds() const { return list_builds_; }
+    int details_builds() const { return details_builds_; }
+
+private:
+    int status_generation_ = -1;
+    RecordStatusView status_;
+    int status_builds_ = 0;
+
+    int list_generation_ = -1;
+    PathListView list_;
+    std::unordered_map<const Path*, Row> rows_;
+    int list_builds_ = 0;
+
+    int details_generation_ = -1;
+    const Path* details_path_ = nullptr;
+    double details_hit_window_ms_ = 0.0;
+    std::optional<double> details_backend_limit_ms_;
+    Details details_;
+    int details_builds_ = 0;
+};
 
 }  // namespace hydra::app
 

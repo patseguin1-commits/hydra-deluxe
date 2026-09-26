@@ -301,8 +301,10 @@ void test_preview_path_overlay(ImGuiTestContext* ctx) {
     ctx->ItemClick("##DetailsTabs/Preview");
     ctx->Yield(2);
     IM_CHECK(!h.app->preview->loading());  // swapped in place, not reloaded
+    IM_CHECK(wait_until(ctx, [&] {
+        return h.app->preview->overlay_path_key().rfind(other_key, 0) == 0;
+    }, 10));
     IM_CHECK_FLOAT_NEAR_EQ(h.app->preview->position_ms(), held, 1.0);
-    IM_CHECK_EQ(h.app->preview->overlay_path_key().rfind(other_key, 0), (size_t)0);
     IM_CHECK(h.app->preview->overlay_path_key() != first_overlay);
 
     // The same chart still previews the first path when it is selected again.
@@ -312,7 +314,9 @@ void test_preview_path_overlay(ImGuiTestContext* ctx) {
     ctx->ItemClick("##DetailsTabs/Preview");
     ctx->Yield(2);
     IM_CHECK(!h.app->preview->loading());
-    IM_CHECK_STR_EQ(h.app->preview->overlay_path_key().c_str(), first_overlay.c_str());
+    IM_CHECK(wait_until(ctx, [&] {
+        return h.app->preview->overlay_path_key() == first_overlay;
+    }, 10));
 }
 
 // The Preview's finer time controls and running score, driven through the
