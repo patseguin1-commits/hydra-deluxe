@@ -22,6 +22,7 @@
 #include "app/config.h"
 #include "core/model.h"
 #include "core/replay.h"
+#include "replay_json.h"
 #include "core/scoring.h"
 #include "core/timing.h"
 #include "corpus_util.h"

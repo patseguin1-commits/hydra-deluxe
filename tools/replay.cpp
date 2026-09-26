@@ -48,6 +48,7 @@
 #include "app/rules_file.h"
 #include "core/replay.h"
 #include "core/squeeze_rating.h"
+#include "replay_json.h"
 #include "corpus_util.h"
 #include "parse/song.h"
 #include "search/pather.h"
