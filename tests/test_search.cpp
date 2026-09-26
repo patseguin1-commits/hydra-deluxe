@@ -302,7 +302,7 @@ TEST_CASE("search_allzero returns only all-0 paths inside the 0 ms limit") {
         HydraRecord holder;
         holder.allzero_paths = allzero;
         const int64_t optimum =
-            run_search(graph, DepthMode::Scores, 0, std::nullopt, false)
+            run_search(graph, EngineOptions{})
                 .front()
                 .totalscore();
 
@@ -396,7 +396,7 @@ TEST_CASE("SP past the last note: backends measured from the tracked SP end") {
 
     ScoreGraph graph(song, 4);
     std::vector<Path> paths =
-        run_search(graph, DepthMode::Scores, 0, std::nullopt);
+        run_search(graph, EngineOptions{});
 
     const Activation& act = last_act(paths);
     REQUIRE(act.sp_meter.has_value());
@@ -449,7 +449,7 @@ TEST_CASE("SP past the last note: a mid-activation phrase extends the end") {
 
     ScoreGraph graph(song, 4);
     std::vector<Path> paths =
-        run_search(graph, DepthMode::Scores, 0, std::nullopt);
+        run_search(graph, EngineOptions{});
 
     const Activation& act = last_act(paths);
     REQUIRE(act.sp_meter.has_value());
@@ -487,7 +487,7 @@ TEST_CASE("SP past the last note: synthesized rows survive a store round-trip") 
 
     ScoreGraph graph(song, 4);
     std::vector<Path> paths =
-        run_search(graph, DepthMode::Scores, 0, std::nullopt);
+        run_search(graph, EngineOptions{});
     const Activation& act = last_act(paths);
     REQUIRE(!act.backends.empty());
 
@@ -516,6 +516,52 @@ TEST_CASE("SP past the last note: synthesized rows survive a store round-trip") 
     // engine stamped, not just an equivalent one.
     REQUIRE(act.deact_tick.has_value());
     CHECK(ract.deact_tick == act.deact_tick);
+}
+
+// run_search takes its knobs in one EngineOptions value, so no two flags can
+// be swapped at a call site. Each knob must still do its own job.
+TEST_CASE("run_search: EngineOptions carries each knob to the engine") {
+    Song song = build_tail_song({{0, true, false},
+                                 {768, true, false},
+                                 {1536},
+                                 {2304, false, true},
+                                 {3072},
+                                 {3840},
+                                 {4608},
+                                 {5136},
+                                 {5280}});
+    ScoreGraph graph(song, 4);
+
+    // The defaults are a plain best-path search: score depth 0, no limit.
+    const std::vector<Path> best = run_search(graph, EngineOptions{});
+    REQUIRE_FALSE(best.empty());
+    REQUIRE_FALSE(best.front().activations.empty());
+
+    // no_skips plus a hard 0 ms limit is exactly the all-0 search.
+    EngineOptions allzero;
+    allzero.ms_filter = 0.0;
+    allzero.no_skips = true;
+    allzero.hard_ms_filter = true;
+    const std::vector<Path> z = run_search(graph, allzero);
+    const std::vector<Path> want_z = search_allzero(graph);
+    REQUIRE_FALSE(want_z.empty());
+    REQUIRE(z.size() == want_z.size());
+    for (size_t i = 0; i < z.size(); ++i) {
+        CHECK(z[i].pathstring() == want_z[i].pathstring());
+        CHECK(z[i].totalscore() == want_z[i].totalscore());
+    }
+
+    // Pinning the best path's activation ticks hands that path back.
+    EngineOptions pinned;
+    pinned.depth_mode = DepthMode::Points;
+    pinned.depth_value = 1'000'000'000;
+    std::vector<int64_t> ticks;
+    for (const Activation& a : best.front().activations) ticks.push_back(a.timecode->ticks());
+    pinned.target_act_ticks = ticks;
+    const std::vector<Path> again = run_search(graph, pinned);
+    REQUIRE_FALSE(again.empty());
+    CHECK(again.front().pathstring() == best.front().pathstring());
+    CHECK(again.front().totalscore() == best.front().totalscore());
 }
 
 // ---- SP cap overfill: a phrase collected mid-SP can clamp the end ------
@@ -548,7 +594,7 @@ TEST_CASE("SP cap overfill: a mid-SP phrase that clamps records the "
 
     ScoreGraph graph(song, 2);
     std::vector<Path> paths =
-        run_search(graph, DepthMode::Scores, 0, std::nullopt);
+        run_search(graph, EngineOptions{});
 
     const Activation& act = last_act(paths);
     REQUIRE(act.sp_meter.has_value());
@@ -582,7 +628,7 @@ TEST_CASE("SP cap overfill: a mid-SP phrase that only ties the cap does "
 
     ScoreGraph graph(song, 2);
     std::vector<Path> paths =
-        run_search(graph, DepthMode::Scores, 0, std::nullopt);
+        run_search(graph, EngineOptions{});
 
     const Activation& act = last_act(paths);
     REQUIRE(act.sp_meter.has_value());
@@ -620,7 +666,7 @@ TEST_CASE("SP cap overfill: a later unclamped extension keeps the earlier "
 
     ScoreGraph graph(song, 2);
     std::vector<Path> paths =
-        run_search(graph, DepthMode::Scores, 0, std::nullopt);
+        run_search(graph, EngineOptions{});
 
     const Activation& act = last_act(paths);
     REQUIRE(act.sp_meter.has_value());
@@ -657,7 +703,7 @@ TEST_CASE("SP cap overfill: a second clamp in the same window replaces "
 
     ScoreGraph graph(song, 2);
     std::vector<Path> paths =
-        run_search(graph, DepthMode::Scores, 0, std::nullopt);
+        run_search(graph, EngineOptions{});
 
     const Activation& act = last_act(paths);
     REQUIRE(act.timecode.has_value());
@@ -678,7 +724,7 @@ TEST_CASE("collected phrases: none when no phrase lands during the activation") 
     ScoreGraph graph(song, 4);
     // The paths are held in a named vector: last_act returns a reference into
     // it, so it has to outlive the checks below.
-    const std::vector<Path> paths = run_search(graph, DepthMode::Scores, 0, std::nullopt);
+    const std::vector<Path> paths = run_search(graph, EngineOptions{});
     const Activation& act = last_act(paths);
     CHECK(act.collected_phrase_ticks.empty());
     CHECK_FALSE(act.sqout_tick.has_value());
@@ -691,7 +737,7 @@ TEST_CASE("collected phrases: one phrase mid-activation is recorded") {
                                  {2304, false, true}, {3072}, {3840, true, false},
                                  {4608}, {5376}, {6144}, {6720}, {6816}});
     ScoreGraph graph(song, 4);
-    const std::vector<Path> paths = run_search(graph, DepthMode::Scores, 0, std::nullopt);
+    const std::vector<Path> paths = run_search(graph, EngineOptions{});
     const Activation& act = last_act(paths);
     CHECK(act.collected_phrase_ticks == std::vector<int64_t>{3840});
 }
@@ -705,7 +751,7 @@ TEST_CASE("collected phrases: two phrases under a full meter are both recorded, 
                                  {3840, true, false}, {4608}, {5376}, {6000},
                                  {6768}, {7500}});
     ScoreGraph graph(song, 2);
-    std::vector<Path> paths = run_search(graph, DepthMode::Scores, 0, std::nullopt);
+    std::vector<Path> paths = run_search(graph, EngineOptions{});
     REQUIRE(!paths.empty());
     const Activation& act = paths.front().activations.front();
     CHECK(act.collected_phrase_ticks == std::vector<int64_t>{3072, 3840});
@@ -719,7 +765,7 @@ TEST_CASE("collected phrases: the corpus agrees with the squeezes and the SP end
         Song song = load_songpath(path, true, true);
         if (song.is_empty()) continue;
         ScoreGraph graph(song, 4);
-        for (const Path& p : run_search(graph, DepthMode::Scores, 1, std::nullopt)) {
+        for (const Path& p : run_search(graph, EngineOptions{DepthMode::Scores, 1})) {
             for (const Activation& act : p.all_activations()) {
                 REQUIRE(act.timecode.has_value());
                 bool took_sqout = false;

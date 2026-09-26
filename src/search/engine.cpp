@@ -268,23 +268,23 @@ private:
 
 class Engine {
 public:
-    Engine(const Enum& en, bool has_sp_cap, int32_t sp_cap, DepthMode depth_mode,
-           int32_t depth_value, bool has_ms_filter, double ms_filter,
-           bool no_skips, bool hard_ms_filter, double backend_leeway_ms,
-           int32_t max_tied_paths,
-           const std::vector<int64_t>* target_act_ticks = nullptr)
+    // `options` must outlive the engine: target_act_ticks_ points into it.
+    Engine(const Enum& en, bool has_sp_cap, int32_t sp_cap,
+           const EngineOptions& options, double backend_leeway_ms,
+           int32_t max_tied_paths)
         : en_(en),
           backend_leeway_ms_(backend_leeway_ms),
           max_tied_paths_(max_tied_paths),
           has_sp_cap_(has_sp_cap),
           sp_cap_(sp_cap),
-          depth_mode_(depth_mode),
-          depth_value_(depth_value),
-          has_ms_filter_(has_ms_filter),
-          ms_filter_(ms_filter),
-          no_skips_(no_skips),
-          hard_ms_filter_(hard_ms_filter),
-          target_act_ticks_(target_act_ticks) {}
+          depth_mode_(options.depth_mode),
+          depth_value_(options.depth_value),
+          has_ms_filter_(options.ms_filter.has_value()),
+          ms_filter_(options.ms_filter.value_or(0.0)),
+          no_skips_(options.no_skips),
+          hard_ms_filter_(options.hard_ms_filter),
+          target_act_ticks_(options.target_act_ticks ? &*options.target_act_ticks
+                                                     : nullptr) {}
 
     bool run();
 
@@ -1345,21 +1345,15 @@ std::vector<MPath> rebuild(const Enum& en, const std::vector<OutPath>& out_paths
 
 }  // namespace
 
-std::vector<MPath> run_search(const ScoreGraph& graph, DepthMode depth_mode,
-                              int depth_value, std::optional<double> ms_filter,
-                              bool no_skips, bool hard_ms_filter,
-                              const std::function<void(float)>& on_progress,
-                              const std::vector<int64_t>* target_act_ticks) {
+std::vector<MPath> run_search(const ScoreGraph& graph, const EngineOptions& options,
+                              const std::function<void(float)>& on_progress) {
     Enum en = enumerate(graph);
 
     const bool has_cap = graph.sp_meter_cap().has_value();
     const int32_t cap = static_cast<int32_t>(graph.sp_meter_cap().value_or(0));
 
-    Engine engine(en, has_cap, cap, depth_mode, depth_value,
-                  ms_filter.has_value(), ms_filter.value_or(0.0),
-                  no_skips, hard_ms_filter, graph.rules().backend_leeway_ms,
-                  static_cast<int32_t>(graph.rules().max_tied_paths),
-                  target_act_ticks);
+    Engine engine(en, has_cap, cap, options, graph.rules().backend_leeway_ms,
+                  static_cast<int32_t>(graph.rules().max_tied_paths));
     if (on_progress) engine.set_progress_cb(on_progress);
 
     if (!engine.run())

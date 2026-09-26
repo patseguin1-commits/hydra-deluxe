@@ -22,9 +22,11 @@ HydraRecord read(const ScoreGraph& graph, DepthMode depth_mode, int depth_value,
                  const std::function<void(float)>& on_progress) {
     HydraRecord record;
     record.ms_limit = ms_filter;
-    record.paths = run_search(graph, depth_mode, depth_value, ms_filter,
-                              /*no_skips=*/false, /*hard_ms_filter=*/false,
-                              on_progress);
+    EngineOptions options;
+    options.depth_mode = depth_mode;
+    options.depth_value = depth_value;
+    options.ms_filter = ms_filter;
+    record.paths = run_search(graph, options, on_progress);
     return record;
 }
 
@@ -76,10 +78,11 @@ std::vector<Path> search_allzero(const ScoreGraph& graph,
     // group) meant the section routinely showed a path needing hundreds of ms.
     std::vector<Path> paths;
     try {
-        paths = run_search(graph, DepthMode::Scores, /*depth_value=*/0,
-                           /*ms_filter=*/0.0,
-                           /*no_skips=*/true, /*hard_ms_filter=*/true,
-                           on_progress);
+        EngineOptions options;  // score depth 0: only the top score, plus its ties
+        options.ms_filter = 0.0;
+        options.no_skips = true;
+        options.hard_ms_filter = true;
+        paths = run_search(graph, options, on_progress);
     } catch (const std::runtime_error&) {
         // The hard filter can empty the frontier: this chart offers no all-0
         // path inside 0 ms. run() reports that the same way it reports a broken
@@ -118,9 +121,11 @@ std::vector<Path> search_target(const Song& song, const SearchSettings& settings
     // a billion cannot overflow.
     std::vector<Path> paths;
     try {
-        paths = run_search(graph, DepthMode::Points, /*depth_value=*/1'000'000'000,
-                           /*ms_filter=*/std::nullopt, /*no_skips=*/false,
-                           /*hard_ms_filter=*/false, {}, &ticks);
+        EngineOptions options;
+        options.depth_mode = DepthMode::Points;
+        options.depth_value = 1'000'000'000;
+        options.target_act_ticks = ticks;
+        paths = run_search(graph, options);
     } catch (const std::runtime_error&) {
         // The frontier emptied: this activation set is not realizable on this
         // chart. That is the normal failure for a targeted search, not a bug.
