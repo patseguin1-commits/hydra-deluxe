@@ -24,10 +24,6 @@
 
 namespace hydra::render {
 
-struct RenderParams {
-    double speed = 1.0;  // fixed at 1 today; Onyx's playback-speed knob
-};
-
 class PreviewRenderer {
 public:
     // Loads every asset from `asset_dir` (assets/preview) and builds the
@@ -48,7 +44,7 @@ public:
                    const TrackStateOptions& opts = TrackStateOptions{});
 
     // Draw the frame at `now_ms` into the offscreen target.
-    void render(double now_ms, const RenderParams& params);
+    void render(double now_ms);
 
     // The final colour texture's shader-resource view (null before resize).
     ID3D11ShaderResourceView* texture_srv() const;

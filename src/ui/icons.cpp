@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "app/config.h"
+#include "core/winstr.h"
 #include "image/decode.h"
 
 namespace hydra::ui {
@@ -17,20 +18,15 @@ namespace {
 // atlas. Returns 0 (and leaves the icon as a plain marker fallback) on any
 // read/decode/GPU failure rather than asserting -- resource/ is best-effort,
 // matching main.cpp's app-icon load right above where load_icons is called.
-ImTextureID load_png_texture(ID3D11Device* device, const char* path) {
-    FILE* f = std::fopen(path, "rb");
-    if (!f) return 0;
-    std::fseek(f, 0, SEEK_END);
-    long size = std::ftell(f);
-    std::fseek(f, 0, SEEK_SET);
-    if (size <= 0) {
-        std::fclose(f);
+ImTextureID load_png_texture(ID3D11Device* device, const std::string& path) {
+    // Through core/winstr, so an install folder like C:\Users\Zoë\... works.
+    std::vector<uint8_t> buf;
+    try {
+        buf = hydra::read_file_bytes(path);
+    } catch (const std::exception&) {
         return 0;
     }
-    std::vector<uint8_t> buf((size_t)size);
-    size_t read = std::fread(buf.data(), 1, buf.size(), f);
-    std::fclose(f);
-    if (read != buf.size()) return 0;
+    if (buf.empty()) return 0;
 
     hydra::image::DecodedImage img = hydra::image::decode_image(buf);
     if (img.empty()) return 0;
@@ -72,10 +68,10 @@ void load_icons(ID3D11Device* device) {
     // exe-relative, not cwd-relative: the app may be launched with any
     // working directory (e.g. a shortcut's Start-in), like db_path/ini_path.
     const std::string dir = hydra::app::exe_dir() + "\\resource\\";
-    g_icon_record = load_png_texture(device, (dir + "icon_record_32.png").c_str());
-    g_icon_star = load_png_texture(device, (dir + "icon_star_32.png").c_str());
-    g_icon_pencil = load_png_texture(device, (dir + "icon_pencil_32.png").c_str());
-    g_icon_hash = load_png_texture(device, (dir + "icon_hash_32.png").c_str());
+    g_icon_record = load_png_texture(device, dir + "icon_record_32.png");
+    g_icon_star = load_png_texture(device, dir + "icon_star_32.png");
+    g_icon_pencil = load_png_texture(device, dir + "icon_pencil_32.png");
+    g_icon_hash = load_png_texture(device, dir + "icon_hash_32.png");
 }
 
 }  // namespace hydra::ui

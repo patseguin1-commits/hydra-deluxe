@@ -4,6 +4,7 @@
 
 #include "app/config.h"
 #include "app/rules_file.h"
+#include "core/winstr.h"
 #include "ui/preview_controller.h"
 
 namespace hydra::ui {
@@ -100,18 +101,45 @@ void AppState::set_rows_per_page(int rows) {
 }
 
 void AppState::select(const store::ChartLibraryEntry& entry) {
-    // Tear down any preview for the previous chart: its audio device must stop
-    // before a new chart's is opened, and the highway must not keep playing the
-    // old song.
-    if (preview) preview->close();
-    // Drop the dynamics cache: the new chart needs its own parse.
-    if (dynamics_job) { dynamics_job->cancel(); dynamics_job.reset(); }
-    dynamics_result.reset();
-    dynamics_key.clear();
-    dynamics_store_error.clear();
+    // The previous chart's window, torn down the one way. A row can only be
+    // clicked while the window is closed, when this already ran, so it is a
+    // no-op in the app; it matters for callers that select directly.
+    close_details();
     selected = entry;
     show_details = true;
     refresh_viewed_record();
+}
+
+void AppState::close_details() {
+    show_details = false;
+    // With the window gone there is nowhere to show an analysis' progress,
+    // and the search would keep burning CPU (up to the Auto budget) unseen.
+    // The main window reaps the job once the cancel lands.
+    if (analyze_job && !analyze_job->finished()) analyze_job->cancel();
+    // The audio device must stop, and the GPU and decode work must not keep
+    // running behind a hidden window.
+    if (preview) preview->close();
+    // Keep a count that already finished; cancel one still parsing.
+    reap_dynamics();
+    if (dynamics_job) {
+        dynamics_job->cancel();
+        dynamics_job.reset();
+    }
+    dynamics_result.reset();
+    dynamics_key.clear();
+    dynamics_store_error.clear();
+    // The next open looks at the chart file at once.
+    details_ui.file_checked_at = -1.0;
+}
+
+bool AppState::selected_file_ok(double now) {
+    if (!selected) return false;
+    if (details_ui.file_checked_at < 0.0 ||
+        now - details_ui.file_checked_at >= kFileCheckSeconds) {
+        details_ui.file_ok = file_exists_utf8(selected->notespath);
+        details_ui.file_checked_at = now;
+    }
+    return details_ui.file_ok;
 }
 
 void AppState::refresh_viewed_record() {
@@ -161,24 +189,27 @@ void AppState::update_dynamics() {
         dynamics_job->start();
     }
 
-    // Reap a finished job.
-    if (dynamics_job && dynamics_job->finished()) {
-        if (dynamics_job->ok()) {
-            dynamics_result = dynamics_job->take_result();
-            dynamics_key = dynamics_job->key();
-            // Persist to the store so the next open is instant.
-            try {
-                app::save_dynamics(*store, app::dynamics_store_key(selected->md5, diff, pro),
-                                   *dynamics_result);
-                dynamics_store_error.clear();
-            } catch (const std::exception& e) {
-                dynamics_store_error =
-                    std::string("Counted, but saving failed: ") + e.what();
-            }
-            dynamics_job.reset();
-        }
-        // On failure, keep the job around so we can read its error().
+    reap_dynamics();
+}
+
+void AppState::reap_dynamics() {
+    if (!dynamics_job || !dynamics_job->finished()) return;
+    // On failure, keep the job around so the tab can read its error().
+    if (!dynamics_job->ok()) return;
+    dynamics_result = dynamics_job->take_result();
+    dynamics_key = dynamics_job->key();
+    // Persist under what the job counted, so the next open is instant.
+    try {
+        app::save_dynamics(*store,
+                           app::dynamics_store_key(dynamics_job->entry().md5,
+                                                   dynamics_job->difficulty(),
+                                                   dynamics_job->pro()),
+                           *dynamics_result);
+        dynamics_store_error.clear();
+    } catch (const std::exception& e) {
+        dynamics_store_error = std::string("Counted, but saving failed: ") + e.what();
     }
+    dynamics_job.reset();
 }
 
 void AppState::start_scan() {

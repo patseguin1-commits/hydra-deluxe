@@ -51,4 +51,9 @@ std::vector<uint8_t> read_file_bytes(const std::string& utf8_path) {
     return buf;
 }
 
+std::string read_file_text(const std::string& utf8_path) {
+    std::vector<uint8_t> bytes = read_file_bytes(utf8_path);
+    return std::string(bytes.begin(), bytes.end());
+}
+
 }  // namespace hydra

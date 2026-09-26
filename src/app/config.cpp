@@ -63,7 +63,7 @@ Settings Settings::load() { return load_file(ini_path()); }
 
 Settings Settings::load_file(const std::string& path) {
     Settings s;
-    std::ifstream f(path);
+    std::ifstream f(utf8_to_wide(path));
     if (!f) return s;  // defaults
 
     std::string line;
@@ -111,7 +111,7 @@ Settings Settings::load_file(const std::string& path) {
 bool Settings::save() const { return save_file(ini_path()); }
 
 bool Settings::save_file(const std::string& path) const {
-    std::ofstream f(path, std::ios::trunc);
+    std::ofstream f(utf8_to_wide(path), std::ios::trunc);
     if (!f) return false;
 
     f << "is_rescan=" << (is_rescan ? 1 : 0) << "\n";

@@ -17,6 +17,8 @@
 #define HYDRA_UI_PREVIEW_CONTROLLER_H
 
 #include <memory>
+#include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -61,7 +63,6 @@ public:
     void close();
 
     bool active() const { return active_; }
-    const std::string& open_key() const { return open_key_; }
     // The drawn overlay's identity: the path it was built from
     // (app::path_overlay_key) plus the SP cap its meter was scaled to, in the
     // one string open() compares. Empty until something has loaded. Treat the
@@ -87,6 +88,22 @@ public:
     LoadProgress load_progress() const;
     bool has_error() const { return !error_.empty(); }
     const std::string& error() const { return error_; }
+
+    // Set when the audio output device would not open. Not an error: the
+    // chart still loads, draws and plays on the clock, just muted. The panel
+    // shows one warning line and keeps drawing.
+    bool has_audio_warning() const { return !audio_warning_.empty(); }
+    const std::string& audio_warning() const { return audio_warning_; }
+
+    // What opens the output device. Empty (the default) opens the real one; a
+    // test installs a factory that throws, standing in for a PC with no audio
+    // device.
+    using AudioSource = std::function<int64_t(float* out, int64_t frames)>;
+    using AudioDeviceFactory = std::function<std::unique_ptr<hydra::audio::PreviewAudioDevice>(
+        int channels, int sample_rate, AudioSource source)>;
+    void set_audio_device_factory(AudioDeviceFactory factory) {
+        device_factory_ = std::move(factory);
+    }
 
     // Draw the highway at the current playhead into a width x height offscreen
     // target; returns its shader-resource view for ImGui::Image (null until the
@@ -118,12 +135,10 @@ public:
     // slider and the audio was re-seeked to the held time every frame —
     // heard as a buzz.
     void set_scrubbing(bool held);
-    bool scrubbing() const { return scrubbing_; }
 
     // Playback volume in percent (0..100); applied to the audio as it is
     // served, and remembered for the next chart opened.
     void set_volume(int percent);
-    int volume() const { return volume_pct_; }
 
     // The time box the panel draws over the highway (Onyx's top-left text).
     hydra::app::PreviewTimeBox time_box() const;
@@ -141,7 +156,6 @@ private:
     ID3D11DeviceContext* context_;
 
     std::unique_ptr<render::PreviewRenderer> renderer_;  // created on first render
-    render::RenderParams params_;
     int rt_w_ = 0;
     int rt_h_ = 0;
     bool have_frame_ = false;
@@ -181,6 +195,8 @@ private:
     bool active_ = false;
     std::string open_key_;
     std::string error_;
+    std::string audio_warning_;
+    AudioDeviceFactory device_factory_;
 };
 
 }  // namespace hydra::ui

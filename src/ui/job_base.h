@@ -8,11 +8,18 @@
 #define HYDRA_UI_JOB_BASE_H
 
 #include <atomic>
+#include <exception>
 #include <functional>
 #include <string>
 #include <thread>
 
 namespace hydra::ui {
+
+// Thrown by JobBase::throw_if_cancelled() between a job's steps. run_guarded
+// turns it into a failed run whose error() reads "cancelled".
+struct JobCancelled : std::exception {
+    const char* what() const noexcept override { return "cancelled"; }
+};
 
 // Common lifecycle for every job: an owning worker thread, a cancel flag the
 // worker polls, and a finished flag whose release-store publishes everything
@@ -36,6 +43,12 @@ protected:
     void shutdown() {
         cancel_.store(true);
         if (thread_.joinable()) thread_.join();
+    }
+    // Stops the job here when cancel() was called. The UI thread joins a
+    // cancelled job, so a long job gives up between its steps instead of
+    // running to the end while the window waits.
+    void throw_if_cancelled() const {
+        if (cancel_.load()) throw JobCancelled{};
     }
 
     std::thread thread_;

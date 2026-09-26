@@ -15,8 +15,13 @@ void DynamicsLoadJob::start() { spawn([this] { run(); }); }
 
 void DynamicsLoadJob::run() {
     run_guarded([this] {
+        // Closing the details window joins this thread on the UI thread. The
+        // parse is one call and cannot stop midway, so the job looks at its
+        // cancel flag before and after it.
+        throw_if_cancelled();
         Song song = load_songpath(entry_.notespath, pro_, app::kDynamicsParseBass2x,
                                   difficulty_);
+        throw_if_cancelled();
         result_ = app::count_dynamics(song);
         return true;
     });

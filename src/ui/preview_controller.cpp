@@ -91,6 +91,7 @@ void PreviewController::close() {
     resume_after_scrub_ = false;
     open_key_.clear();
     error_.clear();
+    audio_warning_.clear();
 }
 
 void PreviewController::poll() {
@@ -109,15 +110,22 @@ void PreviewController::poll() {
         // Open the output device only when there is audio to play; a chart with
         // no locatable stems previews silently (the highway still draws).
         if (transport_.has_audio()) {
+            AudioSource source = [this](float* out, int64_t frames) {
+                return transport_.read_frames(out, frames);
+            };
             try {
-                audio_device_ = std::make_unique<audio::PreviewAudioDevice>(
-                    transport_.channels(), transport_.sample_rate(),
-                    [this](float* out, int64_t frames) {
-                        return transport_.read_frames(out, frames);
-                    });
+                audio_device_ =
+                    device_factory_
+                        ? device_factory_(transport_.channels(), transport_.sample_rate(),
+                                          source)
+                        : std::make_unique<audio::PreviewAudioDevice>(
+                              transport_.channels(), transport_.sample_rate(), source);
                 audio_device_->start();
             } catch (const std::exception& e) {
-                error_ = e.what();  // no device: still previewable, just muted
+                // No device: still previewable, just muted. A warning, not
+                // error_, which the panel treats as fatal.
+                audio_device_.reset();
+                audio_warning_ = e.what();
             }
         }
     } else {
@@ -158,7 +166,7 @@ ID3D11ShaderResourceView* PreviewController::render(int width, int height) {
             renderer_->set_scene(scene_, opts);
             scene_dirty_ = false;
         }
-        renderer_->render(transport_.tick(), params_);
+        renderer_->render(transport_.tick());
         have_frame_ = true;
         return renderer_->texture_srv();
     } catch (const std::exception& e) {

@@ -31,6 +31,12 @@ public:
     // whether the cached result is still valid.
     const std::string& key() const { return key_; }
 
+    // What the job was started for, so a finished count is stored under the
+    // chart and settings it was counted for, not whatever is selected now.
+    const store::ChartLibraryEntry& entry() const { return entry_; }
+    bool pro() const { return pro_; }
+    Difficulty difficulty() const { return difficulty_; }
+
 private:
     void run();
 
