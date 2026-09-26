@@ -44,14 +44,23 @@ from typing import Callable, Dict, Optional
 # the game's config or call set_binding() for each lane with a key you have
 # confirmed. Do not trust these defaults silently.
 #
-# Lane numbering follows the probe-chart generator's `lane` argument
-# (0 = first drum lane). The values are Windows virtual-key codes.
+# Lane numbering follows the probe-chart generator's `lane` argument. The
+# values are Windows virtual-key codes.
+#
+# These are taken directly from the game's own Controller Remap screen
+# (Options -> Controls, Player1 drums), which is the authoritative source:
+#   Green=A  Red=S  Yellow=J  Blue=K  Orange/Kick=L  2X Kick=O
+#   Yellow Cymbal=U  Blue Cymbal=Y  Green Cymbal=T
+# Every drum lane is bound to the action of its own color; Orange is the kick.
 DEFAULT_BINDINGS: Dict[int, int] = {
-    0: 0x41,  # 'A'   -- PLACEHOLDER, confirm before use
-    1: 0x53,  # 'S'   -- PLACEHOLDER
-    2: 0x44,  # 'D'   -- PLACEHOLDER
-    3: 0x46,  # 'F'   -- PLACEHOLDER
-    4: 0x20,  # SPACE -- PLACEHOLDER, typical kick binding
+    0: 0x41,  # 'A'   -- Green pad      (bind screen 2026-09-25)
+    1: 0x53,  # 'S'   -- Red pad        (bind screen 2026-09-25)
+    2: 0x4A,  # 'J'   -- Yellow pad     (bind screen 2026-09-25)
+    3: 0x4B,  # 'K'   -- Blue pad       (bind screen 2026-09-25)
+    4: 0x4C,  # 'L'   -- Orange / Kick  (bind screen 2026-09-25)
+    5: 0x55,  # 'U'   -- Yellow Cymbal  (bind screen 2026-09-25)
+    6: 0x59,  # 'Y'   -- Blue Cymbal    (bind screen 2026-09-25)
+    7: 0x54,  # 'T'   -- Green Cymbal   (bind screen 2026-09-25)
 }
 
 

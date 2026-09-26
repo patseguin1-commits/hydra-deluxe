@@ -87,11 +87,14 @@ OFF_NOTE_COUNT = 0x8C
 # Doubles in .rdata. Read them live once the module base is known. Each entry
 # is VA - GHIDRA_IMAGE_BASE so it can be added straight to module_base.
 
-# Per-side window constants.
-RVA_CONST_NORMAL_BACK = 0x31406C8      # DAT_1831406c8, expect ~85.0
-RVA_CONST_NORMAL_FRONT = 0x31406E0     # DAT_1831406e0, expect ~37.5
-RVA_CONST_PRECISION_BACK = 0x31406B8   # DAT_1831406b8, expect ~40
-RVA_CONST_PRECISION_FRONT = 0x31406D0  # DAT_1831406d0, expect ~25
+# Per-side window constants.  Stored as SECONDS in the binary (not ms).
+# Labels were swapped in the original Ghidra analysis; corrected 2026-09-25
+# after live verification: 0x31406C8 holds 0.0375 s (front) and
+# 0x31406E0 holds 0.085 s (back).
+RVA_CONST_NORMAL_BACK = 0x31406E0      # DAT_1831406e0, expect 0.085 s (= 85 ms)
+RVA_CONST_NORMAL_FRONT = 0x31406C8     # DAT_1831406c8, expect 0.0375 s (= 37.5 ms)
+RVA_CONST_PRECISION_BACK = 0x31406D0   # DAT_1831406d0, expect 0.040 s (= 40 ms)
+RVA_CONST_PRECISION_FRONT = 0x31406B8  # DAT_1831406b8, expect 0.025 s (= 25 ms)
 
 # Formula constants, normal branch: window = (t*C1 - pow(t,e)*C2)*C3 - C4, all
 # over the divisor. (Names are positional; confirm decimals live.)
@@ -129,6 +132,13 @@ RVA_HITCHECK_THRESHOLD = 0x31406E8     # DAT_1831406e8
 # they come out at these values (within tolerance), the whole address pipeline
 # is correct and everything downstream can be trusted.
 
+# Expected values in SECONDS (the game's native unit for these constants).
+EXPECT_NORMAL_BACK_S = 0.085
+EXPECT_NORMAL_FRONT_S = 0.0375
+EXPECT_PRECISION_BACK_S = 0.040
+EXPECT_PRECISION_FRONT_S = 0.025
+
+# Legacy ms names still used by the passive probe's clamp verdict.
 EXPECT_NORMAL_BACK_MS = 85.0
 EXPECT_NORMAL_FRONT_MS = 37.5
 EXPECT_PRECISION_BACK_MS = 40.0

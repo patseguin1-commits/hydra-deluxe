@@ -134,28 +134,35 @@ class TypedReadTest(unittest.TestCase):
 class CheckNormalConstantsTest(unittest.TestCase):
     """The pure pass/fail decision behind verify_targets."""
 
+    # The game stores the constants in seconds, so the check takes seconds.
+
     def test_exact_values_pass(self):
-        # 85.0 / 37.5 -> no error.
-        process.check_normal_constants(85.0, 37.5)
+        # 0.085 / 0.0375 s -> no error.
+        process.check_normal_constants(0.085, 0.0375)
 
     def test_within_tolerance_passes(self):
         # A read a hair under the tolerance is still accepted.
-        tol = constants.CONST_MATCH_TOLERANCE_MS
-        process.check_normal_constants(85.0 + tol * 0.9, 37.5 - tol * 0.9)
+        tol = constants.CONST_MATCH_TOLERANCE_MS / 1000.0
+        process.check_normal_constants(0.085 + tol * 0.9, 0.0375 - tol * 0.9)
 
     def test_back_off_by_one_fails(self):
-        # 84.0 is a full millisecond off, well past tolerance.
+        # 0.084 s is a full millisecond off, well past tolerance.
         with self.assertRaises(process.BuildMismatchError):
-            process.check_normal_constants(84.0, 37.5)
+            process.check_normal_constants(0.084, 0.0375)
 
     def test_front_off_fails(self):
         with self.assertRaises(process.BuildMismatchError):
-            process.check_normal_constants(85.0, 40.0)
+            process.check_normal_constants(0.085, 0.040)
 
     def test_just_past_tolerance_fails(self):
-        tol = constants.CONST_MATCH_TOLERANCE_MS
+        tol = constants.CONST_MATCH_TOLERANCE_MS / 1000.0
         with self.assertRaises(process.BuildMismatchError):
-            process.check_normal_constants(85.0 + tol * 2, 37.5)
+            process.check_normal_constants(0.085 + tol * 2, 0.0375)
+
+    def test_values_in_ms_are_refused(self):
+        # The old unit: a build-drift guard that accepted ms would be wrong.
+        with self.assertRaises(process.BuildMismatchError):
+            process.check_normal_constants(85.0, 37.5)
 
 
 class VerifyTargetsTest(unittest.TestCase):
@@ -171,16 +178,16 @@ class VerifyTargetsTest(unittest.TestCase):
         return proc
 
     def test_good_build_passes(self):
-        # The proof-of-life case: 85.0 / 37.5 read back clean.
-        self.assertIsNone(self._proc_with_constants(85.0, 37.5).verify_targets())
+        # The proof-of-life case: 0.085 / 0.0375 s read back clean.
+        self.assertIsNone(self._proc_with_constants(0.085, 0.0375).verify_targets())
 
     def test_drifted_back_constant_raises(self):
         with self.assertRaises(process.BuildMismatchError):
-            self._proc_with_constants(84.0, 37.5).verify_targets()
+            self._proc_with_constants(0.084, 0.0375).verify_targets()
 
     def test_drifted_front_constant_raises(self):
         with self.assertRaises(process.BuildMismatchError):
-            self._proc_with_constants(85.0, 25.0).verify_targets()
+            self._proc_with_constants(0.085, 0.025).verify_targets()
 
 
 class ProtocolShapeTest(unittest.TestCase):

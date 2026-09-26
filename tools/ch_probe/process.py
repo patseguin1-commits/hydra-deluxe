@@ -58,27 +58,28 @@ def decode_u64(raw: bytes) -> int:
 
 
 def check_normal_constants(
-    back_ms: float,
-    front_ms: float,
-    tolerance_ms: float = constants.CONST_MATCH_TOLERANCE_MS,
+    back_s: float,
+    front_s: float,
+    tolerance_s: float = constants.CONST_MATCH_TOLERANCE_MS / 1000.0,
 ) -> None:
     """Decide whether the two normal-mode window constants we just read match
-    what Ghidra recorded. Raises BuildMismatchError if either is off by more
-    than the tolerance. This is the build-drift guard: a Clone Hero update
-    shifts every address, so a wrong value here means the addresses no longer
-    point where we think and nothing downstream can be trusted."""
-    back_off = abs(back_ms - constants.EXPECT_NORMAL_BACK_MS)
-    front_off = abs(front_ms - constants.EXPECT_NORMAL_FRONT_MS)
+    what the game stores. Values are in SECONDS (the game's native unit).
+    Raises BuildMismatchError if either is off by more than the tolerance.
+    This is the build-drift guard: a Clone Hero update shifts every address,
+    so a wrong value here means the addresses no longer point where we think
+    and nothing downstream can be trusted."""
+    back_off = abs(back_s - constants.EXPECT_NORMAL_BACK_S)
+    front_off = abs(front_s - constants.EXPECT_NORMAL_FRONT_S)
     problems = []
-    if back_off > tolerance_ms:
+    if back_off > tolerance_s:
         problems.append(
-            f"back window read {back_ms:.4f} ms, expected "
-            f"{constants.EXPECT_NORMAL_BACK_MS} ms (off by {back_off:.4f})"
+            f"back window read {back_s:.6f} s, expected "
+            f"{constants.EXPECT_NORMAL_BACK_S} s (off by {back_off:.6f})"
         )
-    if front_off > tolerance_ms:
+    if front_off > tolerance_s:
         problems.append(
-            f"front window read {front_ms:.4f} ms, expected "
-            f"{constants.EXPECT_NORMAL_FRONT_MS} ms (off by {front_off:.4f})"
+            f"front window read {front_s:.6f} s, expected "
+            f"{constants.EXPECT_NORMAL_FRONT_S} s (off by {front_off:.6f})"
         )
     if problems:
         raise BuildMismatchError(

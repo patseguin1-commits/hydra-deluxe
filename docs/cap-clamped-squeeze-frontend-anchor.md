@@ -4,9 +4,10 @@ Status: **warning shipped; re-anchoring the math still open.**
 
 Song Details now tells you when this is happening. If an activation's Star
 Power window hit the cap and that activation has a squeeze the frontend
-decides, the details view shows an overfill warning naming the collecting
-note (the phrase note that filled the meter) and explaining that its timing,
-not the activation's, moves the SP end. That warning is display-only: it
+decides, the details view shows an overfill warning naming the measure of
+the collecting note (the phrase note that filled the meter; the latest one
+when several clamp the same window). Its hover hint explains that this note's
+timing, not the activation's, moves the SP end. That warning is display-only: it
 reads a new stored fact (`clamp_tick`, the collecting note the search pinned
 the window to) and says something about it. The actual math this note
 describes is still wrong — `sp_end_shift_ms`, `required_frontend_ms`,
