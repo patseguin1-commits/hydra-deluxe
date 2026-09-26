@@ -60,7 +60,7 @@ from tools.ch_probe.process import open_process  # noqa: E402
 from tools.ch_probe.debugger import Debugger  # noqa: E402
 from tools.ch_probe.engine import EngineModel  # noqa: E402
 from tools.ch_probe.probe_chart import generate_probe_chart  # noqa: E402
-from tools.ch_probe.input_driver import InputDriver  # noqa: E402
+from tools.ch_probe.input_driver import InputDriver, Lane  # noqa: E402
 
 
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
@@ -69,9 +69,11 @@ RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
 # region where the clamp decision happens, sparse elsewhere for shape.
 DEFAULT_SPACINGS_MS = constants.PROBE_SPACINGS_MS
 
-# The drum lane the probe chart writes its notes on. Kept in one place so the
-# input driver and the chart generator agree.
-PROBE_LANE = constants.PROBE_LANE_KICK
+# The .chart note the probe chart writes (the kick), and the input lane that
+# presses it. They are different numbers: chart note 0 is the kick; input lane
+# 4 is the kick key.
+PROBE_NOTE = constants.PROBE_CHART_NOTE_KICK
+PROBE_LANE = Lane.KICK
 
 # One collected input: which spacing it belonged to, the delta the engine
 # measured (ms), and whether the note counted as a hit.
@@ -139,7 +141,7 @@ def run_active_probe(
     os.makedirs(RESULTS_DIR, exist_ok=True)
     if chart_path is None:
         chart_path = os.path.join(RESULTS_DIR, f"{out_stub}_probe.chart")
-    generate_probe_chart(list(spacings_ms), chart_path, lane=PROBE_LANE)
+    generate_probe_chart(list(spacings_ms), chart_path, note=PROBE_NOTE)
     print(f"Wrote probe chart to {chart_path}. Load it and start the song.")
 
     process = open_process(process_name)

@@ -44,12 +44,13 @@ _REPO_ROOT = os.path.abspath(
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
+from tools.ch_probe import constants as C, engine_finder
 from tools.ch_probe.process import open_process
-from tools.ch_probe.input_driver import InputDriver
+from tools.ch_probe.input_driver import InputDriver, Lane
 from tools.ch_probe.experiments import live
 
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
-KICK_LANE = 4          # InputDriver lane for the kick (L), as in play_chart.py
+KICK_LANE = Lane.KICK
 CONTROL_NOTES = 3
 SETTLE_MS = 250        # wait this long past the note before reading the result
 
@@ -198,19 +199,18 @@ def main() -> None:
     proc = open_process()
     proc.verify_targets()
     print("  Waiting for the song to play (start or unpause it)...")
-    engine = live.find_live_engine(proc)
+    engine = engine_finder.find_live_engine(proc, engine_finder.all_patterns(proc))
     snap = live.read_snapshot(proc, engine)
     print(f"  Engine at {engine:#x}, {'PRECISION' if snap.precision else 'normal'} mode,"
           f" clock {snap.clock_s:.2f} s")
 
     driver = InputDriver()
-    vk = driver.get_binding(KICK_LANE)
     user32 = ctypes.windll.user32
     hwnd = user32.FindWindowW(None, "Clone Hero")
     if not hwnd:
         print("  WARNING: could not find the Clone Hero window")
 
-    clock = SongClock(lambda: proc.read_double(engine + live.OFF_CLOCK))
+    clock = SongClock(lambda: proc.read_double(engine + C.OFF_SONG_CLOCK))
     raw_s, _ = clock.read()
     cursor = 0
     while cursor < len(notes) and notes[cursor]["time_ms"] < raw_s * 1000 + 150:
@@ -250,9 +250,7 @@ def main() -> None:
             before = live.read_snapshot(proc, engine)
 
             raw_ms, est_ms = wait_until(note_ms + planned)
-            driver._send_key(vk, key_up=False)
-            time.sleep(0.003)
-            driver._send_key(vk, key_up=True)
+            driver.press_chord([KICK_LANE])
 
             wait_until(max(note_ms, note_ms + planned) + SETTLE_MS)
             after = live.read_snapshot(proc, engine)

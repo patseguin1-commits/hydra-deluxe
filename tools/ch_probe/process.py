@@ -134,6 +134,12 @@ class Process:
         self.pid = pid
         self._handle = handle
 
+    @property
+    def handle(self) -> Optional[int]:
+        """The raw OS process handle, or None for a Process built in a test.
+        engine_finder's memory scan needs it for VirtualQueryEx."""
+        return self._handle
+
     # Address math -----------------------------------------------------------
 
     def resolve(self, rva: int) -> int:

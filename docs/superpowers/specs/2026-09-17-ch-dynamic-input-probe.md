@@ -1,7 +1,7 @@
 # Handoff: dynamic input probe for the Clone Hero drum hit window
 
 **Date:** 2026-09-17
-**Status:** design approved, not yet implemented
+**Status:** built. The debugger-free route (`play_chart.py`) plays songs at the game since 2026-09-25. The passive and active probes and the hit-window scripts are built but not yet run at the game.
 **For:** the next session, which builds this
 **Lives in:** this repo (`hydra-test`), in its own Python subtree (see "Where the code goes")
 
@@ -148,7 +148,10 @@ once live:
   **This is the field the passive probe watches.**
 - `+0x30` — back-window constant, `double` (max per-side; ~85 ms normal).
 - `+0x38` — front-window constant, `double` (min per-side; ~37.5 ms normal).
-- `+0x100` — hit time: the engine's timestamp captured at the moment of a hit.
+- `+0x100` — the song clock, in seconds. The Ghidra reading called it the hit
+  time; the live game (play_chart.py, 2026-09-25) shows it is the running
+  clock. The hit-time candidate is `+0x2e0` (`constants.OFF_HIT_TIME`, not yet
+  confirmed live).
 - `+0x198` — flags dword; **bit `0x1000` is PrecisionMode** (clear = normal).
 - `+0x8c` — note count used by the processing loop.
 
@@ -157,7 +160,9 @@ once live:
 The window constants are doubles in `.rdata`; read them live once you know the
 module base. Their Ghidra virtual addresses:
 
-- Normal mode: back = `DAT_1831406c8`, front = `DAT_1831406e0`.
+- Normal mode: back = `DAT_1831406e0` (0.085 s), front = `DAT_1831406c8`
+  (0.0375 s). Corrected 2026-09-25 from a live read; this line first had them
+  swapped.
 - Precision mode: back = `DAT_1831406b8`, front = `DAT_1831406d0`.
 - Formula constants (normal branch): `_DAT_183140738`, `_DAT_183140658`,
   `_DAT_1831406f8`, `DAT_183140700`, and divisor `DAT_183064c28`.
@@ -167,8 +172,9 @@ module base. Their Ghidra virtual addresses:
   too, it may be part of the enforced-window logic.
 
 Reading these live and printing them in decimal is itself a good first
-milestone: if `DAT_1831406c8` reads 85.0 and `DAT_1831406e0` reads 37.5, your
-address math is correct and you can trust everything downstream.
+milestone: if `DAT_1831406e0` reads 0.085 and `DAT_1831406c8` reads 0.0375 (the
+game stores seconds), your address math is correct and you can trust
+everything downstream.
 
 ---
 

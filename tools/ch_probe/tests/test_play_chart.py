@@ -82,5 +82,18 @@ class ChartPathTest(unittest.TestCase):
         self.assertEqual(play_chart.chart_notes_to_lanes([0, 32]), [4])
 
 
+class SharedPiecesTest(unittest.TestCase):
+    """play_chart runs on the tracked modules, not private copies."""
+
+    def test_no_private_copies_are_left(self):
+        for name in ("find_active_engine", "OFF_SONG_CLOCK", "OFF_SCORE",
+                     "NOTE_TO_LANE", "scan_for_engine"):
+            self.assertFalse(hasattr(play_chart, name), name)
+
+    def test_lane_names_come_from_the_key_table(self):
+        from tools.ch_probe import input_driver
+        self.assertIs(play_chart.LANE_NAMES, input_driver.LANE_NAMES)
+
+
 if __name__ == "__main__":
     unittest.main()

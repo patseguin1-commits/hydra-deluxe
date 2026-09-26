@@ -29,7 +29,7 @@ _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..",
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from tools.ch_probe.input_driver import DEFAULT_BINDINGS, InputDriver
+from tools.ch_probe.input_driver import DEFAULT_BINDINGS, LANE_NAMES, InputDriver, Lane
 
 
 class _FakeClock:
@@ -59,7 +59,7 @@ def _make_driver():
     presses = []
     # Replace the LIVE-ONLY SendInput seam with a recorder. tap() still runs its
     # real down/up logic on top of this.
-    driver._send_key = lambda vk, key_up: presses.append((vk, key_up))
+    driver.send_key = lambda vk, key_up: presses.append((vk, key_up))
     return driver, presses
 
 
@@ -117,13 +117,13 @@ class TestScheduleHit(unittest.TestCase):
         clock = _FakeClock([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
         fired_at = {}
 
-        real_send = driver._send_key
+        real_send = driver.send_key
 
         def spy(vk, key_up):
             fired_at.setdefault("clock_calls", clock.calls)
             real_send(vk, key_up)
 
-        driver._send_key = spy
+        driver.send_key = spy
         driver.schedule_hit(lane=0, at_song_time=1.0, clock=clock)
         # The tap must not have fired on any reading below 1.0. The loop calls
         # the clock once per check; it fires only after the 6th reading (1.0),
@@ -147,6 +147,45 @@ class TestScheduleHit(unittest.TestCase):
         with self.assertRaises(TimeoutError):
             driver.schedule_hit(lane=0, at_song_time=1.0, clock=clock)
         self.assertEqual(presses, [])
+
+
+class TestKeyTable(unittest.TestCase):
+    """One key table. A lane number means the same key everywhere."""
+
+    def test_lanes_follow_the_bind_screen(self):
+        keys = {lane: chr(DEFAULT_BINDINGS[lane]) for lane in Lane}
+        self.assertEqual(keys, {
+            Lane.GREEN: "A", Lane.RED: "S", Lane.YELLOW: "J", Lane.BLUE: "K",
+            Lane.KICK: "L", Lane.YELLOW_CYMBAL: "U", Lane.BLUE_CYMBAL: "Y",
+            Lane.GREEN_CYMBAL: "T"})
+
+    def test_lane_numbers_are_unchanged(self):
+        self.assertEqual([int(lane) for lane in Lane], list(range(8)))
+        self.assertEqual(Lane.KICK, 4)
+
+    def test_every_lane_has_a_short_name(self):
+        self.assertEqual(set(LANE_NAMES), set(Lane))
+        self.assertEqual(LANE_NAMES[Lane.KICK], "Kick")
+
+
+class TestPressChord(unittest.TestCase):
+    """The press play_chart proved at the game: all down, hold, all up."""
+
+    def test_all_down_then_all_up(self):
+        driver, presses = _make_driver()
+        sent = driver.press_chord([Lane.RED, Lane.KICK],
+                                  sleep=lambda s: presses.append(("sleep", s)))
+        red, kick = DEFAULT_BINDINGS[Lane.RED], DEFAULT_BINDINGS[Lane.KICK]
+        self.assertEqual(presses, [(red, False), (kick, False), ("sleep", 0.003),
+                                   (red, True), (kick, True)])
+        self.assertEqual(sent, [red, kick])
+
+    def test_unbound_lane_is_skipped(self):
+        driver = InputDriver(bindings={Lane.KICK: 0x4C})
+        presses = []
+        driver.send_key = lambda vk, key_up: presses.append((vk, key_up))
+        driver.press_chord([Lane.GREEN, Lane.KICK], sleep=lambda s: None)
+        self.assertEqual(presses, [(0x4C, False), (0x4C, True)])
 
 
 if __name__ == "__main__":

@@ -36,19 +36,12 @@ _REPO_ROOT = os.path.abspath(
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from tools.ch_probe.input_driver import InputDriver
+from tools.ch_probe.input_driver import DEFAULT_BINDINGS, InputDriver, Lane
 
-# Drum keys in lane order: (label, virtual-key code, which pad to watch).
-KEYS = [
-    ("A", 0x41, "GREEN pad"),
-    ("S", 0x53, "RED pad"),
-    ("J", 0x4A, "YELLOW pad"),
-    ("K", 0x4B, "BLUE pad"),
-    ("L", 0x4C, "KICK bar (flash across the lane)"),
-    ("U", 0x55, "YELLOW cymbal"),
-    ("Y", 0x59, "BLUE cymbal"),
-    ("T", 0x54, "GREEN cymbal"),
-]
+# Drum keys in lane order: (label, virtual-key code, which pad to watch), from
+# the one key table in input_driver.py.
+KEYS = [(chr(DEFAULT_BINDINGS[lane]), DEFAULT_BINDINGS[lane], lane.name.replace("_", " "))
+        for lane in Lane]
 
 HOLD_S = 0.5      # long enough to see the pad stay lit
 GAP_S = 1.2       # clear gap between keys
@@ -72,9 +65,9 @@ def main() -> None:
         user32.SetForegroundWindow(ch_hwnd)
         time.sleep(0.05)
         print(f"\n>>> Firing {label}  -> watch: {watch}")
-        driver._send_key(vk, key_up=False)
+        driver.send_key(vk, key_up=False)
         time.sleep(HOLD_S)
-        driver._send_key(vk, key_up=True)
+        driver.send_key(vk, key_up=True)
         time.sleep(GAP_S)
 
     print("\nDone. Which pads lit up, and which did nothing?")

@@ -24,7 +24,7 @@ if _REPO_ROOT not in sys.path:
 
 from tools.ch_probe import constants
 from tools.ch_probe.process import open_process
-from tools.ch_probe.experiments.find_engine import scan_for_engine
+from tools.ch_probe.engine_finder import scan_for_engine
 
 
 def find_all_engines(proc):

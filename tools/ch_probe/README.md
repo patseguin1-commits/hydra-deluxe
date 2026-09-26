@@ -1,99 +1,76 @@
-# ch_probe — measuring Clone Hero's real drum hit window
+# ch_probe: measuring Clone Hero's real drum hit window
 
 ## What this is
 
-We took Clone Hero's drum hit window apart with Ghidra, and static analysis
+We took Clone Hero's drum hit window apart with Ghidra. Static analysis
 answered everything except one question: does the window top out at 85 ms, or
-does it rise to about 89.5 ms at moderate note spacings? The decompiler can't
-tell us, because the code that might clamp the number is reached through a
-function pointer it can't follow. The only way to know is to watch the running
-game — attach a debugger, read the numbers the engine computes, and feed it
-test inputs to see what it accepts.
+does it rise to about 89.5 ms at moderate note spacings? The code that might
+clamp the number is reached through a function pointer the decompiler can't
+follow. So the only way to know is to watch the running game.
 
-This tool does that. It's Python driving the live game through a debugger. It
-lives here, off to the side of Hydra's C++ build, so it never tangles into the
-optimizer's CMake.
-
-The full design and every reverse-engineering fact is in
+This tool does that, in Python, off to the side of Hydra's C++ build. The full
+design and every reverse-engineering fact is in
 [`docs/superpowers/specs/2026-09-17-ch-dynamic-input-probe.md`](../../docs/superpowers/specs/2026-09-17-ch-dynamic-input-probe.md).
 
 ## The one idea it rests on
 
-You can't deliver a keystroke to Windows at a precise millisecond — the OS adds
-several milliseconds of jitter, which is huge next to an 85 ms window. So don't
-trust the timing of the input. Trust what the engine recorded about it. The
-game measures its own hit delta and stores whether the note counted. So every
-test input is a fact: "at a measured delta of X ms, this note was hit or
-missed." Fire a few hundred inputs near the edge and the line between the hit
-cluster and the miss cluster is the true window. No precise input timing
-needed — the debugger is the measuring instrument.
+Windows can't deliver a keystroke at a precise millisecond. So don't trust the
+input's timing; trust what the engine recorded about it. Every test input
+becomes a fact: "at a measured offset of X ms, this note was hit or missed."
+
+## The route that works at the game today
+
+`experiments/play_chart.py` auto-plays a chart and hits the notes (proven on
+"Slipping", 2026-09-25). It needs no debugger. It:
+
+1. opens the game and checks the two window constants (`process.py`);
+2. finds the live engine object by memory scan (`engine_finder.py`): the
+   engine keeps the window constants at +0x30/+0x38, and the live one is the
+   only candidate whose song clock moves;
+3. reads the song clock (+0x100) and the score (+0x94) through `EngineModel`
+   (`engine.py`);
+4. presses each chord with `InputDriver.press_chord` (`input_driver.py`),
+   using the one key table, `Lane`.
+
+A hit is a score that rose. `experiments/walk_edges.py` and
+`experiments/watch_window.py` (the hit-window plan,
+docs/superpowers/plans/2026-09-25-hit-window-testing.md) run on the same
+pieces.
 
 ## The pieces
 
-Two shared files hold everything the pieces must agree on:
-
-- `constants.py` — every address, offset, and constant from the reverse
-  engineering. The one place the numbers live. Nothing else hard-codes an
-  address.
-- `interfaces.py` — the API contract. Each module implements the Protocol
-  named for it, so the pieces snap together without having seen each other.
-
-The seven working pieces, each understandable and testable on its own:
-
-- `process.py` — opens the game, finds where `GameAssembly.dll` loaded, turns
-  the fixed Ghidra addresses into live ones, and reads memory. Before anything
-  else it checks its targets against what Ghidra saw and refuses to run on a
-  mismatch, so a game update can't make it read garbage.
-- `debugger.py` — the Win32 debug loop. Sets software breakpoints, catches
-  them, reads and writes registers and memory, and continues.
-- `engine.py` — the meaning layer. Grabs the live engine object at the
-  constructor breakpoint and exposes clean reads: window, delta, hit flag, song
-  clock, constants. Everything above it speaks in those terms, never raw
-  addresses.
-- `probe_chart.py` — writes small `.chart` files of isolated note pairs at
-  controlled spacings, so the active probe tests clean geometry.
-- `input_driver.py` — wraps `SendInput` and fires a keystroke near a target
-  moment on the song clock.
-- `ocr.py` — reads the on-screen "Accuracy: X ms" as a trust check: when the
-  memory delta and the printed number agree, the memory reads are believable.
-- `experiments/` — the two runners (passive and active probe) plus the
-  analysis that turns rows into the boundary answer.
+- `constants.py`: every address, offset and constant. The one place the
+  numbers live.
+- `interfaces.py`: the API contract each module meets.
+- `process.py`: opens the game, turns Ghidra RVAs into live addresses, reads
+  memory, and refuses to run if the constants don't match the build.
+- `engine_finder.py`: finds the live engine object without a debugger.
+- `engine.py`: the meaning layer. Named reads: window, clock, score, flags,
+  constants. It takes an engine pointer from `engine_finder` (`use_object`)
+  or catches the constructor with the debugger (`capture_object`).
+- `input_driver.py`: the key table (`Lane`, `DEFAULT_BINDINGS`) and SendInput.
+  "Lane" always means an input lane: 0 is green, 4 is the kick. A .chart
+  numbers notes differently (note 0 is the kick), so chart code says "note".
+- `debugger.py`: the Win32 debug loop with int3 breakpoints. Attaching turns
+  Windows' kill-on-exit off, and `stop()` removes every breakpoint before
+  detaching, so the game survives the tool going away.
+- `probe_chart.py`, `probe_songs.py`: write probe charts and playable probe
+  song folders.
+- `ocr.py`: parses "Accuracy: X ms" text (the screen capture was removed).
+- `experiments/`: the runners. `passive_probe.py` and `active_probe.py` use
+  the debugger; the others don't.
 
 ## What runs here, and what needs the game
 
-Anything that reads a live process or attaches a debugger needs Clone Hero
-actually running — it can't be tested on a build machine. So the unit tests in
-`tests/` cover only the pure logic: the address math, the byte-check refusal,
-the `.chart` file format, and the boundary detection on made-up data. The parts
-that only a live game exercises are isolated behind clean seams and marked in
-the code.
-
-Run the pure tests from the repo root:
+The unit tests in `tests/` cover the pure logic and every seam through fakes.
+Anything that reads a live process needs Clone Hero running. Run the tests from
+the repo root:
 
 ```bash
 python -m pytest tools/ch_probe/tests -q
 ```
 
-## Build order (for the session sitting at the game)
-
-Work outside-in and prove each layer before building on it.
-
-1. Attach and read the two window constants. If 85.0 and 37.5 come out, the
-   whole address pipeline is correct.
-2. Breakpoint the constructor, grab the object pointer, read the window fields
-   back — they must match the constants.
-3. Passive probe: breakpoint the formula's return, sample the stored window,
-   log `(spacing, raw, stored)` across a varied chart. This answers the clamp
-   question — write up the answer before touching the active probe.
-4. OCR cross-check on a handful of manual hits.
-5. Probe chart plus input driver: generate the chart, fire timed inputs,
-   confirm they register.
-6. Active probe plus analysis: sweep the offset, collect
-   `(measured_delta, hit/miss)` per spacing, plot the boundary against the
-   parabola the formula predicts, compare to the passive result.
-
 ## Why bother
 
-Hydra's model currently uses a flat 85 ms hit window. The point of this work is
-to decide whether that should become the per-note quadratic the game really
-uses.
+Hydra's model uses a flat 85 ms hit window. The point of this work is to
+decide whether that should become the per-note curve the game really uses.

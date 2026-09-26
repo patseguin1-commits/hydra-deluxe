@@ -240,11 +240,6 @@ CONTEXT_ALL = CONTEXT_AMD64 | 0x1F
 # The trap flag in EFlags. Setting it makes the CPU single-step one instruction.
 TRAP_FLAG = 0x100
 
-# Debug-register bits for a hardware data breakpoint (Dr7).
-DR7_L0 = 0x1          # local enable for slot 0
-DR7_RW0_WRITE = 0x1   # break on data write, in the slot-0 condition field
-DR7_LEN0_8 = 0x2      # 8-byte length, in the slot-0 length field
-
 # Wait this long (ms) for a debug event before looping back to check `until`.
 _WAIT_TIMEOUT_MS = 100
 
@@ -557,33 +552,6 @@ class Debugger:
     def clear_breakpoint(self, addr: int) -> None:
         """Remove a breakpoint and restore its original byte."""
         self._table.remove(addr)
-
-    def set_hw_data_breakpoint(self, addr: int, size: int = 8) -> None:
-        """Watch a write to a data address using debug register Dr0.
-
-        LIVE-ONLY and UNTESTED. Hardware breakpoints are per-thread and set
-        through the CONTEXT debug registers, which cannot be exercised without a
-        live thread, so this path is written from the manuals and left unproven.
-        It configures slot 0 (Dr0) to trap on an 8-byte write. Prefer the int3
-        breakpoints above unless you specifically need to catch the write to
-        self+0x20 without stopping on code.
-        """
-        if self._win32 is None:
-            raise RuntimeError("attach before setting a hardware breakpoint")
-        # Set Dr0 on the main thread. A complete implementation would apply this
-        # to every thread that could touch the address; here we set it on the
-        # thread that most recently trapped, or fall back to the process's
-        # threads. Left deliberately minimal and marked untested.
-        length_bits = {1: 0x0, 2: 0x1, 4: 0x3, 8: 0x2}.get(size, 0x2)
-        # Dr7 layout: L0 enable at bit 0; condition (RW0) at bits 16-17; length
-        # (LEN0) at bits 18-19. Break-on-write is 0x1 in the condition field.
-        dr7 = DR7_L0
-        dr7 |= DR7_RW0_WRITE << 16
-        dr7 |= length_bits << 18
-        self._hw_request = (addr, dr7)  # applied when a thread context is next taken
-        raise NotImplementedError(
-            "hardware data breakpoint is live-only and left unverified; "
-            "use an int3 breakpoint instead")
 
     # --- memory ------------------------------------------------------------
 

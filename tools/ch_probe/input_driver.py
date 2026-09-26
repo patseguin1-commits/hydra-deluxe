@@ -16,7 +16,7 @@ precision.
 Two seams here can only be exercised by a live game, and are marked LIVE-ONLY
 in the code:
 
-  * _send_key -- the real ctypes SendInput call. It needs a real desktop and
+  * send_key -- the real ctypes SendInput call. It needs a real desktop and
     the game window in focus. Unit tests monkeypatch it.
   * schedule_hit driven by the engine's real song clock. Unit tests pass a
     fake clock instead.
@@ -30,37 +30,50 @@ from __future__ import annotations
 import ctypes
 import time
 from ctypes import wintypes
-from typing import Callable, Dict, Optional
+from enum import IntEnum
+from typing import Callable, Dict, Iterable, List, Optional
 
 
-# --- Placeholder drum-lane key bindings --------------------------------------
-#
-# OPEN QUESTION (see the spec's "Drum key bindings"): Clone Hero's drum lane
-# keys are user-configurable and were NOT captured. The map below is a guess so
-# the module imports and its logic can be tested. It is almost certainly wrong
-# for any given install.
-#
-# Before a real active-probe run you MUST either read the real bindings out of
-# the game's config or call set_binding() for each lane with a key you have
-# confirmed. Do not trust these defaults silently.
-#
-# Lane numbering follows the probe-chart generator's `lane` argument. The
-# values are Windows virtual-key codes.
-#
-# These are taken directly from the game's own Controller Remap screen
-# (Options -> Controls, Player1 drums), which is the authoritative source:
+# --- The one key table ---------------------------------------------------------
+
+
+class Lane(IntEnum):
+    """One input lane per bound key. The number means the same thing everywhere
+    in ch_probe: 0 is the green pad, 4 is the kick. A .chart numbers its notes
+    differently (note 0 is the kick), so chart code says "note", never "lane"."""
+
+    GREEN = 0
+    RED = 1
+    YELLOW = 2
+    BLUE = 3
+    KICK = 4
+    YELLOW_CYMBAL = 5
+    BLUE_CYMBAL = 6
+    GREEN_CYMBAL = 7
+
+
+# Windows virtual-key codes, read off the game's own Controller Remap screen
+# (Options -> Controls, Player1 drums) on 2026-09-25:
 #   Green=A  Red=S  Yellow=J  Blue=K  Orange/Kick=L  2X Kick=O
 #   Yellow Cymbal=U  Blue Cymbal=Y  Green Cymbal=T
-# Every drum lane is bound to the action of its own color; Orange is the kick.
+# play_chart.py hits notes with these. A different install may rebind them;
+# set_binding() overrides one lane.
 DEFAULT_BINDINGS: Dict[int, int] = {
-    0: 0x41,  # 'A'   -- Green pad      (bind screen 2026-09-25)
-    1: 0x53,  # 'S'   -- Red pad        (bind screen 2026-09-25)
-    2: 0x4A,  # 'J'   -- Yellow pad     (bind screen 2026-09-25)
-    3: 0x4B,  # 'K'   -- Blue pad       (bind screen 2026-09-25)
-    4: 0x4C,  # 'L'   -- Orange / Kick  (bind screen 2026-09-25)
-    5: 0x55,  # 'U'   -- Yellow Cymbal  (bind screen 2026-09-25)
-    6: 0x59,  # 'Y'   -- Blue Cymbal    (bind screen 2026-09-25)
-    7: 0x54,  # 'T'   -- Green Cymbal   (bind screen 2026-09-25)
+    Lane.GREEN: 0x41,          # 'A'
+    Lane.RED: 0x53,            # 'S'
+    Lane.YELLOW: 0x4A,         # 'J'
+    Lane.BLUE: 0x4B,           # 'K'
+    Lane.KICK: 0x4C,           # 'L' (orange)
+    Lane.YELLOW_CYMBAL: 0x55,  # 'U'
+    Lane.BLUE_CYMBAL: 0x59,    # 'Y'
+    Lane.GREEN_CYMBAL: 0x54,   # 'T'
+}
+
+# Short names for printed logs (moved from play_chart.py).
+LANE_NAMES: Dict[int, str] = {
+    Lane.GREEN: "Grn", Lane.RED: "Red", Lane.YELLOW: "Yel", Lane.BLUE: "Blu",
+    Lane.KICK: "Kick", Lane.YELLOW_CYMBAL: "YCym", Lane.BLUE_CYMBAL: "BCym",
+    Lane.GREEN_CYMBAL: "GCym",
 }
 
 
@@ -126,8 +139,8 @@ class InputDriver:
     def set_binding(self, lane: int, vk: int) -> None:
         """Map a drum lane to a Windows virtual-key code.
 
-        Use this to install the real, confirmed bindings before a run. See the
-        DEFAULT_BINDINGS note above: the shipped defaults are placeholders.
+        Use this when an install binds a lane to a different key than the
+        DEFAULT_BINDINGS above (read off the bind screen on 2026-09-25).
         """
         self._bindings[lane] = vk
 
@@ -144,10 +157,31 @@ class InputDriver:
     def tap(self, lane: int) -> None:
         """Press then release the key for `lane` (key-down, key-up)."""
         vk = self.get_binding(lane)
-        self._send_key(vk, key_up=False)
-        self._send_key(vk, key_up=True)
+        self.send_key(vk, key_up=False)
+        self.send_key(vk, key_up=True)
 
-    def _send_key(self, vk: int, key_up: bool) -> None:
+    def press_chord(self, lanes: Iterable[int], *, hold_s: float = 0.003,
+                    sleep: Callable[[float], None] = time.sleep) -> List[int]:
+        """Press every lane's key down, hold `hold_s`, then release them all.
+
+        This is the press play_chart.py proved at the game: a chord's keys go
+        down together so the game sees one chord. A lane with no binding is
+        skipped, not guessed. Returns the keys pressed.
+        """
+        vks: List[int] = []
+        for lane in lanes:
+            try:
+                vk = self.get_binding(lane)
+            except KeyError:
+                continue
+            vks.append(vk)
+            self.send_key(vk, key_up=False)
+        sleep(hold_s)
+        for vk in vks:
+            self.send_key(vk, key_up=True)
+        return vks
+
+    def send_key(self, vk: int, key_up: bool) -> None:
         """LIVE-ONLY seam: one real key event via Win32 SendInput.
 
         This is the only place that touches the OS. It needs a real desktop and

@@ -27,13 +27,10 @@ _REPO_ROOT = os.path.abspath(
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from tools.ch_probe import constants
+from tools.ch_probe import engine_finder
+from tools.ch_probe.engine import EngineModel
 from tools.ch_probe.process import open_process
-from tools.ch_probe.input_driver import InputDriver
-from tools.ch_probe.experiments.find_engine import scan_for_engine
-
-OFF_SONG_CLOCK = 0x100  # double, seconds
-OFF_SCORE = 0x94        # u32, game score (monotonically increasing)
+from tools.ch_probe.input_driver import LANE_NAMES, InputDriver, Lane
 
 # .chart drum notes: 0 kick, 1 red, 2 yellow, 3 blue, 4 green (5 is green on a
 # 5-lane chart), 32 the 2x kick. On pro drums, 66/67/68 are CYMBAL markers for
@@ -44,9 +41,9 @@ CHART_DRUM_NOTES = frozenset({0, 1, 2, 3, 4, 5, 32, 66, 67, 68})
 
 # gem note -> (tom lane, its cymbal-marker note, cymbal lane)
 _CHART_CYMBAL_MARKER = {
-    2: (2, 66, 5),   # Yellow: tom J / cymbal U
-    3: (3, 67, 6),   # Blue:   tom K / cymbal Y
-    4: (0, 68, 7),   # Green:  tom A / cymbal T
+    2: (Lane.YELLOW, 66, Lane.YELLOW_CYMBAL),
+    3: (Lane.BLUE, 67, Lane.BLUE_CYMBAL),
+    4: (Lane.GREEN, 68, Lane.GREEN_CYMBAL),
 }
 
 
@@ -59,18 +56,16 @@ def chart_notes_to_lanes(chart_notes) -> list:
     s = set(chart_notes)
     lanes = []
     if 0 in s or 32 in s:
-        lanes.append(4)   # Kick (L)
+        lanes.append(Lane.KICK)
     if 1 in s:
-        lanes.append(1)   # Red (S)
+        lanes.append(Lane.RED)
     for gem_note, (tom_lane, marker, cym_lane) in _CHART_CYMBAL_MARKER.items():
         if gem_note in s:
             lanes.append(cym_lane if marker in s else tom_lane)
     if 5 in s:
-        lanes.append(0)   # 5-lane green: pressed as before (A)
+        lanes.append(Lane.GREEN)   # 5-lane green: pressed as before (A)
     return sorted(set(lanes))
 
-LANE_NAMES = {0: "Grn", 1: "Red", 2: "Yel", 3: "Blu", 4: "Kick",
-              5: "YCym", 6: "BCym", 7: "GCym"}
 
 SYNOVIAL_DIR = (
     r"C:\Clone Hero\songs\synchotic\Sync Charts\BirdmanExe Drive"
@@ -149,9 +144,9 @@ DRUM_NOTES = frozenset({95, 96, 97, 98, 99, 100, 110, 111, 112})
 
 # gem note -> (tom lane, its tom-marker note, cymbal lane)
 _CYMBAL_UPGRADE = {
-    98: (2, 110, 5),   # Yellow: tom J / cymbal U
-    99: (3, 111, 6),   # Blue:   tom K / cymbal Y
-    100: (0, 112, 7),  # Green:  tom A / cymbal T
+    98: (Lane.YELLOW, 110, Lane.YELLOW_CYMBAL),
+    99: (Lane.BLUE, 111, Lane.BLUE_CYMBAL),
+    100: (Lane.GREEN, 112, Lane.GREEN_CYMBAL),
 }
 
 
@@ -165,10 +160,10 @@ def midi_notes_to_lanes(midi_notes) -> list:
     s = set(midi_notes)
     lanes = []
     if 95 in s or 96 in s:
-        lanes.append(4)   # Kick (L). 95 = 2x-kick pedal, 96 = normal kick;
+        lanes.append(Lane.KICK)   # 95 = 2x-kick pedal, 96 = normal kick;
                           # both are single kick hits and never share a tick.
     if 97 in s:
-        lanes.append(1)   # Red (S)
+        lanes.append(Lane.RED)
     for gem_note, (tom_lane, marker, cym_lane) in _CYMBAL_UPGRADE.items():
         if gem_note in s:
             lanes.append(tom_lane if marker in s else cym_lane)
@@ -308,48 +303,6 @@ def ticks_to_seconds(tick: int, tempos: List[TempoEvent], resolution: int) -> fl
     return time_s
 
 
-def find_active_engine(proc):
-    """Return the engine object whose song clock is actively advancing.
-
-    Clone Hero keeps several engine-shaped objects on the heap at once, and
-    restarting a song allocates a NEW one while leaving the old one frozen at
-    its final time (e.g. stuck at 21.95s with the last score). So we cannot
-    grab the first object with a plausible clock -- that is often a dead one.
-    The live song engine is the only object whose clock moves, so we read every
-    candidate twice a moment apart and return the one that changed.
-    """
-    back_bytes = proc.read(proc.resolve(constants.RVA_CONST_NORMAL_BACK), 8)
-    front_bytes = proc.read(proc.resolve(constants.RVA_CONST_NORMAL_FRONT), 8)
-    module_end = proc.module_base + 0x4000000
-
-    while True:
-        hits, _, _ = scan_for_engine(proc, back_bytes, front_bytes)
-        heap = [h for h in hits if not (proc.module_base <= h < module_end)]
-
-        first = {}
-        for e in heap:
-            try:
-                if proc.read_double(e + 0x20) < 0.001:
-                    continue
-                first[e] = proc.read_double(e + OFF_SONG_CLOCK)
-            except OSError:
-                pass
-
-        time.sleep(0.12)
-
-        for e, c0 in first.items():
-            try:
-                c1 = proc.read_double(e + OFF_SONG_CLOCK)
-            except OSError:
-                continue
-            if abs(c1 - c0) > 1e-6:   # clock moved -> this is the live song
-                return e
-
-        sys.stdout.write(".")
-        sys.stdout.flush()
-        time.sleep(0.4)
-
-
 def main() -> None:
     chart_dir = sys.argv[1] if len(sys.argv) > 1 else SYNOVIAL_DIR
     chart_path = os.path.join(chart_dir, "notes.chart")
@@ -374,8 +327,11 @@ def main() -> None:
     proc.verify_targets()
 
     print("  Waiting for active engine (start/unpause the song)...")
-    engine_ptr = find_active_engine(proc)
-    clock_now = proc.read_double(engine_ptr + OFF_SONG_CLOCK)
+    engine = EngineModel(proc)
+    engine.use_object(engine_finder.find_live_engine(
+        proc, [engine_finder.normal_pattern(proc)]))
+    engine_ptr = engine.object_ptr
+    clock_now = engine.song_clock()
     print(f"  Engine at {engine_ptr:#x}, song clock = {clock_now:.2f}s")
 
     driver = InputDriver()
@@ -394,10 +350,10 @@ def main() -> None:
             user32.SetForegroundWindow(ch_hwnd)
 
     def read_clock():
-        return proc.read_double(engine_ptr + OFF_SONG_CLOCK)
+        return engine.song_clock()
 
     def read_score():
-        return proc.read_u32(engine_ptr + OFF_SCORE)
+        return engine.score()
 
     # Start from wherever the song already is -- no restart required. Skip past
     # every note whose time has already gone by and begin at the next one due.
@@ -478,18 +434,7 @@ def main() -> None:
             ensure_focus()
 
             # Send input for this note's lanes — press all down, hold, release
-            vks = []
-            for lane in note.lanes:
-                try:
-                    vk = driver.get_binding(lane)
-                    vks.append(vk)
-                    driver._send_key(vk, key_up=False)
-                except KeyError:
-                    pass
-
-            time.sleep(0.003)
-            for vk in vks:
-                driver._send_key(vk, key_up=True)
+            driver.press_chord(note.lanes)
 
             # Check hit: the game score only rises when a note registers.
             time.sleep(0.005)
