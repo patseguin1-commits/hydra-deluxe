@@ -201,5 +201,98 @@ class DebuggerSurfaceTests(unittest.TestCase):
             self.assertTrue(hasattr(debugger, name), name)
 
 
+def _exception_event(code, *, tid, addr=0):
+    """A DEBUG_EVENT carrying one exception, built by hand (no debuggee)."""
+    ev = debugger.DEBUG_EVENT()
+    ev.dwDebugEventCode = debugger.EXCEPTION_DEBUG_EVENT
+    ev.dwThreadId = tid
+    rec = ev.u.Exception.ExceptionRecord
+    rec.ExceptionCode = code
+    rec.ExceptionAddress = addr
+    return ev
+
+
+class KillOnExitTests(unittest.TestCase):
+    """attach() must turn Windows' kill-on-exit off right after attaching, so
+    a Python crash or Ctrl+C detaches from Clone Hero instead of killing it."""
+
+    def setUp(self):
+        self.calls = []
+        self.kill_ok = True
+        calls, test = self.calls, self
+
+        class FakeK32:
+            def DebugActiveProcess(self, pid):
+                calls.append(("DebugActiveProcess", pid))
+                return 1
+
+            def DebugSetProcessKillOnExit(self, kill):
+                calls.append(("DebugSetProcessKillOnExit", kill))
+                return 1 if test.kill_ok else 0
+
+            def DebugActiveProcessStop(self, pid):
+                calls.append(("DebugActiveProcessStop", pid))
+                return 1
+
+            def OpenProcess(self, access, inherit, pid):
+                calls.append(("OpenProcess", pid))
+                return 0x1234
+
+        class FakeWin32:
+            def __init__(self):
+                self.k32 = FakeK32()
+
+        self._real_win32 = debugger._Win32
+        debugger._Win32 = FakeWin32
+
+    def tearDown(self):
+        debugger._Win32 = self._real_win32
+
+    def test_attach_turns_kill_on_exit_off_right_after_attaching(self):
+        Debugger().attach(4242)
+        self.assertEqual(self.calls[:2], [
+            ("DebugActiveProcess", 4242),
+            ("DebugSetProcessKillOnExit", False),
+        ])
+
+    def test_attach_detaches_if_kill_on_exit_cannot_be_turned_off(self):
+        self.kill_ok = False
+        with self.assertRaises(OSError):
+            Debugger().attach(4242)
+        self.assertIn(("DebugActiveProcessStop", 4242), self.calls)
+        self.assertNotIn(("OpenProcess", 4242), self.calls)
+
+
+class SafeDetachTests(unittest.TestCase):
+    """stop() removes the breakpoints, then answers events still queued for
+    them. Those late events must never re-plant a 0xCC or reach the game."""
+
+    def test_single_step_after_stop_does_not_rearm(self):
+        dbg = Debugger()
+        dbg._pending_rearm[7] = 0x1000   # thread 7 was mid-step; bp since removed
+        ev = _exception_event(debugger.EXCEPTION_SINGLE_STEP, tid=7)
+        self.assertEqual(dbg._handle_exception(ev), debugger.DBG_CONTINUE)
+        self.assertEqual(dbg._pending_rearm, {})
+        self.assertFalse(dbg._table.has(0x1000))
+
+    def test_queued_hit_on_a_removed_breakpoint_rewinds_and_continues(self):
+        dbg = Debugger()
+        dbg._seen_initial = True
+        dbg._removed.add(0x1000)
+        rewound = []
+        dbg._rewind_rip = rewound.append
+        ev = _exception_event(debugger.EXCEPTION_BREAKPOINT, tid=7, addr=0x1000)
+        self.assertEqual(dbg._handle_exception(ev), debugger.DBG_CONTINUE)
+        self.assertEqual(rewound, [7])
+
+    def test_table_lists_every_registered_address(self):
+        mem = FakeMemory({0x10: 0x55, 0x20: 0x66})
+        table = BreakpointTable(mem.read, mem.write)
+        table.add(0x10)
+        table.add(0x20)
+        table.arm(0x10)
+        self.assertEqual(sorted(table.addresses()), [0x10, 0x20])
+
+
 if __name__ == "__main__":
     unittest.main()

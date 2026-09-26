@@ -35,8 +35,40 @@ from tools.ch_probe.experiments.find_engine import scan_for_engine
 OFF_SONG_CLOCK = 0x100  # double, seconds
 OFF_SCORE = 0x94        # u32, game score (monotonically increasing)
 
-# .chart note -> input lane. Note 66 = cymbal flag, skip it.
-NOTE_TO_LANE = {0: 4, 1: 1, 2: 2, 3: 3, 4: 0, 5: 0}
+# .chart drum notes: 0 kick, 1 red, 2 yellow, 3 blue, 4 green (5 is green on a
+# 5-lane chart), 32 the 2x kick. On pro drums, 66/67/68 are CYMBAL markers for
+# yellow/blue/green. This is the reverse of the MIDI rule below: in a .chart a
+# gem is a tom unless its marker is on the same tick; in a MIDI a gem is a
+# cymbal unless its tom marker is.
+CHART_DRUM_NOTES = frozenset({0, 1, 2, 3, 4, 5, 32, 66, 67, 68})
+
+# gem note -> (tom lane, its cymbal-marker note, cymbal lane)
+_CHART_CYMBAL_MARKER = {
+    2: (2, 66, 5),   # Yellow: tom J / cymbal U
+    3: (3, 67, 6),   # Blue:   tom K / cymbal Y
+    4: (0, 68, 7),   # Green:  tom A / cymbal T
+}
+
+
+def chart_notes_to_lanes(chart_notes) -> list:
+    """Turn the .chart note numbers at one tick into input lanes.
+
+    One gem -> one lane, like midi_notes_to_lanes. The kick (0) and the 2x
+    kick (32) both press the kick key. A marker with no gem presses nothing.
+    """
+    s = set(chart_notes)
+    lanes = []
+    if 0 in s or 32 in s:
+        lanes.append(4)   # Kick (L)
+    if 1 in s:
+        lanes.append(1)   # Red (S)
+    for gem_note, (tom_lane, marker, cym_lane) in _CHART_CYMBAL_MARKER.items():
+        if gem_note in s:
+            lanes.append(cym_lane if marker in s else tom_lane)
+    if 5 in s:
+        lanes.append(0)   # 5-lane green: pressed as before (A)
+    return sorted(set(lanes))
+
 LANE_NAMES = {0: "Grn", 1: "Red", 2: "Yel", 3: "Blu", 4: "Kick",
               5: "YCym", 6: "BCym", 7: "GCym"}
 
@@ -76,6 +108,9 @@ def parse_chart(chart_path: str):
     if not tempos:
         tempos = [TempoEvent(0, 120.0)]
 
+    # Collect the raw .chart note numbers per tick, then resolve each tick to
+    # lanes, so a cymbal marker turns its gem into a cymbal instead of being
+    # dropped.
     raw_notes: dict[int, list[int]] = {}
     drums_match = re.search(r"\[ExpertDrums\]\s*\{([^}]*)\}", text, re.DOTALL)
     if drums_match:
@@ -84,13 +119,14 @@ def parse_chart(chart_path: str):
             if nm:
                 tick = int(nm.group(1))
                 note_num = int(nm.group(2))
-                if note_num in NOTE_TO_LANE:
-                    raw_notes.setdefault(tick, []).append(NOTE_TO_LANE[note_num])
+                if note_num in CHART_DRUM_NOTES:
+                    raw_notes.setdefault(tick, []).append(note_num)
 
     notes = []
     for tick in sorted(raw_notes.keys()):
-        lanes = sorted(set(raw_notes[tick]))
-        notes.append(NoteEvent(tick=tick, lanes=lanes))
+        lanes = chart_notes_to_lanes(raw_notes[tick])
+        if lanes:
+            notes.append(NoteEvent(tick=tick, lanes=lanes))
 
     tempos.sort(key=lambda t: t.tick)
     for note in notes:
