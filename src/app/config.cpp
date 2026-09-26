@@ -6,7 +6,6 @@
 #include <windows.h>
 
 #include <cstdlib>
-#include <filesystem>
 #include <fstream>
 
 #include "core/winstr.h"
@@ -52,16 +51,7 @@ std::string ini_path() {
 
 std::unique_ptr<store::RecordStore> open_store(const std::string& db,
                                                uint64_t rules_fingerprint) {
-    auto store = std::make_unique<store::RecordStore>(db, rules_fingerprint);
-    // The legacy file is looked for beside the db being opened, not beside
-    // the exe: a test harness pointing at a scratch db must never swallow a
-    // developer's real library.
-    std::filesystem::path dir = std::filesystem::u8path(db).parent_path();
-    std::filesystem::path legacy = dir / "hydra_uncapped.db";
-    std::error_code ec;
-    if (std::filesystem::exists(legacy, ec))
-        store->import_legacy_uncapped(legacy.u8string());
-    return store;
+    return std::make_unique<store::RecordStore>(db, rules_fingerprint);
 }
 
 std::string asset_dir() {

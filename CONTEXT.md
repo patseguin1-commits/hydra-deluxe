@@ -27,9 +27,9 @@ settings the analysis ran with. Its key is the chart, the chart mode, the SP
 cap, and the analysis settings (the ms limit and the score range). A chart
 keeps one record per settings combination; records share their stored paths,
 so a path found under several combinations is stored once. A record is stale
-unless all three hold: this build's version stamped it, it records which
-settings it ran under, and its stored paths are in this build's
-path-structure format. A lookup reports it as one of three statuses: not
+unless both hold: this build's version stamped it, and its stored paths are in
+this build's path-structure format under the rules in force. A lookup reports
+it as one of three statuses: not
 analyzed, stale, or ready. A listing returns only ready records, so a stale
 record reads the same as no record at all.
 

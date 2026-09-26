@@ -250,12 +250,12 @@ TEST_CASE("collect_fill_rows: a blank stored song name reads (unknown)") {
     store::RecordStore old_store(":memory:");
     store::RecordStore new_store(":memory:");
 
-    // A blank songmeta name from before the fallback. add_song keeps the first
-    // name it sees, so put()'s own "Song aa11" does not replace it.
-    old_store.add_song(kBoth, "", "Test Artist", "Test Charter", sample_chart().song);
-    new_store.add_song(kBoth, "", "Test Artist", "Test Charter", sample_chart().song);
+    // A blank songmeta name from before the fallback. add_song keeps the latest
+    // name it sees, so the blank name goes in after put()'s own "Song aa11".
     put(old_store, kBoth, 1000000, 3, "old-path");
     put(new_store, kBoth, 1000000, 3, "new-path");
+    old_store.add_song(kBoth, "", "Test Artist", "Test Charter", sample_chart().song);
+    new_store.add_song(kBoth, "", "Test Artist", "Test Charter", sample_chart().song);
 
     std::vector<FillCompareRow> rows = compare(old_store, new_store);
     REQUIRE(rows.size() == 1);

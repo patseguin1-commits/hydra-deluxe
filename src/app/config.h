@@ -27,10 +27,8 @@ std::string exe_dir();
 std::string db_path();
 std::string ini_path();
 
-// Opens the store at `db` and, the first time, pulls in any records from a
-// pre-1.6 "hydra_uncapped.db" sitting in the same folder (the old Uncapped
-// edition's separate library). The old file is never modified.
-// rules_fingerprint gates Ready: a row analyzed under other rules reads Stale.
+// Opens the store at `db`. rules_fingerprint gates Ready: a row analyzed
+// under other rules reads Stale.
 std::unique_ptr<store::RecordStore> open_store(
     const std::string& db, uint64_t rules_fingerprint = core::default_rules().fingerprint());
 
