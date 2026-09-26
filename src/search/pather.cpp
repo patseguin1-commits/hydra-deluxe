@@ -186,7 +186,7 @@ HydraRecord analyze_at_cap(const Song& song, int sp_cap, DepthMode depth_mode,
 
 // Auto cap: raise the ceiling up the SP-cap ladder until the score settles,
 // approximating "no ceiling at all".
-// time_budget_s, if set, abandons a ladder rung that overruns it (the first
+// budget_s (Rules::auto_budget_s), if set, abandons a ladder rung that overruns it (the first
 // rung always finishes), keeping the best rung so far and flagging it
 // unsettled. nullopt runs every rung to completion — what the tests use, so
 // their results stay deterministic.
@@ -197,7 +197,7 @@ HydraRecord analyze_auto_cap(const Song& song, DepthMode depth_mode, int depth_v
                              const core::Rules& rules,
                              bool want_allzero = false,
                              const std::function<void(float)>& on_progress = {},
-                             std::optional<double> time_budget_s = std::nullopt) {
+                             std::optional<double> budget_s = std::nullopt) {
     int sp_phrases = song.sp_phrase_count();
     const int ladder_n = static_cast<int>(rules.auto_cap_ladder.size());
 
@@ -259,10 +259,10 @@ HydraRecord analyze_auto_cap(const Song& song, DepthMode depth_mode, int depth_v
         }
         previous_score = score;
         ++rung;
-        if (!deadline && time_budget_s)
+        if (!deadline && budget_s)
             deadline = bench_clock::now() +
                        std::chrono::duration_cast<bench_clock::duration>(
-                           std::chrono::duration<double>(*time_budget_s));
+                           std::chrono::duration<double>(*budget_s));
     }
 
     if (record.has_value()) {
@@ -311,8 +311,9 @@ HydraRecord analyze_chart(const Song& song, const SearchSettings& settings,
     HydraRecord record = analyze_auto_cap(song, depth_mode, depth_value, ms_filter,
                                           settings.legacy_fill_deadline, settings.rules,
                                           /*want_allzero=*/true, on_progress,
-                                          settings.time_budget_s);
-    record.rules_fingerprint = settings.rules.fingerprint();
+                                          settings.rules.auto_budget_s);
+    // An Auto run climbed the ladder, so its answer depends on it too.
+    record.rules_fingerprint = settings.rules.auto_fingerprint();
     return record;
 }
 

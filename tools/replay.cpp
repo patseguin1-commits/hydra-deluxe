@@ -517,7 +517,7 @@ int cmd_dump(const Args& a) {
         }
     } snapshot_guard{snapshot_path};
 
-    store::RecordStore store(snapshot_path, s.rules.fingerprint());
+    store::RecordStore store(snapshot_path, core::RulesStamp::of(s.rules));
     const store::RecordKey key = s.record_key(hyhash);
     store::RecordLookup lookup = store.get_record(key);
 

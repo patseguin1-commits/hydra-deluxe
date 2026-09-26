@@ -134,7 +134,7 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    std::unique_ptr<hydra::store::RecordStore> store_ptr = hydra::app::open_store(db, settings.rules.fingerprint());
+    std::unique_ptr<hydra::store::RecordStore> store_ptr = hydra::app::open_store(db, hydra::core::RulesStamp::of(settings.rules));
     hydra::store::RecordStore& store = *store_ptr;
 
     // Reindexing only re-reads stored rows. It scores nothing, so it must not

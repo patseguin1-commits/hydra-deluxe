@@ -41,7 +41,7 @@ int fill_store(store::RecordStore& store, std::optional<int> cap, int want) {
     settings.depth_mode = DepthMode::Scores;
     settings.depth_value = 10;
     settings.sp_cap = cap;
-    settings.time_budget_s = std::nullopt;
+    settings.rules.auto_budget_s = std::nullopt;
 
     int added = 0;
     for (const std::string& path : corpus::chart_paths()) {
@@ -150,7 +150,7 @@ TEST_CASE("collect_rows: a blank or old-placeholder song name reads (unknown)") 
     settings.depth_mode = DepthMode::Scores;
     settings.depth_value = 10;
     settings.sp_cap = 4;
-    settings.time_budget_s = std::nullopt;
+    settings.rules.auto_budget_s = std::nullopt;
 
     // songmeta names written before the fallback existed.
     const std::vector<std::string> stored_names = {"", "<unknown title>"};
@@ -370,7 +370,7 @@ TEST_CASE("records_by_hash keys every listed record by its lower-case hash") {
     store::RecordStore store(":memory:");
     AnalysisSettings settings;
     settings.depth_value = 0;
-    settings.time_budget_s = std::nullopt;
+    settings.rules.auto_budget_s = std::nullopt;
     bool added = false;
     for (const std::string& path : corpus::chart_paths()) {
         try {

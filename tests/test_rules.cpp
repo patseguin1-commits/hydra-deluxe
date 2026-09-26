@@ -138,9 +138,11 @@ TEST_CASE("rules: no rules value has the no-rules fingerprint") {
     // so no stored row can read Ready. That only works if no real rules
     // value ever hashes to it.
     CHECK(core::default_rules().fingerprint() != core::kNoRulesFingerprint);
+    CHECK(core::default_rules().auto_fingerprint() != core::kNoRulesFingerprint);
     core::Rules other = core::default_rules();
     other.max_tied_paths = 2;
     CHECK(other.fingerprint() != core::kNoRulesFingerprint);
+    CHECK(other.auto_fingerprint() != core::kNoRulesFingerprint);
 }
 
 TEST_CASE("rules: whole_chord takes every note's SP doubling on a squeeze-out") {
@@ -224,12 +226,11 @@ TEST_CASE("rules: the Auto ladder and budget come from the rules") {
         break;
     }
 
+    // The budget has one home, the rules, and rides along with them.
     app::Settings s;
     s.sp_cap = std::nullopt;
     s.rules.auto_budget_s = 30.0;
-    CHECK(s.to_analysis_settings().time_budget_s == std::optional<double>(30.0));
-    s.sp_cap = 4;
-    CHECK_FALSE(s.to_analysis_settings().time_budget_s.has_value());
+    CHECK(s.to_analysis_settings().rules.auto_budget_s == std::optional<double>(30.0));
 }
 
 TEST_CASE("rules: the generated-fill values come from the rules") {
@@ -248,4 +249,66 @@ TEST_CASE("rules: the generated-fill values come from the rules") {
     CHECK(fill_count(with_tight) > default_fills);
     for (const SongTimestamp& ts : with_tight.sequence)
         if (ts.has_activation()) CHECK(*ts.activation_length == 192);
+}
+
+// ---- the fingerprint's scope (docs/adr/0014, amended 2026-09-26) ----------
+
+TEST_CASE("rules: the time budget is in neither fingerprint") {
+    // A wall-clock limit can't make a result repeatable, so changing it must
+    // never make a stored record Stale (user decision 7).
+    core::Rules r = core::default_rules();
+    const uint64_t fixed = r.fingerprint();
+    const uint64_t autocap = r.auto_fingerprint();
+    r.auto_budget_s = 30.0;
+    CHECK(r.fingerprint() == fixed);
+    CHECK(r.auto_fingerprint() == autocap);
+    r.auto_budget_s = std::nullopt;
+    CHECK(r.fingerprint() == fixed);
+    CHECK(r.auto_fingerprint() == autocap);
+}
+
+TEST_CASE("rules: the Auto ladder is in the Auto fingerprint only") {
+    core::Rules r = core::default_rules();
+    const uint64_t fixed = r.fingerprint();
+    const uint64_t autocap = r.auto_fingerprint();
+    CHECK(fixed != autocap);
+
+    r.auto_cap_ladder = {8, 24};
+    CHECK(r.fingerprint() == fixed);
+    CHECK(r.auto_fingerprint() != autocap);
+
+    // Every other rule is in both.
+    core::Rules ties = core::default_rules();
+    ties.max_tied_paths = 2;
+    CHECK(ties.fingerprint() != fixed);
+    CHECK(ties.auto_fingerprint() != autocap);
+}
+
+TEST_CASE("rules: the default stamp is built once and matches a fresh record") {
+    // HydraRecord's default fingerprint used to re-hash the default rules for
+    // every record built, which includes every record decoded.
+    CHECK(&core::default_stamp() == &core::default_stamp());
+    CHECK(core::default_stamp().fixed == core::default_rules().fingerprint());
+    CHECK(core::default_stamp().autocap == core::default_rules().auto_fingerprint());
+    CHECK(HydraRecord{}.rules_fingerprint == core::default_stamp().fixed);
+    CHECK(core::RulesStamp::none().fixed == core::kNoRulesFingerprint);
+    CHECK(core::RulesStamp::none().autocap == core::kNoRulesFingerprint);
+}
+
+TEST_CASE("rules: an Auto run is stamped with the ladder, a fixed cap without it") {
+    SearchSettings settings;
+    settings.rules.auto_cap_ladder = {8};
+    settings.rules.auto_budget_s = std::nullopt;
+    for (const std::string& path : corpus::chart_paths()) {
+        Song song = load_songpath(path, true, true);
+        if (song.is_empty()) continue;
+        settings.sp_cap = std::nullopt;
+        CHECK(analyze_chart(song, settings).rules_fingerprint ==
+              settings.rules.auto_fingerprint());
+        settings.sp_cap = 8;
+        CHECK(analyze_chart(song, settings).rules_fingerprint == settings.rules.fingerprint());
+        settings.sp_cap = 4;
+        CHECK(analyze_chart(song, settings).rules_fingerprint == settings.rules.fingerprint());
+        break;
+    }
 }

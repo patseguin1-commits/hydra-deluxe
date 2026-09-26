@@ -257,13 +257,16 @@ std::vector<uint8_t> structure_head_for(uint64_t rules_fingerprint) {
 }
 
 // Is this row's stored path tree in the layout this build reads, analyzed
-// under the rules this process runs? Takes the whole blob or just the
-// substr(structure,1,12) a query selected.
+// under the rules this process runs, as a fixed-cap run or as an Auto run?
+// Takes the whole blob or just the substr(structure,1,12) a query selected.
 bool structure_is_current(const std::vector<uint8_t>& structure_head,
-                          uint64_t rules_fingerprint) {
+                          const core::RulesStamp& rules) {
     if (structure_head.size() < kStructureHeadBytes) return false;
-    const std::vector<uint8_t> want = structure_head_for(rules_fingerprint);
-    return std::equal(want.begin(), want.end(), structure_head.begin());
+    for (uint64_t fingerprint : {rules.fixed, rules.autocap}) {
+        const std::vector<uint8_t> want = structure_head_for(fingerprint);
+        if (std::equal(want.begin(), want.end(), structure_head.begin())) return true;
+    }
+    return false;
 }
 
 // The facts that decide whether a row is readable and how it places among
@@ -281,9 +284,9 @@ struct Candidate {
 };
 
 Candidate rank_row(const std::string& hyversion, const std::vector<uint8_t>& structure_head,
-                   int64_t result_id, uint64_t rules_fingerprint) {
+                   int64_t result_id, const core::RulesStamp& rules) {
     return Candidate{hyversion == current_record_version(),
-                     structure_is_current(structure_head, rules_fingerprint), result_id};
+                     structure_is_current(structure_head, rules), result_id};
 }
 
 // Why a row that is not Ready is Stale, for callers that explain it
@@ -297,15 +300,16 @@ struct StaleReasons {
 
 StaleReasons stale_reasons(const std::string& hyversion,
                            const std::vector<uint8_t>& structure_head,
-                           uint64_t rules_fingerprint) {
-    const std::vector<uint8_t> want = structure_head_for(rules_fingerprint);
+                           const core::RulesStamp& rules) {
+    // The first four bytes are the layout; either fingerprint's head has the
+    // same four, so the fixed one serves to read them.
+    const std::vector<uint8_t> want = structure_head_for(rules.fixed);
     const bool layout_current =
         structure_head.size() >= kStructureHeadBytes &&
         std::equal(want.begin(), want.begin() + 4, structure_head.begin());
     StaleReasons why;
     why.build = hyversion != current_record_version() || !layout_current;
-    why.rules = layout_current &&
-                !std::equal(want.begin() + 4, want.end(), structure_head.begin() + 4);
+    why.rules = layout_current && !structure_is_current(structure_head, rules);
     return why;
 }
 
@@ -315,15 +319,18 @@ StaleReasons stale_reasons(const std::string& hyversion,
 // opposite, so the rule has one SQL spelling. Both columns are NOT NULL, so
 // NOT never meets a NULL.
 //
-// Two bound parameters: the current version text, then the 12-byte structure
-// head (format + rules fingerprint). bind_ready_params binds them and returns
+// Three bound parameters: the current version text, then the two 12-byte
+// structure heads this store accepts (format + the fixed-cap fingerprint,
+// format + the Auto fingerprint). bind_ready_params binds them and returns
 // the next free index.
-constexpr const char* kRowReadySql = "(hyversion = ? AND substr(structure,1,12) = ?)";
+constexpr const char* kRowReadySql =
+    "(hyversion = ? AND substr(structure,1,12) IN (?, ?))";
 
-int bind_ready_params(sqlite3_stmt* s, int idx, uint64_t rules_fingerprint) {
+int bind_ready_params(sqlite3_stmt* s, int idx, const core::RulesStamp& rules) {
     bind_text(s, idx, current_record_version());
-    bind_blob(s, idx + 1, structure_head_for(rules_fingerprint));
-    return idx + 2;
+    bind_blob(s, idx + 1, structure_head_for(rules.fixed));
+    bind_blob(s, idx + 2, structure_head_for(rules.autocap));
+    return idx + 3;
 }
 
 // Does `a` beat `b`? This version before another, then this path format
@@ -478,7 +485,7 @@ PreparedRow prepare_row(const RecordKey& key, const HydraRecord& record) {
 
 // ---- RecordStore ------------------------------------------------------
 
-RecordStore::RecordStore(const std::string& dbpath, uint64_t rules_fingerprint)
+RecordStore::RecordStore(const std::string& dbpath, core::RulesStamp rules_fingerprint)
     : rules_fingerprint_(rules_fingerprint) {
     if (sqlite3_open(dbpath.c_str(), &db_) != SQLITE_OK) {
         std::string msg = db_ ? sqlite3_errmsg(db_) : "unknown error";

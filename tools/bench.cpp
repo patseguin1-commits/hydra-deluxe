@@ -54,7 +54,7 @@ static void folder_breakdown(const std::string& folder, const core::Rules& rules
     std::printf("Settings: the GUI default (SP cap %d, score range %d, %dms limit).\n\n",
                 gui.sp_cap.value_or(-1), gui.depth_value, gui.mslimit_value);
 
-    store::RecordStore store(":memory:", rules.fingerprint());
+    store::RecordStore store(":memory:", core::RulesStamp::of(rules));
 
     for (const app::ScanItem& it : items) {
         std::printf("%s\n", it.notespath.c_str());
@@ -101,7 +101,7 @@ static void scan_mode(const std::string& folder, const std::string& dbpath,
     std::printf("Scanning %s\n", folder.c_str());
 
     std::unique_ptr<store::RecordStore> store;
-    if (!dbpath.empty()) store = std::make_unique<store::RecordStore>(dbpath, g_rules.fingerprint());
+    if (!dbpath.empty()) store = std::make_unique<store::RecordStore>(dbpath, core::RulesStamp::of(g_rules));
 
     // With --db, a prior scan's rows become the rescan cache — running the
     // same command twice measures cold full scan then warm rescan.
@@ -192,6 +192,9 @@ static void corpus_bench() {
         settings.depth_value = dvalue;
         settings.ms_filter = std::nullopt;
         settings.rules = g_rules;
+        // No budget, as before: every Auto rung runs to the end, so the
+        // timing is of the search and not of a wall-clock cut-off.
+        settings.rules.auto_budget_s = std::nullopt;
         double best = 1e30;
         for (int rep = 0; rep < 3; ++rep) {
             auto t0 = clk::now();
@@ -211,7 +214,7 @@ static void corpus_bench() {
 // Dump a store's charts table as the same JSON shape --dump writes, so two
 // scans' results can be diffed even when one came from another build.
 static void dump_db(const std::string& dbpath, const std::string& outpath) {
-    store::RecordStore db(dbpath, g_rules.fingerprint());
+    store::RecordStore db(dbpath, core::RulesStamp::of(g_rules));
     std::vector<store::ChartLibraryEntry> rows =
         db.list_chart_library(std::nullopt, 0, INT_MAX);
     std::sort(rows.begin(), rows.end(),

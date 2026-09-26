@@ -277,7 +277,7 @@ TEST_CASE("under a bad hydra_rules.ini no stored record reads Ready") {
         CHECK(good.store->get_summary(seeded).status == RecordStatus::Ready);
     }
 
-    // Bad file: the store is gated on kNoRulesFingerprint, so the same
+    // Bad file: the store is gated on RulesStamp::none(), so the same
     // record reads Stale. Nothing is shown as Ready under rules the user
     // did not choose.
     {
