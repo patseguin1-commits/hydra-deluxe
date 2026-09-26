@@ -2,7 +2,7 @@
 
 Every address here is transcribed from the handoff spec
 (docs/superpowers/specs/2026-09-17-ch-dynamic-input-probe.md), which in turn
-cross-checked them against the Ghidra dumps in scratch_ms/. This is the ONE
+cross-checked them against the Ghidra dumps in ../hydra-data/scratch_ms/. This is the ONE
 place the numbers live. Every other module imports from here; nothing else
 hard-codes an address. If a Clone Hero update shifts the binary, this file is
 the only thing that changes.

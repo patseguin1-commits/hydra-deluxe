@@ -64,7 +64,7 @@ comparison, not the formula — and now you know exactly where.
 ## Verified reverse-engineering facts
 
 Everything below is cross-checked against the actual Ghidra dumps in
-`scratch_ms/` (`ghidra_decompile_output.txt`, `ghidra_decompile_all.txt`). The
+`C:\Users\Patrick\Downloads\Hydra\hydra-data\scratch_ms\` (`ghidra_decompile_output.txt`, `ghidra_decompile_all.txt`). The
 summary artifact's addresses check out against these dumps — its
 `DrumsEngine constructor at RVA 0x20DF680` is correct (dump `output.txt` line
 52 labels `DrumsEngine_ctor` at exactly `0x20df680`, and the window constants
@@ -278,8 +278,9 @@ the wrong memory.
 
 ## Source material
 
-- Ghidra dumps: `scratch_ms/ghidra_decompile_output.txt` (constructor and
-  note-processing, line refs above) and `scratch_ms/ghidra_decompile_all.txt`
+- Ghidra dumps (in `C:\Users\Patrick\Downloads\Hydra\hydra-data\scratch_ms\`):
+  `ghidra_decompile_output.txt` (constructor and
+  note-processing, line refs above) and `ghidra_decompile_all.txt`
   (the formula at lines 757–782, hit-check comparison at 808–810 / 1049–1051).
 - Summary artifact (treat as secondary; some addresses disagree with the
   dumps): https://claude.ai/artifact/RvK214fUemHR1sH4wiwNEU

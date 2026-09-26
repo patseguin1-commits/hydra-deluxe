@@ -23,10 +23,6 @@ out/
 CMakeUserPresets.json
 compile_commands.json
 
-# Retired Python-era build output locations.
-build/
-dist/
-
 # Claude Code local state (the shared output style stays tracked).
 .claude/*
 !.claude/output-styles/
@@ -39,3 +35,12 @@ build-rel/
 
 # Python bytecode (tools/ch_probe and friends)
 __pycache__/
+
+# Song data, audio dumps and Ghidra output live in ..\hydra-data, never here.
+/srb_songs/
+/srb_audio_dump/
+/scratch_ms/
+# Loose logs and scratch files at the repo root.
+/*.txt
+/*.log
+!/CMakeLists.txt
