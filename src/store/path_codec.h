@@ -53,7 +53,7 @@ namespace hydra::store {
 // lane-spelled Chord::code instead of the old lookup-table code (ADR 0015).
 // Only version 5 is written, and only version 5 is decoded. An older node can
 // be reached only through an older structure, and the store never decodes
-// one of those (see row_is_ready in record_store.cpp), so the old read paths
+// one of those (see structure_is_current in record_store.cpp), so the old read paths
 // are dead.
 constexpr uint32_t kPathNodeFormatVersion = 5;
 
