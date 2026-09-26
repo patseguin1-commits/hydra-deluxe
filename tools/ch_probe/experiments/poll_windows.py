@@ -33,8 +33,7 @@ if _REPO_ROOT not in sys.path:
 from tools.ch_probe import constants
 from tools.ch_probe.process import open_process
 
-# Import the scanner from find_engine
-from tools.ch_probe.experiments.find_engine import scan_for_engine
+from tools.ch_probe.engine_finder import scan_for_engine
 
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
 POLL_HZ = 200

@@ -75,8 +75,7 @@ def open_process(process_name: str = ...) -> ProcessHandle:
 # --- debugger.py : the Win32 debug loop -------------------------------------
 #
 # WaitForDebugEvent engine. Sets int3 (0xCC) software breakpoints, catches
-# them, exposes registers and memory, restores/single-steps to continue. Can
-# also set a hardware data breakpoint via the debug registers.
+# them, exposes registers and memory, restores/single-steps to continue.
 
 @runtime_checkable
 class ThreadContext(Protocol):
@@ -110,11 +109,6 @@ class Debugger(Protocol):
     def clear_breakpoint(self, addr: int) -> None:
         ...
 
-    def set_hw_data_breakpoint(self, addr: int, size: int = 8) -> None:
-        """Optional: watch a write to a data address (e.g. self+0x20) via the
-        debug registers instead of sampling it."""
-        ...
-
     def read(self, addr: int, size: int) -> bytes:
         ...
 
@@ -146,8 +140,16 @@ class EngineModel(Protocol):
         """Breakpoint the constructor, grab rcx, remember it. Returns the ptr."""
         ...
 
+    def use_object(self, object_ptr: int) -> int:
+        """Adopt a pointer found by engine_finder's memory scan."""
+        ...
+
+    def score(self) -> int:
+        """self+0x94, rises only on a hit."""
+        ...
+
     def total_window(self) -> float:
-        """self+0x20, the field the passive probe watches (ms)."""
+        """self+0x20, the field the passive probe watches (seconds)."""
         ...
 
     def back_window(self) -> float:
@@ -167,8 +169,7 @@ class EngineModel(Protocol):
         ...
 
     def song_clock(self) -> float:
-        """Current song time (seconds). Source to be pinned live; may read a
-        known clock field or a timer call."""
+        """Current song time (seconds), self+0x100, proven live."""
         ...
 
     def constants(self) -> dict:
@@ -187,7 +188,7 @@ def generate_probe_chart(
     *,
     resolution: int = 192,
     bpm: float = 120.0,
-    lane: int = 0,
+    note: int = 0,
 ) -> None:
     """Function in probe_chart.py. Emit a valid Expert-drums .chart at `path`
     with one isolated note pair per spacing in `spacings_ms`: two notes that
@@ -222,16 +223,16 @@ class InputDriver(Protocol):
         """Fire the keystroke for `lane` immediately (down then up)."""
         ...
 
+    def send_key(self, vk: int, key_up: bool) -> None:
+        """One key event through SendInput (the only OS call)."""
+        ...
+
+    def press_chord(self, lanes: Sequence[int], *, hold_s: float = 0.003) -> list:
+        """All lanes' keys down, hold, all up."""
+        ...
+
 
 # --- ocr.py : the OCR cross-check -------------------------------------------
 #
-# Reads the on-screen "Accuracy: X ms" from a screen crop with WinRT OCR.
-# Lowest-priority piece: it only validates that the memory delta matches the
-# printed number. There is NO in-repo OCR code to reuse; build against the
-# WinRT Windows.Media.Ocr API.
-
-def read_accuracy_ms(crop_region: tuple[int, int, int, int]) -> Optional[float]:
-    """Function in ocr.py. Screenshot the given (left, top, right, bottom)
-    screen rectangle, OCR it, parse a signed millisecond number out of an
-    "Accuracy: X ms" string. Returns None if nothing parseable is found."""
-    ...
+# Only the text parser remains (parse_accuracy_text). The screen-capture path
+# had no caller and was deleted in 2026-09; git history has it.

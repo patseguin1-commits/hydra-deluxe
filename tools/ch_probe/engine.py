@@ -30,19 +30,6 @@ if TYPE_CHECKING:
     from .interfaces import Debugger, ProcessHandle, ThreadContext
 
 
-# --- song clock placeholder --------------------------------------------------
-#
-# OPEN QUESTION (from the spec): where the current song time actually lives is
-# not yet known. The spec lists "song clock source" as a thing the next session
-# must pin down against the running game. Until someone reads it live, this is a
-# guess: a double at this byte offset off the engine object.
-#
-# This offset is NOT in constants.py on purpose -- constants.py holds only
-# addresses that were confirmed in the Ghidra dumps, and this one wasn't. When
-# the field is pinned live, move it into constants.py and delete this block.
-_PLACEHOLDER_SONG_CLOCK_OFFSET = 0x1A0  # UNCONFIRMED -- must be verified live.
-
-
 class EngineModel:
     """Reads named facts off the live DrumsEngine object.
 
@@ -51,8 +38,11 @@ class EngineModel:
     reader methods.
     """
 
-    def __init__(self, process: "ProcessHandle", debugger: "Debugger") -> None:
+    def __init__(self, process: "ProcessHandle",
+                 debugger: Optional["Debugger"] = None) -> None:
         self._process = process
+        # Only capture_object() needs a debugger. A runner that finds the
+        # engine by memory scan (engine_finder) passes none.
         self._debugger = debugger
         # Filled in by capture_object(). None until then.
         self.object_ptr: Optional[int] = None
@@ -72,6 +62,10 @@ class EngineModel:
         in the tests fires the callback the moment the breakpoint is set, so the
         pointer is already captured and run() is never called.
         """
+        if self._debugger is None:
+            raise RuntimeError(
+                "capture_object needs a debugger; use use_object() with a "
+                "pointer from engine_finder instead")
         addr = self._process.resolve(C.RVA_DRUMS_ENGINE_CTOR)
 
         def _on_ctor(debugger: "Debugger", ctx: "ThreadContext") -> None:
@@ -89,6 +83,12 @@ class EngineModel:
             )
         return self.object_ptr
 
+    def use_object(self, object_ptr: int) -> int:
+        """Adopt an engine object found another way: the memory scan in
+        engine_finder, the route play_chart.py proved live. Returns it."""
+        self.object_ptr = object_ptr
+        return object_ptr
+
     # --- per-object reads ----------------------------------------------------
 
     def _addr(self, offset: int) -> int:
@@ -100,22 +100,28 @@ class EngineModel:
         return self.object_ptr + offset
 
     def total_window(self) -> float:
-        """The total search window (ms). This is the field the passive probe
+        """The total search window (seconds). This is the field the passive probe
         watches: set to back*2 at construction, then overwritten per note by the
         formula's caller."""
         return self._process.read_double(self._addr(C.OFF_TOTAL_WINDOW))
 
     def back_window(self) -> float:
-        """Back-window constant (ms): the max per-side, ~85 in normal mode."""
+        """Back-window constant (seconds): the max per-side, ~85 in normal mode."""
         return self._process.read_double(self._addr(C.OFF_BACK_WINDOW))
 
     def front_window(self) -> float:
-        """Front-window constant (ms): the min per-side, ~37.5 in normal mode."""
+        """Front-window constant (seconds): the min per-side, ~37.5 in normal mode."""
         return self._process.read_double(self._addr(C.OFF_FRONT_WINDOW))
 
     def hit_time(self) -> float:
-        """Engine timestamp captured at the moment of a hit."""
+        """Song time of the last hit, in seconds, from +0x2e0. The code reading
+        says the game copies the clock here on a hit; not yet confirmed live."""
         return self._process.read_double(self._addr(C.OFF_HIT_TIME))
+
+    def score(self) -> int:
+        """The game score. It rises only when a note is hit, which is how
+        play_chart.py tells a hit from a miss."""
+        return self._process.read_u32(self._addr(C.OFF_SCORE))
 
     def note_count(self) -> int:
         """Note count the processing loop uses."""
@@ -132,15 +138,10 @@ class EngineModel:
         return (flags & C.PRECISION_MODE_BIT) != 0
 
     def song_clock(self) -> float:
-        """Current song time in seconds.
-
-        LIVE-ONLY SEAM: the real source of the song clock is an open question in
-        the spec and has not been confirmed against the running game. This reads
-        a placeholder field (see _PLACEHOLDER_SONG_CLOCK_OFFSET above) so the
-        method exists and the callers can be written, but the number it returns
-        cannot be trusted until the field is pinned live.
-        """
-        return self._process.read_double(self._addr(_PLACEHOLDER_SONG_CLOCK_OFFSET))
+        """Current song time in seconds, from +0x100. Proven live on
+        2026-09-25: play_chart.py plays whole songs off this field. The game
+        writes it once per frame, so a read can be a few ms stale."""
+        return self._process.read_double(self._addr(C.OFF_SONG_CLOCK))
 
     # --- global constants ----------------------------------------------------
 

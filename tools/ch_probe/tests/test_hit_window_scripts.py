@@ -16,6 +16,7 @@ _REPO_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
+from tools.ch_probe import constants as C  # noqa: E402
 from tools.ch_probe import probe_songs as P  # noqa: E402
 from tools.ch_probe.experiments import live  # noqa: E402
 from tools.ch_probe.experiments import walk_edges as W  # noqa: E402
@@ -37,17 +38,22 @@ def samples_following(notes: list[dict], window_for) -> list[WW.Sample]:
 class LiveSnapshotTest(unittest.TestCase):
     def test_decode_reads_each_field_at_its_offset(self):
         raw = bytearray(live.SNAPSHOT_SIZE)
-        struct.pack_into("<d", raw, live.OFF_WINDOW, 0.17143)
-        struct.pack_into("<I", raw, live.OFF_SCORE, 1234)
-        struct.pack_into("<d", raw, live.OFF_CLOCK, 12.5)
-        struct.pack_into("<I", raw, live.OFF_FLAGS, 0x1000)
-        struct.pack_into("<d", raw, live.OFF_HIT_TIME, 12.49)
+        struct.pack_into("<d", raw, C.OFF_TOTAL_WINDOW, 0.17143)
+        struct.pack_into("<I", raw, C.OFF_SCORE, 1234)
+        struct.pack_into("<d", raw, C.OFF_SONG_CLOCK, 12.5)
+        struct.pack_into("<I", raw, C.OFF_FLAGS, 0x1000)
+        struct.pack_into("<d", raw, C.OFF_HIT_TIME, 12.49)
         s = live.decode_snapshot(bytes(raw))
         self.assertAlmostEqual(s.window_ms, 171.43)
         self.assertEqual(s.score, 1234)
         self.assertEqual(s.clock_s, 12.5)
         self.assertEqual(s.hit_time_s, 12.49)
         self.assertTrue(s.precision)
+
+    def test_live_keeps_no_offsets_or_finder_of_its_own(self):
+        for name in ("OFF_WINDOW", "OFF_SCORE", "OFF_CLOCK", "OFF_FLAGS",
+                     "OFF_HIT_TIME", "find_live_engine"):
+            self.assertFalse(hasattr(live, name), name)
 
 
 class WatchWindowTest(unittest.TestCase):

@@ -12,7 +12,6 @@ Start a song first (so the engine object exists), then run:
 
 from __future__ import annotations
 
-import ctypes
 import os
 import struct
 import sys
@@ -28,89 +27,7 @@ from tools.ch_probe import constants
 from tools.ch_probe.process import open_process
 
 
-# VirtualQueryEx plumbing
-class MEMORY_BASIC_INFORMATION(ctypes.Structure):
-    _fields_ = [
-        ("BaseAddress", ctypes.c_void_p),
-        ("AllocationBase", ctypes.c_void_p),
-        ("AllocationProtect", ctypes.c_ulong),
-        ("RegionSize", ctypes.c_size_t),
-        ("State", ctypes.c_ulong),
-        ("Protect", ctypes.c_ulong),
-        ("Type", ctypes.c_ulong),
-    ]
-
-
-MEM_COMMIT = 0x1000
-PAGE_READWRITE = 0x04
-PAGE_WRITECOPY = 0x08
-PAGE_EXECUTE_READWRITE = 0x40
-PAGE_EXECUTE_WRITECOPY = 0x80
-
-
-def is_rw(protect: int) -> bool:
-    return protect in (
-        PAGE_READWRITE, PAGE_WRITECOPY,
-        PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY,
-    )
-
-
-def scan_for_engine(proc, back_bytes: bytes, front_bytes: bytes):
-    """Scan committed RW memory for offset+0x30=back, offset+0x38=front."""
-    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    handle = ctypes.c_void_p(proc._handle)
-    mbi = MEMORY_BASIC_INFORMATION()
-    mbi_size = ctypes.sizeof(mbi)
-
-    # The pattern: 8 bytes of back_window at relative position 0,
-    # immediately followed by 8 bytes of front_window.
-    # In the engine object, these sit at offsets 0x30 and 0x38.
-    pattern = back_bytes + front_bytes  # 16 contiguous bytes
-
-    addr = 0
-    hits = []
-    regions_scanned = 0
-    bytes_scanned = 0
-    max_addr = 0x7FFFFFFFFFFF  # user-mode limit on 64-bit Windows
-
-    while addr < max_addr:
-        ret = k32.VirtualQueryEx(
-            handle, ctypes.c_void_p(addr), ctypes.byref(mbi), mbi_size
-        )
-        if ret == 0:
-            break
-
-        if mbi.State == MEM_COMMIT and is_rw(mbi.Protect) and mbi.RegionSize > 0:
-            base = mbi.BaseAddress or 0
-            size = mbi.RegionSize
-
-            # Skip tiny regions and absurdly large ones
-            if 0x100 <= size <= 256 * 1024 * 1024:
-                try:
-                    data = proc.read(base, size)
-                    regions_scanned += 1
-                    bytes_scanned += len(data)
-
-                    # Search for the 16-byte pattern
-                    offset = 0
-                    while True:
-                        pos = data.find(pattern, offset)
-                        if pos == -1:
-                            break
-                        # This match is at offset +0x30 in the object,
-                        # so the object base is addr + pos - 0x30
-                        obj_addr = base + pos - 0x30
-                        hits.append(obj_addr)
-                        offset = pos + 1
-                except OSError:
-                    pass  # unreadable region
-
-        next_addr = (mbi.BaseAddress or 0) + mbi.RegionSize
-        if next_addr <= addr:
-            break
-        addr = next_addr
-
-    return hits, regions_scanned, bytes_scanned
+from tools.ch_probe.engine_finder import scan_for_engine  # moved there 2026-09
 
 
 def main() -> None:

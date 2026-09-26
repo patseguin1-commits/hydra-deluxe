@@ -108,9 +108,6 @@ class FakeDebugger:
     def clear_breakpoint(self, addr):
         pass
 
-    def set_hw_data_breakpoint(self, addr, size=8):
-        pass
-
     def read(self, addr, size):
         raise NotImplementedError
 
@@ -195,7 +192,10 @@ class TestFieldReads(unittest.TestCase):
         eng = self._engine_with_fields(front=37.5)
         self.assertEqual(eng.front_window(), 37.5)
 
-    def test_hit_time_reads_off_0x100(self):
+    def test_hit_time_reads_off_0x2e0(self):
+        # +0x100 is the song clock (proven live); the hit-time candidate is
+        # +0x2e0, still to be confirmed at the game.
+        self.assertEqual(C.OFF_HIT_TIME, 0x2E0)
         eng = self._engine_with_fields(hit_time=12.34)
         self.assertEqual(eng.hit_time(), 12.34)
 
@@ -316,15 +316,37 @@ class TestConstants(unittest.TestCase):
 
 
 class TestSongClock(unittest.TestCase):
-    def test_reads_the_placeholder_field(self):
-        # The song-clock source is unconfirmed; we only check the method reads
-        # a double off the object at the documented placeholder offset. The
-        # value itself cannot be trusted until pinned live.
-        offset = engine._PLACEHOLDER_SONG_CLOCK_OFFSET
-        doubles = {OBJ + offset: 3.5}
+    def test_reads_the_proven_clock_at_0x100(self):
+        # play_chart.py plays whole songs off this field (2026-09-25), so the
+        # song clock is +0x100, in seconds.
+        self.assertEqual(C.OFF_SONG_CLOCK, 0x100)
+        doubles = {OBJ + C.OFF_SONG_CLOCK: 3.5}
         eng, proc, dbg = make_engine(object_ptr=OBJ, doubles=doubles)
         eng.capture_object()
         self.assertEqual(eng.song_clock(), 3.5)
+
+    def test_no_placeholder_offset_is_left(self):
+        self.assertFalse(hasattr(engine, "_PLACEHOLDER_SONG_CLOCK_OFFSET"))
+
+
+class TestScoreAndFoundObject(unittest.TestCase):
+    def test_score_reads_u32_off_0x94(self):
+        eng, proc, dbg = make_engine(object_ptr=OBJ,
+                                     dwords={OBJ + C.OFF_SCORE: 4200})
+        eng.capture_object()
+        self.assertEqual(eng.score(), 4200)
+
+    def test_use_object_takes_a_scanned_pointer_without_a_debugger(self):
+        proc = FakeProcess(doubles={OBJ + C.OFF_SONG_CLOCK: 1.25})
+        eng = engine.EngineModel(proc)
+        self.assertEqual(eng.use_object(OBJ), OBJ)
+        self.assertEqual(eng.object_ptr, OBJ)
+        self.assertEqual(eng.song_clock(), 1.25)
+
+    def test_capture_without_a_debugger_raises(self):
+        eng = engine.EngineModel(FakeProcess())
+        with self.assertRaises(RuntimeError):
+            eng.capture_object()
 
 
 if __name__ == "__main__":

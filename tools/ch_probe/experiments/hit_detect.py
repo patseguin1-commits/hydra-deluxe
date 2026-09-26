@@ -27,18 +27,19 @@ if _REPO_ROOT not in sys.path:
 from tools.ch_probe import constants
 from tools.ch_probe.process import open_process
 from tools.ch_probe.input_driver import InputDriver
-from tools.ch_probe.experiments.find_engine import scan_for_engine
+from tools.ch_probe.engine_finder import scan_for_engine
 
 OFF_TOTAL_WINDOW = 0x20
 OFF_TIME_A = 0x28       # song/note time (double)
 OFF_HITS = 0xb0         # monotonic notes-hit counter (u32)
-OFF_HIT_TIME = 0x100    # hit timestamp (double)
 OFF_SCORE = 0x94        # score (u32)
 
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
 
 
-def find_live_engine(proc):
+def first_engine_with_window(proc):
+    """This script's own pick: the first heap engine with a nonzero window.
+    (engine_finder.find_live_engine is the proven "whose clock moves" check.)"""
     back_bytes = proc.read(proc.resolve(constants.RVA_CONST_NORMAL_BACK), 8)
     front_bytes = proc.read(proc.resolve(constants.RVA_CONST_NORMAL_FRONT), 8)
     hits, _, _ = scan_for_engine(proc, back_bytes, front_bytes)
@@ -60,7 +61,7 @@ def main() -> None:
     proc.verify_targets()
     print(f"  PID {proc.pid}, addresses verified.")
 
-    engine_ptr, tw = find_live_engine(proc)
+    engine_ptr, tw = first_engine_with_window(proc)
     if not engine_ptr:
         print("  No live engine found. Is a song actively playing?")
         proc.close()
@@ -89,7 +90,9 @@ def main() -> None:
         return proc.read_double(engine_ptr + OFF_TIME_A)
 
     def read_hit_time():
-        return proc.read_double(engine_ptr + OFF_HIT_TIME)
+        # This script read +0x100 as a hit time; it is the song clock
+        # (constants.OFF_SONG_CLOCK). Kept as it ran on 2026-09-25.
+        return proc.read_double(engine_ptr + constants.OFF_SONG_CLOCK)
 
     def read_score():
         return proc.read_u32(engine_ptr + OFF_SCORE)
@@ -119,11 +122,11 @@ def main() -> None:
 
                 # Press all keys down at once (chords need simultaneous input)
                 for vk in all_vks:
-                    driver._send_key(vk, key_up=False)
+                    driver.send_key(vk, key_up=False)
                 time.sleep(0.005)
                 # Release all
                 for vk in all_vks:
-                    driver._send_key(vk, key_up=True)
+                    driver.send_key(vk, key_up=True)
                 time.sleep(0.015)
 
                 hits_after = read_hits()

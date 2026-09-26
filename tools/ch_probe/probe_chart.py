@@ -30,9 +30,10 @@ except ImportError:
 DEFAULT_SPACINGS_MS = list(C.PROBE_SPACINGS_MS)
 
 # Drum note numbers in the .chart format. 0 is the kick. 1-4 are the four
-# colored pads (red, yellow, blue, green). We default to the kick because it is
-# a single lane with no cymbal-vs-tom ambiguity, which keeps the probe clean.
-DRUM_LANE_KICK = C.PROBE_LANE_KICK
+# colored pads (red, yellow, blue, green). We default to the kick because it
+# has no cymbal-vs-tom ambiguity, which keeps the probe clean. These are chart
+# NOTE numbers; the key that plays note 0 is input_driver.Lane.KICK (4).
+DRUM_NOTE_KICK = C.PROBE_CHART_NOTE_KICK
 
 # How much silent room to leave around each pair, expressed as whole notes. One
 # whole note at 120 BPM is two seconds, so four whole notes is a wide moat -- no
@@ -93,15 +94,15 @@ def _sync_track_section(bpm: float) -> str:
     )
 
 
-def _expert_drums_section(note_ticks: Sequence[int], lane: int) -> str:
-    """The [ExpertDrums] section. One line per note: `<tick> = N <lane> 0`.
+def _expert_drums_section(note_ticks: Sequence[int], note: int) -> str:
+    """The [ExpertDrums] section. One line per note: `<tick> = N <note> 0`.
 
     The trailing 0 is the sustain length; drum notes are instantaneous, so it is
     always zero. Lines are sorted by tick, which the loader expects.
     """
     lines = ["[ExpertDrums]", "{"]
     for tick in sorted(note_ticks):
-        lines.append(f"  {tick} = N {lane} 0")
+        lines.append(f"  {tick} = N {note} 0")
     lines.append("}")
     return "\n".join(lines) + "\n"
 
@@ -111,7 +112,7 @@ def build_probe_chart_text(
     *,
     resolution: int = 192,
     bpm: float = 120.0,
-    lane: int = DRUM_LANE_KICK,
+    note: int = DRUM_NOTE_KICK,
 ) -> str:
     """Build the full .chart text for the given spacings and return it.
 
@@ -136,7 +137,7 @@ def build_probe_chart_text(
     return (
         _song_section(resolution)
         + _sync_track_section(bpm)
-        + _expert_drums_section(note_ticks, lane)
+        + _expert_drums_section(note_ticks, note)
     )
 
 
@@ -146,7 +147,7 @@ def generate_probe_chart(
     *,
     resolution: int = 192,
     bpm: float = 120.0,
-    lane: int = 0,
+    note: int = DRUM_NOTE_KICK,
 ) -> None:
     """Write a probe .chart to `path`. See interfaces.py for the contract.
 
@@ -159,7 +160,7 @@ def generate_probe_chart(
     it thin -- all the logic sits in build_probe_chart_text above.
     """
     text = build_probe_chart_text(
-        spacings_ms, resolution=resolution, bpm=bpm, lane=lane
+        spacings_ms, resolution=resolution, bpm=bpm, note=note
     )
     with open(path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(text)

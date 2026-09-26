@@ -185,14 +185,9 @@ class DebuggerSurfaceTests(unittest.TestCase):
     def test_debugger_constructs_without_attaching(self):
         dbg = Debugger()
         for name in ("attach", "set_breakpoint", "clear_breakpoint",
-                     "set_hw_data_breakpoint", "read", "write", "run", "stop"):
+                     "read", "write", "run", "stop"):
             self.assertTrue(callable(getattr(dbg, name)), name)
-
-    def test_hw_data_breakpoint_flags_itself_live_only(self):
-        # It must not silently pretend to work before attach; it is unverified.
-        dbg = Debugger()
-        with self.assertRaises(RuntimeError):
-            dbg.set_hw_data_breakpoint(0x140002000)
+        self.assertFalse(hasattr(dbg, "set_hw_data_breakpoint"))
 
     def test_module_exports_the_expected_names(self):
         for name in ("Debugger", "ThreadContext", "BreakpointTable",

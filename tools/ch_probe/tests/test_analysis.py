@@ -223,9 +223,10 @@ class TestProbeSettingsHaveOneHome(unittest.TestCase):
         with self.assertRaises(TypeError):
             analysis.clamp_verdict([])
 
-    def test_probe_chart_spacings_and_lane_come_from_constants(self):
+    def test_probe_chart_spacings_and_note_come_from_constants(self):
         self.assertEqual(tuple(probe_chart.DEFAULT_SPACINGS_MS), tuple(C.PROBE_SPACINGS_MS))
-        self.assertEqual(probe_chart.DRUM_LANE_KICK, C.PROBE_LANE_KICK)
+        self.assertEqual(probe_chart.DRUM_NOTE_KICK, C.PROBE_CHART_NOTE_KICK)
+        self.assertEqual(C.PROBE_CHART_NOTE_KICK, 0)   # a .chart note, not an input lane
 
 
 if __name__ == "__main__":

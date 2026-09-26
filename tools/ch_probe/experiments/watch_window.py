@@ -36,6 +36,7 @@ _REPO_ROOT = os.path.abspath(
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
+from tools.ch_probe import constants as C, engine_finder
 from tools.ch_probe.process import open_process
 from tools.ch_probe.experiments import live
 
@@ -252,10 +253,10 @@ def main() -> None:
     proc = open_process()
     proc.verify_targets()
     print("  Waiting for the song to play (start or unpause it)...")
-    engine = live.find_live_engine(proc)
+    engine = engine_finder.find_live_engine(proc, engine_finder.all_patterns(proc))
     snap = live.read_snapshot(proc, engine)
-    back = proc.read_double(engine + 0x30) * 1000
-    front = proc.read_double(engine + 0x38) * 1000
+    back = proc.read_double(engine + C.OFF_BACK_WINDOW) * 1000
+    front = proc.read_double(engine + C.OFF_FRONT_WINDOW) * 1000
     mode = "PRECISION" if snap.precision else "normal"
     print(f"  Engine at {engine:#x}, {mode} mode, back {back:.2f} ms, front {front:.2f} ms")
     print(f"  Clock {snap.clock_s:.2f} s. Watching until {end_ms/1000:.1f} s.\n")

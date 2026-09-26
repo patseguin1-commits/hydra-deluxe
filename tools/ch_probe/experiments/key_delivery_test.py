@@ -2,7 +2,7 @@
 
 Why this exists. In play_chart.py the keys A, S, L score in Clone Hero but
 J, K, U, Y, T never do -- a clean 100% split on five keys, even though the
-game's own registry map binds all eight correctly and _send_key runs the
+game's own registry map binds all eight correctly and send_key runs the
 SAME code for every key. That should be impossible from the Python side, so
 this test checks delivery OUTSIDE the game: it types the eight drum letters
 into whatever window has focus.
@@ -18,7 +18,7 @@ game-side (focus / raw input / something eating them), NOT my send path.
 If only "a s   l" appear (j, k, u, y, t missing) -> the send path itself is
 dropping those five keys, and that's the bug to fix.
 
-This uses the real InputDriver._send_key, the same one play_chart.py uses, so
+This uses the real InputDriver.send_key, the same one play_chart.py uses, so
 whatever it shows applies directly to the real run.
 """
 
@@ -34,19 +34,11 @@ _REPO_ROOT = os.path.abspath(
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from tools.ch_probe.input_driver import InputDriver
+from tools.ch_probe.input_driver import DEFAULT_BINDINGS, LANE_NAMES, InputDriver
 
-# The eight drum keys, in lane order, as (label, virtual-key code).
-KEYS = [
-    ("A (Green)", 0x41),
-    ("S (Red)", 0x53),
-    ("J (Yellow)", 0x4A),
-    ("K (Blue)", 0x4B),
-    ("L (Kick)", 0x4C),
-    ("U (Y-Cym)", 0x55),
-    ("Y (B-Cym)", 0x59),
-    ("T (G-Cym)", 0x54),
-]
+# The eight drum keys, in lane order, as (label, virtual-key code), from the
+# one key table in input_driver.py.
+KEYS = [(f"{chr(vk)} ({LANE_NAMES[lane]})", vk) for lane, vk in DEFAULT_BINDINGS.items()]
 
 VK_SPACE = 0x20
 
@@ -62,14 +54,14 @@ def main() -> None:
     print("Typing:", " ".join(lbl.split()[0] for lbl, _ in KEYS))
 
     for label, vk in KEYS:
-        driver._send_key(vk, key_up=False)
+        driver.send_key(vk, key_up=False)
         time.sleep(0.02)
-        driver._send_key(vk, key_up=True)
+        driver.send_key(vk, key_up=True)
         time.sleep(0.02)
         # a space between letters so each key's arrival is unambiguous
-        driver._send_key(VK_SPACE, key_up=False)
+        driver.send_key(VK_SPACE, key_up=False)
         time.sleep(0.02)
-        driver._send_key(VK_SPACE, key_up=True)
+        driver.send_key(VK_SPACE, key_up=True)
         time.sleep(0.08)
 
     print("\nDone. Look at Notepad and tell me which letters appeared.")

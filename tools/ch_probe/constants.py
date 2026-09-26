@@ -71,8 +71,18 @@ OFF_BACK_WINDOW = 0x30
 # Front-window constant (double). Min per-side, ~37.5 ms normal.
 OFF_FRONT_WINDOW = 0x38
 
-# Hit time (double): engine timestamp captured at the moment of a hit.
-OFF_HIT_TIME = 0x100
+# Song clock (double, seconds). Proven live on 2026-09-25: play_chart.py reads
+# it continuously and plays whole songs on time. The Ghidra notes called this
+# field "hit time"; the running game shows it is the song clock.
+OFF_SONG_CLOCK = 0x100
+
+# Score (u32). Rises only when a note is hit (proven by play_chart.py).
+OFF_SCORE = 0x94
+
+# Hit-time candidate (double, seconds). The code reading says the game copies
+# the song clock here on a hit. NOT yet confirmed live: step 4 of
+# docs/superpowers/plans/2026-09-25-hit-window-testing.md checks it.
+OFF_HIT_TIME = 0x2E0
 
 # Flags dword. Bit 0x1000 is PrecisionMode (clear = normal).
 OFF_FLAGS = 0x198
@@ -135,20 +145,10 @@ RVA_HITCHECK_THRESHOLD = 0x31406E8     # DAT_1831406e8
 # Expected values in SECONDS (the game's native unit for these constants).
 EXPECT_NORMAL_BACK_S = 0.085
 EXPECT_NORMAL_FRONT_S = 0.0375
-EXPECT_PRECISION_BACK_S = 0.040
-EXPECT_PRECISION_FRONT_S = 0.025
 
-# Legacy ms names still used by the passive probe's clamp verdict.
+# The back-window edges in ms, which the passive probe's clamp verdict uses.
 EXPECT_NORMAL_BACK_MS = 85.0
-EXPECT_NORMAL_FRONT_MS = 37.5
 EXPECT_PRECISION_BACK_MS = 40.0
-EXPECT_PRECISION_FRONT_MS = 25.0
-EXPECT_DIVISOR = 1000.0
-
-# The linear coefficient the originating session read straight from .rdata
-# (resolved double 0.0110924370). Not stored as an RVA in the spec, kept here
-# as a known-good value the formula constants should reproduce.
-KNOWN_LINEAR_COEFFICIENT = 0.0110924370
 
 # Tolerance (ms) for calling a live-read constant "the value we expected".
 CONST_MATCH_TOLERANCE_MS = 0.5
@@ -166,9 +166,11 @@ CONST_KEY_PREFIX_NORMAL = "normal_"
 CONST_KEY_PREFIX_PRECISION = "precision_"
 
 # ---- probe chart layout -------------------------------------------------
-# Note-pair spacings the probe chart lays out, and the lane it uses (the kick,
-# lane 0). probe_chart.py and experiments/active_probe.py both read these.
+# Note-pair spacings the probe chart lays out, and the .chart NOTE number it
+# writes (0 is the kick in a .chart). This is a chart note, not an input lane:
+# input lanes are input_driver.Lane, where the kick is Lane.KICK (4).
+# probe_chart.py and experiments/active_probe.py both read these.
 PROBE_SPACINGS_MS: tuple[float, ...] = (
     30, 50, 100, 150, 180, 185, 190, 195, 205, 211, 220, 240, 300,
 )
-PROBE_LANE_KICK = 0
+PROBE_CHART_NOTE_KICK = 0
