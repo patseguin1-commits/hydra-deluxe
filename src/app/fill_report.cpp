@@ -7,7 +7,6 @@
 #include "app/html_page.h"
 #include "app/report.h"  // report::plain -- strips Clone Hero <color> markup
 #include "core/model.h"  // group_thousands
-#include "core/strutil.h"  // lower_hex
 #include "parse/song.h"  // title_or_unknown
 
 namespace hydra::app::fill_report {
@@ -16,40 +15,17 @@ using html::json_escape_into;
 
 namespace {
 
-// The per-page pieces of this comparison page; the shared skeleton (theme +
-// chrome + table CSS, the sort machinery, the deferred first render) lives in
-// app/html_page.cpp (html::kSortable*), canon from the path report. The
-// columns, chip colors, body, and script below are this report's own.
-// __SUBTITLE__/__FOOTER__/__DATA__ are filled by build_fill_html.
+// This comparison page's own pieces. The stylesheet and the script that sorts,
+// filters and draws the table are shared with the other report pages
+// (html::page_template, docs/adr/0016). __SUBTITLE__/__FOOTER__/__DATA__ are
+// filled by build_fill_html.
 //
 // Every literal here is ASCII: this file compiles into hydra_core, which is
 // not built with /utf-8. Glyphs the page needs go in as HTML entities (markup)
 // or \uXXXX escapes (JavaScript).
-const char* const kTitle =
-    R"page(<title>Fill spawn comparison &mdash; CH 1.0 vs CH 1.1</title>
-<style>
-)page";
+const char* const kTitle = "Fill spawn comparison &mdash; CH 1.0 vs CH 1.1";
 
-const char* const kCssColumns = R"page(
-td.trunc { overflow: hidden; text-overflow: ellipsis; }
-.song { font-weight: 550; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
-td.artist { max-width: 150px; }
-td.charter { max-width: 130px; }
-td.path { max-width: 200px; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
-.dim { color: var(--muted); }
-.pos { color: var(--t0); font-weight: 600; }
-.neg { color: var(--t3); }
-
-)page";
-
-// "1.1 higher" is the interesting, rare case, so it gets the strong green;
-// "1.0 higher" (the common drop) is red, ties are neutral, and the two
-// one-sided statuses are muted so they read as missing data, not as a result.
-const char* const kChipColors =
-    R"page(.s-newhigh{color:var(--t0); border-color:var(--t0)} .s-oldhigh{color:var(--t3)} .s-same{color:var(--tn)} .s-only{color:var(--muted); border-color:transparent}
-)page";
-
-const char* const kBody = R"page(<div class="wrap">
+const char* const kBody = R"page(<div class="wrap fill">
   <header>
     <h1>Fill spawn <span class="accent">CH 1.0 vs CH 1.1</span></h1>
     <div class="sub">__SUBTITLE__</div>
@@ -88,75 +64,43 @@ const char* const kBody = R"page(<div class="wrap">
 
 )page";
 
-const char* const kDataJs =
-    R"page(<script id="data" type="application/json">__DATA__</script>
-<script>
-const ROWS = JSON.parse(document.getElementById('data').textContent);
-
-const COLS = [
-  {k:'song',    t:'Song',        num:false},
-  {k:'artist',  t:'Artist',      num:false},
-  {k:'charter', t:'Charter',     num:false},
-  {k:'s10',     t:'CH 1.0',      num:true},
-  {k:'s11',     t:'CH 1.1',      num:true},
-  {k:'delta',   t:'Delta',       num:true},
-  {k:'p10',     t:'CH 1.0 path', num:false},
-  {k:'p11',     t:'CH 1.1 path', num:false},
-  {k:'acts',    t:'Acts',        num:true},
-  {k:'notes',   t:'Notes',       num:true},
-  {k:'status',  t:'Status',      num:false},
-];
-
-let sortKey = 'delta', sortDir = -1;
-
-)page";
-
-const char* const kPageJs =
-    R"page(const STATUS_CLASS = {'1.1 higher':'s-newhigh', '1.0 higher':'s-oldhigh',
+const char* const kPageJs = R"page(const STATUS_CLASS = {'1.1 higher':'s-newhigh', '1.0 higher':'s-oldhigh',
                       'same':'s-same', 'only 1.0':'s-only', 'only 1.1':'s-only'};
-const DASH = '\u2014';
 
-function visible() {
-  const q = document.getElementById('q').value.trim().toLowerCase();
-  const status = document.getElementById('status').value;
-  return ROWS.filter(r => {
-    if (status && r.status !== status) return false;
-    if (!q) return true;
-    return (r.song + ' ' + r.artist + ' ' + r.charter).toLowerCase().includes(q);
-  });
-}
-
-function render() {
-  const rows = visible();
-  const dir = sortDir;
-  rows.sort((a, b) => {
-    let x = a[sortKey], y = b[sortKey];
-    if (x === null || x === undefined) return 1;
-    if (y === null || y === undefined) return -1;
-    if (typeof x === 'string') return dir * x.localeCompare(y);
-    return dir * (x - y);
-  });
-
-  document.querySelectorAll('#head th').forEach((th, i) => {
-    const c = COLS[i];
-    if (c.k === sortKey) th.setAttribute('aria-sort', dir === 1 ? 'ascending' : 'descending');
-    else th.removeAttribute('aria-sort');
-    th.querySelector('.arrow').textContent =
-      c.k === sortKey ? (dir === 1 ? '\u2191' : '\u2193') : '\u21C5';
-  });
-
-  const body = document.getElementById('body');
-  body.textContent = '';
-  const frag = document.createDocumentFragment();
-
-  for (const r of rows) {
-    const tr = document.createElement('tr');
+const PAGE = {
+  rows: DATA,
+  noun: 'charts',
+  sortKey: 'delta',
+  sortDir: -1,
+  cols: [
+    {k:'song',    t:'Song',        num:false},
+    {k:'artist',  t:'Artist',      num:false},
+    {k:'charter', t:'Charter',     num:false},
+    {k:'s10',     t:'CH 1.0',      num:true},
+    {k:'s11',     t:'CH 1.1',      num:true},
+    {k:'delta',   t:'Delta',       num:true},
+    {k:'p10',     t:'CH 1.0 path', num:false},
+    {k:'p11',     t:'CH 1.1 path', num:false},
+    {k:'acts',    t:'Acts',        num:true},
+    {k:'notes',   t:'Notes',       num:true},
+    {k:'status',  t:'Status',      num:false},
+  ],
+  controls: [['q', 'input'], ['status', 'change']],
+  filter(q) {
+    const status = document.getElementById('status').value;
+    return r => {
+      if (status && r.status !== status) return false;
+      if (!q) return true;
+      return (r.song + ' ' + r.artist + ' ' + r.charter).toLowerCase().includes(q);
+    };
+  },
+  cells(r) {
     const hasDelta = r.delta !== null && r.delta !== undefined;
     const deltaCls = !hasDelta ? 'num dim' : (r.delta > 0 ? 'num pos'
                    : (r.delta < 0 ? 'num neg' : 'num dim'));
     const deltaTxt = !hasDelta ? DASH
                    : (r.delta > 0 ? '+' + r.delta.toLocaleString() : fmt(r.delta));
-    const cells = [
+    return [
       ['song trunc', r.song],
       ['dim trunc artist', r.artist],
       ['dim trunc charter', r.charter],
@@ -167,92 +111,30 @@ function render() {
       ['path trunc', r.p11 || DASH],
       ['num', r.acts_txt],
       ['num', fmt(r.notes)],
-      ['status', null],
+      ['chip ' + (STATUS_CLASS[r.status] || 's-only'), r.status, 'chip'],
     ];
-
-    cells.forEach(([cls, val]) => {
-      const td = document.createElement('td');
-      if (cls === 'status') {
-        const chip = document.createElement('span');
-        chip.className = 'chip ' + (STATUS_CLASS[r.status] || 's-only');
-        chip.textContent = r.status;
-        td.appendChild(chip);
-      } else {
-        td.className = cls;
-        td.textContent = val;
-        if (cls.includes('trunc') && val) td.title = val;
-      }
-      tr.appendChild(td);
-    });
-    frag.appendChild(tr);
-  }
-  body.appendChild(frag);
-
-  const empty = document.getElementById('empty');
-  empty.textContent = 'Nothing matches those filters.';
-  empty.hidden = rows.length > 0;
-  document.getElementById('count').textContent =
-    rows.length.toLocaleString() + ' of ' + ROWS.length.toLocaleString() + ' charts';
-
-  renderStats(rows);
-}
-
-function renderStats(rows) {
-  const n = s => rows.filter(r => r.status === s).length;
-  const gains = rows.filter(r => r.delta > 0).reduce((a, r) => a + r.delta, 0);
-  const losses = rows.filter(r => r.delta < 0).reduce((a, r) => a - r.delta, 0);
-
-  const stats = [
-    ['Charts', rows.length.toLocaleString()],
-    ['1.1 higher', n('1.1 higher').toLocaleString()],
-    ['1.0 higher', n('1.0 higher').toLocaleString()],
-    ['Same', n('same').toLocaleString()],
-    ['Only one side', (n('only 1.0') + n('only 1.1')).toLocaleString()],
-    ['Points gained in 1.1', gains.toLocaleString()],
-    ['Points lost in 1.1', losses.toLocaleString()],
-  ];
-
-  const el = document.getElementById('stats');
-  el.textContent = '';
-  for (const [k, v] of stats) {
-    const d = document.createElement('div');
-    d.className = 'stat';
-    const kk = document.createElement('div'); kk.className = 'stat-k'; kk.textContent = k;
-    const vv = document.createElement('div'); vv.className = 'stat-v'; vv.textContent = v;
-    d.append(kk, vv);
-    el.appendChild(d);
-  }
-}
-
-document.getElementById('q').addEventListener('input', render);
-document.getElementById('status').addEventListener('change', render);
-
+  },
+  stats(rows) {
+    const n = s => rows.filter(r => r.status === s).length;
+    const gains = rows.filter(r => r.delta > 0).reduce((a, r) => a + r.delta, 0);
+    const losses = rows.filter(r => r.delta < 0).reduce((a, r) => a - r.delta, 0);
+    return [
+      ['Charts', rows.length.toLocaleString()],
+      ['1.1 higher', n('1.1 higher').toLocaleString()],
+      ['1.0 higher', n('1.0 higher').toLocaleString()],
+      ['Same', n('same').toLocaleString()],
+      ['Only one side', (n('only 1.0') + n('only 1.1')).toLocaleString()],
+      ['Points gained in 1.1', gains.toLocaleString()],
+      ['Points lost in 1.1', losses.toLocaleString()],
+    ];
+  },
+};
 )page";
 
-// The page shell, concatenated once on first use. Same fragment order as
-// app/dm_report.cpp.
+// The page shell, built once on first use.
 const std::string& page_template() {
-    static const std::string page = std::string(html::kSortableHead) + kTitle +
-                                    html::kSortableCssCore +
-                                    html::kSortableCssTable + kCssColumns +
-                                    html::kSortableCssChip + kChipColors +
-                                    html::kSortableCssTail + kBody + kDataJs +
-                                    html::kSortableJsSorter + kPageJs +
-                                    html::kSortableJsBoot;
+    static const std::string page = html::page_template(kTitle, kBody, kPageJs);
     return page;
-}
-
-// Every record in one store for these settings, indexed by lowercased hash.
-std::unordered_map<std::string, store::RecordListing> index_by_hash(
-    store::RecordStore& store, const std::string& chartmode,
-    const store::CapQuery& cap, const store::Lens& lens) {
-    std::unordered_map<std::string, store::RecordListing> by_hash;
-    for (store::RecordListing& r :
-         store.list_records(chartmode, cap, lens, store::SortColumn::Score,
-                            /*descending=*/true)) {
-        by_hash.emplace(lower_hex(r.hyhash), std::move(r));
-    }
-    return by_hash;
 }
 
 }  // namespace
@@ -264,10 +146,10 @@ std::vector<FillCompareRow> collect_fill_rows(store::RecordStore& old_store,
                                               const store::Lens& lens) {
     // One query per store under identical settings. RecordListing already
     // carries the best path and its summary, so no blob is ever inflated.
-    std::unordered_map<std::string, store::RecordListing> old_by_hash =
-        index_by_hash(old_store, chartmode, cap, lens);
-    std::unordered_map<std::string, store::RecordListing> new_by_hash =
-        index_by_hash(new_store, chartmode, cap, lens);
+    const std::unordered_map<std::string, store::RecordListing> old_by_hash =
+        report::records_by_hash(old_store, chartmode, cap, lens);
+    const std::unordered_map<std::string, store::RecordListing> new_by_hash =
+        report::records_by_hash(new_store, chartmode, cap, lens);
 
     // Walk the union of both key sets so a chart in only one database still
     // gets a row. Ordered so the page's rows come out deterministically.

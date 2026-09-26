@@ -8,15 +8,18 @@
 #include <atomic>
 #include <cstdint>
 #include <optional>
+#include <unordered_map>
+#include <utility>
 #include <string>
 #include <vector>
 
 #include "store/record_store.h"
+#include "core/squeeze_rating.h"
 
 namespace hydra::app::report {
 
-// One table row. Field order is the JSON key order the page's script reads;
-// keep it stable so old and new report files stay comparable.
+// One table row. Field order is the JSON key order the page's script reads,
+// except `hyhash`, which the page never sees.
 struct ReportRow {
     std::string song;
     std::string artist;
@@ -25,7 +28,6 @@ struct ReportRow {
     int rank = 1;
     std::string path;
     int64_t score = 0;
-    int64_t delta = 0;
     int acts = 0;
     int skip = 0;
     std::optional<double> ms;
@@ -41,6 +43,9 @@ struct ReportRow {
     int sqin = 0;
     int sqout = 0;
     int notes = 0;
+    // The chart this row belongs to. Not written to the page: generate_report
+    // counts the distinct charts on the page with it.
+    std::string hyhash;
 };
 
 // Strips Clone Hero's <color=...> markup from a charter credit / title and
@@ -53,6 +58,17 @@ std::string plain(const std::string& text);
 // historical W = 70 this is the original 2/35/70/105/140 ladder.
 std::pair<std::string, std::string> tier_for(const std::optional<double>& ms,
                                              double hit_window_ms = kDefaultHitWindowMs);
+
+// The same label, read from an already-built timing_tiers table, so a caller
+// labeling many rows builds the table once.
+std::pair<std::string, std::string> tier_for(const std::optional<double>& ms,
+                                             const std::vector<TimingTier>& tiers);
+
+// Every listed record for one chart mode, cap and lens, keyed by its chart
+// hash in lower case. Both comparison pages join on this.
+std::unordered_map<std::string, store::RecordListing> records_by_hash(
+    store::RecordStore& store, const std::string& chartmode, const store::CapQuery& cap,
+    const store::Lens& lens);
 
 // Reads every stored record at the wanted cap and lens (skipping ones the
 // store calls stale) and produces up to max_paths rows per chart, best score
@@ -100,17 +116,13 @@ struct ReportOptions {
 
 struct GeneratedReport {
     std::string html;  // empty when the store held no reportable rows
-    int64_t songs = 0;
-    int64_t records = 0;
+    int64_t songs = 0;    // distinct charts with rows on the page
+    int64_t records = 0;  // records with rows on the page (one rank-1 row each)
     int64_t rows = 0;
 };
 
 GeneratedReport generate_report(store::RecordStore& store,
                                 const ReportOptions& options);
-
-// repr(float) / json.dumps float formatting (shortest round-trip). Exposed
-// for tests.
-std::string py_repr(double v);
 
 }  // namespace hydra::app::report
 

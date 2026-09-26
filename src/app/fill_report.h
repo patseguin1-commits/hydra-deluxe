@@ -1,6 +1,6 @@
 // Comparison report: the same charts scored under Clone Hero 1.0's fill-spawn
-// rule against Clone Hero 1.1's. A parallel of app/dm_report.h, kept separate
-// so app/report.h's byte-exact parity test is never disturbed.
+// rule against Clone Hero 1.1's, on the shared report shell like
+// app/dm_report.h.
 //
 // A drum fill only spawns if the player's SP meter filled up by some deadline.
 // Clone Hero 1.0 set that deadline about one fill-length before the fill;

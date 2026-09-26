@@ -70,11 +70,6 @@ std::pair<std::vector<ScanItem>, std::vector<std::string>> discover_charts(
     const std::vector<std::string>& rootfolders,
     const std::function<void(int)>& cb_progress = nullptr);
 
-// Chord counts by code, for the "how big is this chart" display. Dispatches
-// via load_songpath, so it takes any supported chart type
-// (.mid/.chart/.sng/.srb).
-std::map<std::string, int> count_chart_chords(const std::string& filepath);
-
 // The chart file's hyhash: the same MD5 the library scan writes to the
 // songmeta/charts rows, so a tool can look a chart up in the record store
 // by path alone. Returns an empty string if the file cannot be read.

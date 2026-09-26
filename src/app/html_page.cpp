@@ -104,19 +104,17 @@ std::string render_page(const char* page_template, std::string data_json,
 }
 
 
-// ---- sortable page fragments ----------------------------------------------
-// The shared skeleton of the two sortable report pages. The path report's
-// bytes are pinned to hydra_report.py's PAGE (byte-exact parity), so these
-// fragments are canon from that page verbatim, comments and \uXXXX escape
-// style included; the dm page assembles from the same fragments (a few
-// rules, like .toggle and td.path, simply match nothing there). Column
-// widths, chip colors, the body, and each page's own script stay per-page.
+// ---- the shared report page -----------------------------------------------
 
-const char* const kSortableHead = R"frag(<meta charset="utf-8">
+namespace {
+
+const char* const kHead = R"frag(<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 )frag";
 
-const char* const kSortableCssCore = R"frag(:root {
+}  // namespace
+
+const char* const kReportCss = R"css(:root {
   color-scheme: light dark;
   --paper: #faf9f7;
   --surface: #ffffff;
@@ -139,22 +137,6 @@ const char* const kSortableCssCore = R"frag(:root {
     --tn: #5c626e;
     --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
   }
-}
-:root[data-theme="dark"] {
-  --paper: #101219; --surface: #171a22; --raised: #1e222c;
-  --ink: #e9e7e2; --muted: #8f95a1; --rule: #282d39;
-  --sp: #f0b429; --sp-soft: #3a2e12;
-  --t0: #4fbf94; --t1: #e0b13f; --t2: #f0894e; --t3: #f2686b; --t4: #e07ac0; --t5: #a78bfa;
-  --tn: #5c626e;
-  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
-}
-:root[data-theme="light"] {
-  --paper: #faf9f7; --surface: #ffffff; --raised: #f2f0ec;
-  --ink: #15171d; --muted: #6a6e79; --rule: #e3e1db;
-  --sp: #b07d0a; --sp-soft: #f6e7c2;
-  --t0: #2c7a5e; --t1: #9a7a1e; --t2: #b85f2c; --t3: #b23c3c; --t4: #8e3070; --t5: #5b3fa8;
-  --tn: #9aa0ab;
-  --shadow: 0 1px 2px rgba(20,22,28,.06), 0 8px 24px rgba(20,22,28,.05);
 }
 
 * { box-sizing: border-box; }
@@ -195,9 +177,9 @@ input[type="search"] { min-width: 220px; flex: 1 1 220px; }
 button { cursor: pointer; }
 button:hover, select:hover { border-color: var(--sp); }
 
-/* Sorting is the point of this page, so it gets a control of its own rather
-   than living only on column headers -- with fourteen columns, the ones worth
-   sorting by are usually scrolled off the right-hand side. */
+/* Sorting is the point of these pages, so it gets a control of its own rather
+   than living only on column headers -- with a dozen or more columns, the ones
+   worth sorting by are usually scrolled off the right-hand side. */
 .sorter { display: inline-flex; align-items: center; gap: 6px; }
 .sorter label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
 #sortdir { min-width: 108px; text-align: left; }
@@ -206,9 +188,7 @@ input:focus-visible, select:focus-visible, th:focus-visible, button:focus-visibl
 }
 .toggle { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); cursor: pointer; user-select: none; }
 .count { color: var(--muted); font-size: 13px; margin-left: auto; }
-)frag";
 
-const char* const kSortableCssTable = R"frag(
 .tablewrap {
   overflow-x: auto; background: var(--surface);
   border: 1px solid var(--rule); border-radius: 10px; box-shadow: var(--shadow);
@@ -242,23 +222,138 @@ tbody tr.best td:first-child { box-shadow: inset 3px 0 0 var(--sp); }
 thead th:first-child { left: 0; z-index: 4; }
 tbody td:first-child { position: sticky; left: 0; z-index: 1; background: var(--surface); }
 tbody tr:hover td:first-child { background: var(--raised); }
-)frag";
 
-const char* const kSortableCssChip = R"frag(.chip {
+/* Every text column is capped. Left to size themselves, a full-discography
+   path string (hundreds of activations) or a charter credit carrying Clone
+   Hero colour markup stretches its column to thousands of pixels and pushes
+   the numbers off the far right of the page. Hover for the full value; the
+   title attribute carries it. */
+td.trunc { overflow: hidden; text-overflow: ellipsis; }
+.song { font-weight: 550; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+td.artist { max-width: 150px; }
+td.charter { max-width: 150px; }
+td.mode { max-width: 190px; }
+td.path { max-width: 230px; }
+.dim { color: var(--muted); }
+.path { color: var(--ink); }
+.pos { color: var(--t0); font-weight: 600; }
+.neg { color: var(--t3); }
+/* The two comparison pages size a few columns their own way. */
+.dm .song { max-width: 260px; }
+.dm td.artist { max-width: 170px; }
+.fill td.charter { max-width: 130px; }
+.fill td.path { max-width: 200px; font-size: 12px; }
+
+.chip {
   display: inline-block; padding: 1px 7px; border-radius: 999px;
   font-size: 11px; font-weight: 600; letter-spacing: .01em;
   border: 1px solid currentColor;
 }
-)frag";
+.t0{color:var(--t0)} .t1{color:var(--t1)} .t2{color:var(--t2)}
+.t3{color:var(--t3)} .t4{color:var(--t4)} .t5{color:var(--t5)} .tn{color:var(--tn); border-color:transparent}
+.s-matched{color:var(--t0)} .s-above{color:var(--t1)} .s-unmatched{color:var(--tn); border-color:transparent}
+/* "1.1 higher" is the interesting, rare case, so it gets the strong green;
+   "1.0 higher" (the common drop) is red, ties are neutral, and the two
+   one-sided statuses are muted so they read as missing data, not a result. */
+.s-newhigh{color:var(--t0); border-color:var(--t0)} .s-oldhigh{color:var(--t3)} .s-same{color:var(--tn)} .s-only{color:var(--muted); border-color:transparent}
 
-const char* const kSortableCssTail = R"frag(
 .empty { padding: 40px; text-align: center; color: var(--muted); }
 footer { color: var(--muted); font-size: 12px; }
-</style>
+)css";
 
-)frag";
+const char* const kReportJsHead = R"js(<script id="data" type="application/json">__DATA__</script>
+<script>
+const DATA = JSON.parse(document.getElementById('data').textContent);
+const DASH = '\u2014';
+const fmt = n => n === null || n === undefined ? DASH : n.toLocaleString();
+const fmtMs = n => n === null || n === undefined ? DASH : n.toFixed(1);
 
-const char* const kSortableJsSorter = R"frag(const sortby = document.getElementById('sortby');
+)js";
+
+const char* const kReportJs = R"js(
+// Everything below is the same on every report page. The page's own PAGE
+// (above) names its columns, which rows its filters keep, how a row is drawn,
+// and which stats sit above the table.
+const ROWS = PAGE.rows;
+const COLS = PAGE.cols;
+let sortKey = PAGE.sortKey, sortDir = PAGE.sortDir;
+
+function visible() {
+  const q = document.getElementById('q').value.trim().toLowerCase();
+  return ROWS.filter(PAGE.filter(q));
+}
+
+function render() {
+  const rows = visible();
+  const dir = sortDir;
+  rows.sort((a, b) => {
+    let x = a[sortKey], y = b[sortKey];
+    // Nulls always sort to the bottom, whichever direction is active.
+    if (x === null || x === undefined) return 1;
+    if (y === null || y === undefined) return -1;
+    if (typeof x === 'string') return dir * x.localeCompare(y);
+    return dir * (x - y);
+  });
+
+  document.querySelectorAll('#head th').forEach((th, i) => {
+    const c = COLS[i];
+    if (c.k === sortKey) th.setAttribute('aria-sort', dir === 1 ? 'ascending' : 'descending');
+    else th.removeAttribute('aria-sort');
+    // Inactive columns keep a dim double arrow, so it is obvious every one
+    // of them can be sorted.
+    th.querySelector('.arrow').textContent =
+      c.k === sortKey ? (dir === 1 ? '\u2191' : '\u2193') : '\u21c5';
+  });
+
+  const body = document.getElementById('body');
+  body.textContent = '';
+  const frag = document.createDocumentFragment();
+
+  for (const r of rows) {
+    const tr = document.createElement('tr');
+    const rowCls = PAGE.rowClass ? PAGE.rowClass(r) : '';
+    if (rowCls) tr.className = rowCls;
+
+    // A cell is [class, text], or [chip class, text, 'chip'] for a coloured
+    // pill such as the timing tier or a status.
+    for (const [cls, val, kind] of PAGE.cells(r)) {
+      const td = document.createElement('td');
+      if (kind === 'chip') {
+        const chip = document.createElement('span');
+        chip.className = cls;
+        chip.textContent = val;
+        td.appendChild(chip);
+      } else {
+        td.className = cls;
+        td.textContent = val;
+        // Truncated cells still have to be readable somehow.
+        if (cls.includes('trunc') && val) td.title = val;
+      }
+      tr.appendChild(td);
+    }
+    frag.appendChild(tr);
+  }
+  body.appendChild(frag);
+
+  const empty = document.getElementById('empty');
+  empty.textContent = 'Nothing matches those filters.';
+  empty.hidden = rows.length > 0;
+  document.getElementById('count').textContent =
+    rows.length.toLocaleString() + ' of ' + ROWS.length.toLocaleString() + ' ' + PAGE.noun;
+
+  const el = document.getElementById('stats');
+  el.textContent = '';
+  for (const [k, v] of PAGE.stats(rows)) {
+    const d = document.createElement('div');
+    d.className = 'stat';
+    const kk = document.createElement('div'); kk.className = 'stat-k'; kk.textContent = k;
+    const vv = document.createElement('div'); vv.className = 'stat-v'; vv.textContent = v;
+    d.append(kk, vv);
+    el.appendChild(d);
+  }
+}
+
+const sortby = document.getElementById('sortby');
 const sortdir = document.getElementById('sortdir');
 
 COLS.forEach(c => {
@@ -307,14 +402,28 @@ COLS.forEach(c => {
   head.appendChild(th);
 });
 
-const fmt = n => n === null || n === undefined ? '—' : n.toLocaleString();
-)frag";
+for (const [id, ev] of PAGE.controls)
+  document.getElementById(id).addEventListener(ev, render);
 
-const char* const kSortableJsBoot = R"frag(// Building tens of thousands of rows takes a moment, and doing it inline
+// Building tens of thousands of rows takes a moment, and doing it inline
 // leaves the window blank until it finishes - which reads as a broken page.
 // Let the shell paint first, placeholder and all, then fill the table.
 requestAnimationFrame(() => setTimeout(() => setSort(sortKey, sortDir), 0));
 </script>
-)frag";
+)js";
+
+std::string page_template(const char* title, const char* body, const char* page_js) {
+    std::string page = kHead;
+    page += "<title>";
+    page += title;
+    page += "</title>\n<style>\n";
+    page += kReportCss;
+    page += "</style>\n\n";
+    page += body;
+    page += kReportJsHead;
+    page += page_js;
+    page += kReportJs;
+    return page;
+}
 
 }  // namespace hydra::app::html

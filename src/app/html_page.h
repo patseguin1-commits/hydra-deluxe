@@ -1,6 +1,7 @@
-// Shared plumbing for the HTML report pages (app/report.cpp and
-// app/dm_report.cpp): template substitution and the escaping helpers both
-// pages embed their row data with.
+// Shared plumbing for the three HTML report pages (app/report.cpp,
+// app/dm_report.cpp, app/fill_report.cpp): the one stylesheet and script they
+// all use, template substitution, and the escaping helpers they embed their
+// row data with.
 
 #ifndef HYDRA_APP_HTML_PAGE_H
 #define HYDRA_APP_HTML_PAGE_H
@@ -27,21 +28,20 @@ void json_escape_into(std::string& out, const std::string& s);
 std::string render_page(const char* page_template, std::string data_json,
                         const std::string& subtitle, const std::string& footer);
 
-// ---- sortable page fragments ----------------------------------------------
-// The shared skeleton of the two sortable report pages (app/report.cpp and
-// app/dm_report.cpp): theme + chrome CSS, the table CSS, the chip base, the
-// sort machinery, and the deferred first render. Each page concatenates these
-// with its own title, column widths, chip colors, body, and script. The path
-// report's assembled bytes stay pinned to hydra_report.py's PAGE, so the
-// fragments are canon from that page verbatim — a change here changes both
-// pages, which is the point.
-extern const char* const kSortableHead;      // the two <meta> lines
-extern const char* const kSortableCssCore;   // :root themes .. .count
-extern const char* const kSortableCssTable;  // .tablewrap .. sticky first col
-extern const char* const kSortableCssChip;   // .chip base rule
-extern const char* const kSortableCssTail;   // .empty/footer + </style>
-extern const char* const kSortableJsSorter;  // setSort + header builder + fmt
-extern const char* const kSortableJsBoot;    // deferred first render + </script>
+// ---- the shared report page -----------------------------------------------
+// All three report pages are one stylesheet and one script wrapped around each
+// page's own title, body markup and PAGE settings (docs/adr/0016). Both stay
+// ASCII: this file compiles into hydra_core, so a glyph goes in as an HTML
+// entity or a \uXXXX JavaScript escape.
+extern const char* const kReportCss;     // every rule the three pages use
+extern const char* const kReportJsHead;  // the data tag, DATA, DASH, fmt, fmtMs
+extern const char* const kReportJs;      // sorting, filtering, drawing, first render
+
+// One page's template: the shared head, stylesheet and script around the
+// page's <title> text, its body markup and its `const PAGE = {...};` script.
+// The result still carries __SUBTITLE__, __FOOTER__ and __DATA__ for
+// render_page to fill.
+std::string page_template(const char* title, const char* body, const char* page_js);
 
 }  // namespace hydra::app::html
 
