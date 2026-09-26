@@ -1553,3 +1553,10 @@ TEST_CASE("a current-version write purges the chart's old-version rows and their
     CHECK(scalar(path, "SELECT COUNT(*) FROM paths WHERE hyhash='other'") == others);
     std::remove(path.c_str());
 }
+
+// SQLite switches a feature on when its SQLITE_ENABLE_* macro is defined at
+// all, whatever its value (sqlite.org/compile.html), so the old
+// "SQLITE_ENABLE_FTS5=0" compiled full-text search in. Hydra never uses it.
+TEST_CASE("the vendored SQLite is built without FTS5") {
+    CHECK(sqlite3_compileoption_used("ENABLE_FTS5") == 0);
+}

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "app/config.h"
+#include "core/winstr.h"
 #include "image/decode.h"
 
 namespace hydra::ui {
@@ -18,7 +19,9 @@ namespace {
 // read/decode/GPU failure rather than asserting -- resource/ is best-effort,
 // matching main.cpp's app-icon load right above where load_icons is called.
 ImTextureID load_png_texture(ID3D11Device* device, const char* path) {
-    FILE* f = std::fopen(path, "rb");
+    // UTF-8 path through the wide API, so an install folder with non-ASCII
+    // characters still finds its icons.
+    FILE* f = hydra::fopen_utf8(path, L"rb");
     if (!f) return 0;
     std::fseek(f, 0, SEEK_END);
     long size = std::ftell(f);

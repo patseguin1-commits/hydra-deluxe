@@ -11,10 +11,8 @@
 #include "app/preview_source.h"
 #include "core/winstr.h"
 
-// Match the macros the miniaudio implementation TU (third_party/miniaudio.c) was
-// compiled with, so the declarations here agree with those definitions.
-#define MA_NO_ENCODING
-#define MA_NO_GENERATION
+// miniaudio's configuration macros come from the miniaudio target
+// (CMakeLists.txt), the same set its implementation TU is compiled with.
 #include "miniaudio.h"
 
 // stb_vorbis is compiled as its own TU (third_party/stb/stb_vorbis.c); take only

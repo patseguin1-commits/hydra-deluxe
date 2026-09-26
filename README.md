@@ -66,8 +66,8 @@ SQLite, miniz, doctest, nlohmann/json, stb_image) is vendored under
 `third_party/`.
 
 ```
-.\build_cpp.ps1              # configure + build everything (Release)
-.\build_cpp.ps1 -Package     # ...then zip a release (build-cpp\package\)
+.\build_cpp.ps1              # configure + build everything (Release), dev tools too
+.\build_cpp.ps1 -Preset ship -Package   # zip a release without the GUI tests
 .\build_cpp.ps1 -Target hydra_tests
 .\build-cpp\Release\hydra_tests.exe    # run the test suite
 ```
@@ -79,7 +79,8 @@ To build the Windows installer (needs Inno Setup 6:
 .\installer\build_installer.ps1        # -> build-cpp\installer\Hydra-<ver>-setup.exe
 ```
 
-It builds Release, stages the ship list via `cmake --install` (so stray user
+It builds Release with the `ship` preset (in `build-ship\`, without the
+attached GUI tests), stages the ship list via `cmake --install` (so stray user
 data in the build tree can never leak into a release), downloads and caches
 the VC++ redistributable, and compiles `installer\hydra.iss`.
 
@@ -89,8 +90,8 @@ lossless round-trips over that corpus.
 
 ### Developer tools
 
-Two more console programs live in `tools/` and are built on demand
-(`.\build_cpp.ps1 -Target hydra_bench`), not shipped. `hydra_bench` times the
+Two more console programs live in `tools/`. A plain `.\build_cpp.ps1` builds
+them; they are not shipped. `hydra_bench` times the
 analysis path — parse, search and database write, separately, per chart — so a
 change to the engine can be measured instead of guessed at.
 

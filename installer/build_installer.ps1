@@ -1,13 +1,15 @@
 # Build the Hydra Windows installer (Inno Setup).
 #
 #   .\installer\build_installer.ps1              # build Release, stage, compile setup.exe
-#   .\installer\build_installer.ps1 -SkipBuild   # reuse the existing Release build
+#   .\installer\build_installer.ps1 -SkipBuild   # reuse the existing ship build
 #
 # Output: build-cpp\installer\Hydra-<version>-setup.exe
 #
-# The staging step uses `cmake --install`, never a glob of build-cpp\Release:
-# that folder accumulates dev hydra*.db files (hundreds of MB) that must never
-# ship. The install() rules in CMakeLists.txt define the exact ship list.
+# It builds the "ship" preset in build-ship\, where Hydra.exe has no attached
+# GUI tests and so no repo paths. The staging step uses `cmake --install`,
+# never a glob of a Release folder: dev folders accumulate hydra*.db files
+# (hundreds of MB) that must never ship. The install() rules in
+# CMakeLists.txt define the exact ship list.
 #
 # Prerequisite: Inno Setup 6 (winget install -e --id JRSoftware.InnoSetup).
 
@@ -19,28 +21,7 @@ $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot                  # <repo>\installer
 $repo = Split-Path $root               # <repo>
 
-# Same lookup as build_cpp.ps1: prefer PATH, else the VS-bundled cmake.
-function Find-CMake {
-    $onPath = Get-Command cmake -ErrorAction SilentlyContinue
-    if ($onPath) { return $onPath.Source }
-
-    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
-    if (Test-Path $vswhere) {
-        $vs = & $vswhere -latest -products * `
-            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-            -property installationPath
-        # -latest only reports instances in a "complete" state; a VS with a
-        # pending update reports nothing there but still shows under -all.
-        if (-not $vs) {
-            $vs = & $vswhere -all -prerelease -products * -property installationPath
-        }
-        foreach ($path in @($vs)) {
-            $candidate = Join-Path $path "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
-            if (Test-Path $candidate) { return $candidate }
-        }
-    }
-    throw "cmake.exe not found (not on PATH and no Visual Studio C++ install located)."
-}
+. (Join-Path $repo "tools\find_cmake.ps1")
 
 function Find-ISCC {
     $onPath = Get-Command iscc -ErrorAction SilentlyContinue
@@ -56,10 +37,11 @@ function Find-ISCC {
     throw "ISCC.exe not found. Install Inno Setup: winget install -e --id JRSoftware.InnoSetup"
 }
 
-# 1. Build Release.
+# 1. Build Release with the ship preset.
 if (-not $SkipBuild) {
-    & (Join-Path $repo "build_cpp.ps1")
+    & (Join-Path $repo "build_cpp.ps1") -Preset ship
 }
+$build = Join-Path $repo "build-ship"
 
 # 2. Version from the single source of truth in CMakeLists.txt.
 $cmakeLists = Get-Content (Join-Path $repo "CMakeLists.txt") -Raw
@@ -70,14 +52,23 @@ Write-Host "Hydra version: $version"
 
 # 3. Stage the ship list into a clean dir via the install() rules.
 $cmake = Find-CMake
-$stage = Join-Path $repo "build-cpp\stage"
+$stage = Join-Path $build "stage"
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
-& $cmake --install (Join-Path $repo "build-cpp") --config Release --prefix $stage
+& $cmake --install $build --config Release --prefix $stage
 if ($LASTEXITCODE -ne 0) { throw "cmake --install failed" }
 
 # Guard the invariant: no user data may ever ship.
 $leaked = Get-ChildItem $stage -Recurse -Include *.db, *_settings.ini, *_ui.ini
 if ($leaked) { throw "user data leaked into the staging dir: $($leaked.FullName -join ', ')" }
+
+# Guard the other invariant: the shipped exe holds no repo paths. They come
+# only from the attached GUI tests, which the ship preset leaves out.
+$srcDir = $repo -replace '\\', '/'
+$exeText = [Text.Encoding]::GetEncoding(28591).GetString(
+    [IO.File]::ReadAllBytes((Join-Path $stage "Hydra.exe")))
+foreach ($p in "$srcDir/testdata/input", "$srcDir/assets/preview", "$srcDir/resource") {
+    if ($exeText.Contains($p)) { throw "Hydra.exe holds the repo path $p; build it with -Preset ship" }
+}
 
 # 4. VC++ x64 redistributable (chained by the installer). Cached out of git.
 $redistDir = Join-Path $root "redist"

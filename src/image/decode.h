@@ -5,8 +5,7 @@
 // non-static symbols), yet both the GUI's icons (src/ui/icons.cpp) and the
 // Preview renderer's authored textures (src/render) need PNG/JPEG decoding. So
 // the STB_IMAGE_IMPLEMENTATION lives here, behind a small decode function, and
-// both link this tiny library instead of each defining their own copy (see
-// docs/adr/0007 and the note in render/mesh.h).
+// both link this tiny library instead of each defining their own copy.
 
 #ifndef HYDRA_IMAGE_DECODE_H
 #define HYDRA_IMAGE_DECODE_H
