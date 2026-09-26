@@ -79,3 +79,12 @@ user-visible behavior was a hard requirement. Content-addressing whole
 records instead of paths: record bytes are settings-dependent by
 construction (the header carries the limit), so identical path sets would
 still store twice.
+
+## Note, 2026-09-26
+
+The migrations that brought 1.6 and older databases into this schema are
+gone, and so is the Uncapped import (user decision 5 of the 2026-09-26 audit
+plan). An old `records` table is left in the file, unread. Rows those
+migrations already wrote carry `ms_enabled = -1`; no lens has that value, so
+lookups never see them and the chart reads Not analyzed. The next analysis of
+the chart deletes them along with any other row this build cannot read.

@@ -102,8 +102,6 @@ The Star Power meter ceiling the analysis runs under, in bars. 4 is Clone Hero's
 
 Results are kept per cap. Changing the cap switches which record the app shows, and a chart is only analyzed again when it has no record at the current cap. The path report follows the current cap; the leaderboard comparison only runs at 4 bars.
 
-If you used the pre-1.6 Hydra Uncapped app, its records are copied into the main library the first time 1.6 opens. The old `hydra_uncapped.db` is left untouched.
-
 #### Analyze button
 Smash this button to analyze the song and generate paths. The result will be saved and pulled up again whenever you check on this song in the future. Long analyses show a progress bar and can be cancelled; closing the window also cancels them.
 

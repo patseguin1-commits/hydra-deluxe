@@ -12,8 +12,8 @@
 ;     stay writable for standard users.
 ;   * The uninstaller removes only the files it installed. Runtime-created
 ;     hydra*.db / *_settings.ini / *_ui.ini / hydra_*.html survive on purpose.
-;     That includes hydra_uncapped.db from the pre-1.6 Uncapped edition: the
-;     app imports it on first launch and never touches it again.
+;     That includes hydra_uncapped.db from the pre-1.6 Uncapped edition,
+;     which the app no longer reads.
 ;   * [InstallDelete] clears the pre-1.6 HydraUncapped.exe and its shortcut on
 ;     upgrade, since the installer otherwise leaves files it no longer ships.
 ;   * AppId must never change across releases, or upgrades stop replacing

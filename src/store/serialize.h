@@ -106,12 +106,6 @@ private:
 std::vector<uint8_t> write_record(const HydraRecord& record,
                                   uint32_t version = kBlobFormatVersion);
 
-// The SP cap a blob was analyzed at, read from its fixed header alone (the
-// first 18 bytes are enough for every format version). nullopt if the header
-// is malformed or the cap was never recorded. Lets the store key rows by cap
-// without inflating the paths.
-std::optional<int> peek_sp_cap(const std::vector<uint8_t>& head);
-
 // Throws SerializeError if the blob's format version doesn't match, or the
 // bytes are truncated/malformed. The single-argument form returns a record
 // whose Timecodes carry raw ticks only (see the header comment) — use the

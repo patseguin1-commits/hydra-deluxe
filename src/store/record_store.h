@@ -91,7 +91,8 @@ struct CapQuery {
 // stores value 0, because the engine ignores the number when the limit is off
 // -- "off at 10" and "off at 42" ran the identical search.
 struct Lens {
-    // 1 = ms limit on, 0 = off, -1 = a sentinel (below).
+    // 1 = ms limit on, 0 = off. Rows an older Hydra migrated in carry -1
+    // ("settings unknown"); no lens has it, so no lookup finds them.
     int ms_enabled = 0;
     int ms_value = 0;
     int depth_mode = 0;  // 0 = scores, 1 = points -- the INI's own ints
@@ -106,16 +107,6 @@ struct Lens {
         lens.depth_value = depth_value;
         return lens;
     }
-
-    // A row migrated or imported from an older database: it has a result, but
-    // nothing records which settings produced it. Such a row always reads
-    // Stale, and its stored blob is never decoded.
-    static Lens sentinel() {
-        Lens lens;
-        lens.ms_enabled = -1;
-        return lens;
-    }
-    bool is_sentinel() const { return ms_enabled == -1; }
 
     // Spelled out rather than defaulted: this project builds as C++17.
     bool operator==(const Lens& other) const {
@@ -172,9 +163,9 @@ std::string current_record_version();
 
 // What a stored-record lookup found. The store is the only place that decides
 // whether a row is usable: NotAnalyzed (no row at all), Stale (a row another
-// Hydra version wrote, or one migrated in with unknown settings -- either way
-// its contents are not trusted and its blob is never decoded), or Ready (a
-// real result -- which may legitimately have zero paths).
+// Hydra version wrote, in an older path layout, or under other rules -- its
+// contents are not trusted and its blob is never decoded), or Ready (a real
+// result -- which may legitimately have zero paths).
 enum class RecordStatus { NotAnalyzed, Stale, Ready };
 
 // The answer to get_record: the status, plus the payload when it is Ready.
@@ -182,7 +173,7 @@ struct RecordLookup {
     RecordStatus status = RecordStatus::NotAnalyzed;
     std::string hyversion;              // the row's stamp; empty when NotAnalyzed
     // Why a Stale row is Stale; both can be true, neither is when not Stale.
-    bool stale_build = false;  // another Hydra build, an older path layout, or a migrated row
+    bool stale_build = false;  // another Hydra build or an older path layout
     bool stale_rules = false;  // this path layout, analyzed under other rules
     std::optional<HydraRecord> record;  // set only when Ready
     std::optional<SongTiming> timing;   // set when Ready and the song is registered
@@ -246,8 +237,8 @@ struct DynamicsKey {
 class RecordStore {
 public:
     // dbpath may be ":memory:" for an ephemeral store (used by tests). A db
-    // from before 1.6 (records keyed without sp_cap) is migrated in place on
-    // open, in one transaction; a failure rolls back and rethrows.
+    // from Hydra 1.6 or older keeps its old records table, unread: its charts
+    // read Not analyzed (user decision 2026-09-26).
     // rules_fingerprint: core::Rules::fingerprint() of the rules this process
     // runs under. A row stamped with any other fingerprint reads Stale.
     // core::kNoRulesFingerprint (a bad hydra_rules.ini) makes every row Stale.
@@ -262,8 +253,8 @@ public:
 
     // ---- writing ----------------------------------------------------------
 
-    // Registers a song so records can be stored against it. Idempotent (INSERT
-    // OR IGNORE).
+    // Registers a song so records can be stored against it. Registering it
+    // again updates its names and keeps its tempo map.
     void add_song(const std::string& hyhash, const std::string& ref_name,
                  const std::string& ref_artist, const std::string& ref_charter,
                  const Song& song);
@@ -299,8 +290,7 @@ public:
 
     // True when a current-version record exists for this exact key -- cap and
     // lens both -- the "skip, already analyzed" test for a batch run. Stale
-    // rows and sentinel rows don't count, and neither does a result from
-    // different settings.
+    // rows don't count, and neither does a result from different settings.
     bool has_record(const RecordKey& key);
 
     // One record's song identity, as yielded by for_each_blob: the song's
@@ -340,25 +330,7 @@ public:
         const std::function<void(const BlobRow&, const HydraRecord*)>& fn,
         const std::atomic<bool>* cancel = nullptr);
 
-    // One-time import of the pre-1.6 Uncapped edition's separate library.
-    // Copies that file's current-version records (and their songs) into this
-    // store under the cap each was analyzed at. Never writes the other file.
-    // Records a note in `meta` so a second call is a no-op. Returns rows
-    // copied (0 when already done, the file is missing/unreadable, or it has
-    // no records table).
-    //
-    // The old file records no settings beyond the cap, so every copied row
-    // lands with the sentinel lens and reads Stale: "there was a result here,
-    // but nobody knows what it answered". Re-analyzing replaces it.
-    int import_legacy_uncapped(const std::string& uncapped_db_path);
-
     // ---- maintenance --------------------------------------------------
-
-    // Removes results that no longer match this store's current version, plus
-    // the sentinel rows migrated in from an older database, then collects any
-    // path left with nothing pointing at it. Returns the number of result rows
-    // removed.
-    int drop_stale_records();
 
     // Recomputes the summary columns from stored paths. Returns rows touched.
     int reindex();
@@ -387,7 +359,9 @@ public:
     // ---- chart library (scan results) ----------------------------------
 
     // Replaces the whole library with `items`: a scan always fully
-    // supersedes the previous one.
+    // supersedes the previous one. All or nothing: a failure keeps the
+    // previous scan's rows. Songs that already have a row take the names
+    // this scan read (the first copy wins when a chart appears twice).
     void rebuild_chart_library(const std::vector<ChartLibraryEntry>& items);
 
     // The previous scan's rows as a rescan cache (empty on a fresh db, or a
@@ -418,12 +392,11 @@ private:
     std::recursive_mutex mutex_;
 
     void exec(const char* sql);
-    bool has_table(const char* table);
     bool has_column(const char* table, const char* column);
-    void add_missing_columns();
-    void migrate_records_to_cap_key();
     void create_result_tables();
-    void migrate_records_to_results();
+    // The song's raw tempomap blob, read under the lock; the caller decodes it
+    // with no lock held. nullopt if the song isn't registered.
+    std::optional<std::vector<uint8_t>> read_tempomap(const std::string& hyhash);
     // Every path node one result references, keyed by hash — what
     // path_codec::rebuild_record's lookup closure reads. The `stmt` overload
     // reads through a statement its caller compiled: for_each_blob prepares one

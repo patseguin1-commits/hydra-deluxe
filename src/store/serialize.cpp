@@ -152,18 +152,6 @@ std::vector<uint8_t> write_record(const HydraRecord& record, uint32_t version) {
     return std::move(w.bytes);
 }
 
-std::optional<int> peek_sp_cap(const std::vector<uint8_t>& head) {
-    try {
-        BinaryReader r(head);
-        uint32_t version = r.u32();
-        if (version < 1 || version > kBlobFormatVersion) return std::nullopt;
-        r.opt_f64();  // ms_limit
-        return r.opt_i32();
-    } catch (const SerializeError&) {
-        return std::nullopt;
-    }
-}
-
 HydraRecord read_record(const std::vector<uint8_t>& blob) {
     BinaryReader r(blob);
     uint32_t version = r.u32();

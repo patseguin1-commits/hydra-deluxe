@@ -142,8 +142,8 @@ rule (the comparison only runs at 4 bars, because that is what the leaderboard
 plays).
 
 Before 1.6 this shipped as a second program, Hydra Uncapped, with its own
-`hydra_uncapped.db`. The first time 1.6 opens it copies those records into
-`hydra.db` under the cap each ran at, and leaves the old file alone.
+`hydra_uncapped.db`. Hydra does not read that file; analyze those charts again
+at the cap you want.
 
 ### "Auto": how "no ceiling" is actually reached
 
