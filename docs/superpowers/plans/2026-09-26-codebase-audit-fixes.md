@@ -11456,7 +11456,7 @@ What the user sees: every analyzed chart shows as out of date until it is re-ana
 // A record's bytes through the store's own writer: the structure blob, then
 // every node payload in first-seen order. Two records that give the same
 // bytes store the same thing, so tests use this as their equality proxy now
-// that the whole-record blob format is gone (docs/adr/0016).
+// that the whole-record blob format is gone (docs/adr/0017).
 
 #ifndef HYDRA_TESTS_RECORD_BYTES_H
 #define HYDRA_TESTS_RECORD_BYTES_H
@@ -11742,7 +11742,7 @@ TEST_CASE("the graph finds the chart's multiplier squeezes once, in chart order"
 
 ```cpp
     // The search sets these six on every activation it makes, so they are
-    // plain values (record format v7, docs/adr/0016).
+    // plain values (record format v7, docs/adr/0017).
     int skips = 0;
     Timecode timecode;
     Chord chord;
@@ -11768,7 +11768,7 @@ TEST_CASE("the graph finds the chart's multiplier squeezes once, in chart order"
 ```cpp
     // The chart's multiplier squeezes, in chart order. They depend on the
     // combo alone, never on the path, so a record holds one list rather than
-    // one per path (docs/adr/0016).
+    // one per path (docs/adr/0017).
     std::vector<MultSqueeze> multsqueezes;
 ```
 
@@ -11846,7 +11846,7 @@ void ScoreGraph::store_multsqueeze(const MultSqueeze& msq) {
 ```cpp
         // A variant ties its parent's score, and prepare_variants copies the
         // parent's totals, note count and leftover SP onto it, so the engine
-        // hands none of its own (docs/adr/0016).
+        // hands none of its own (docs/adr/0017).
         OutPath op{};
         op.var_point = var.var_point;
 ```
@@ -11868,7 +11868,7 @@ void ScoreGraph::store_multsqueeze(const MultSqueeze& msq) {
   In src/store/path_codec.cpp, replace `#include "store/path_binary.h"` with nothing (delete the line). Inside the anonymous namespace, right before `// ---- structure blob ----`, add:
 
 ```cpp
-// ---- node and structure pieces (record format v7, docs/adr/0016) ------------
+// ---- node and structure pieces (record format v7, docs/adr/0017) ------------
 
 // One activation. The six fields the search always sets carry no presence
 // byte; the three ticks that can be missing keep theirs.
@@ -12104,7 +12104,7 @@ Path decode_path_node(const std::vector<uint8_t>& payload) {
 // A root's totals (six score categories, note count, leftover SP) sit next to
 // it in the structure blob, and Path::prepare_variants() copies them onto
 // each variant and rebuilds variant_tail from var_point. The chart's
-// multiplier squeezes are stored once, in the structure (docs/adr/0016).
+// multiplier squeezes are stored once, in the structure (docs/adr/0017).
 ```
 
   Replace the two version comments and constants:
@@ -12113,7 +12113,7 @@ Path decode_path_node(const std::vector<uint8_t>& payload) {
 constexpr uint32_t kPathNodeFormatVersion = 5;
 ```
 
-  becomes (and append to the comment above it the sentence `// Version 6 (record format v7, docs/adr/0016) is the activations alone:
+  becomes (and append to the comment above it the sentence `// Version 6 (record format v7, docs/adr/0017) is the activations alone:
 // no squeezes, no totals, and no presence byte on the six always-set fields.`):
 
 ```cpp
