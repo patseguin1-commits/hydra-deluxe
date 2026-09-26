@@ -86,6 +86,8 @@ When unsure, `dump` the window and read the labels off it.
 
 Runs the same test inside the real window at human speed, with the Test Engine's own panel showing. Accepts a test name, `all`, or a command-file path. Results and any `text`/`state`/`dump` output go to `hydra_uitest.log` next to the exe (`--uitest-log <file>` to change); the window stays open afterwards so the end state can be inspected. Attached mode also runs on the scratch library, never on the real `hydra.db` — the tests wipe their DB at start.
 
+Attached mode exists only in dev builds (`build-cpp`). The installer builds with the `ship` preset, which leaves the GUI tests out, so an installed Hydra.exe ignores `--uitest`.
+
 ## Adding a C++ test
 
 Tests live in `tests/ui/uitest_tests.cpp`. Template:

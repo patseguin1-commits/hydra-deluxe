@@ -14,7 +14,14 @@
       "displayName": "MSVC x64 (Visual Studio 17 2022)",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
-      "binaryDir": "${sourceDir}/build-cpp"
+      "binaryDir": "${sourceDir}/build-cpp-vs2022"
+    },
+    {
+      "name": "ship",
+      "displayName": "Installer build (no attached GUI tests)",
+      "inherits": "default",
+      "binaryDir": "${sourceDir}/build-ship",
+      "cacheVariables": { "HYDRA_UITEST_ATTACHED": { "type": "BOOL", "value": "OFF" } }
     }
   ],
   "buildPresets": [
@@ -26,6 +33,11 @@
     {
       "name": "vs2022",
       "configurePreset": "vs2022",
+      "configuration": "Release"
+    },
+    {
+      "name": "ship",
+      "configurePreset": "ship",
       "configuration": "Release"
     }
   ]

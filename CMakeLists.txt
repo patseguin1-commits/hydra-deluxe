@@ -1,12 +1,14 @@
 # Hydra — Windows-only C++ build. Produces:
 #   * Hydra.exe                       — the GUI
-#   * hydra_batch / hydra_report      — the command line tools
+#   * hydra_batch / hydra_report / hydra_fillcompare — the command line tools
 #   * hydra_tests                     — the doctest harness
+#   * hydra_uitest                    — the headless GUI test runner
+#   * hydra_bench / hydra_replay      — developer tools (build_cpp.ps1 builds them)
 #   * a zip release via CPack (build_cpp.ps1 -Package)
 #
-# Third-party code (ImGui, SQLite, miniz, doctest, json, stb) is vendored under
-# third_party/ and built here so there is nothing to install but a compiler +
-# CMake.
+# Third-party code (ImGui and its Test Engine, SQLite, miniz, doctest, json,
+# stb, miniaudio, libogg, libopus) is vendored under third_party/ and built
+# here, so there is nothing to install but a compiler + CMake.
 #
 # Configure/build (CMake and MSVC come from Visual Studio; see build_cpp.ps1):
 #   cmake --preset default
@@ -30,8 +32,13 @@ add_compile_options(/MP)
 
 # Strict flags for our own code, applied via this interface target; third-party
 # gets relaxed warnings so a vendor update never turns into a wall of warnings.
+# /utf-8: our sources are UTF-8, and several hold non-ASCII text in string
+# literals (em dashes, arrows). Without it MSVC reads them in the system code
+# page, which works on an English Windows only by luck. C++ only, so the
+# resource compiler never sees it.
 add_library(hydra_warnings INTERFACE)
-target_compile_options(hydra_warnings INTERFACE /W4 /EHsc)
+target_compile_options(hydra_warnings INTERFACE
+    /W4 /EHsc $<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
 
 # ---- third_party: Dear ImGui (core + Win32/DX11 backends) ----------------
 add_library(imgui STATIC
@@ -70,7 +77,6 @@ target_compile_options(imgui_test_engine PRIVATE /W1 /EHsc)
 # ---- third_party: SQLite3 amalgamation -----------------------------------
 add_library(sqlite3 STATIC third_party/sqlite/sqlite3.c)
 target_include_directories(sqlite3 PUBLIC third_party/sqlite)
-target_compile_definitions(sqlite3 PRIVATE SQLITE_ENABLE_FTS5=0)
 target_compile_options(sqlite3 PRIVATE /W1)
 
 # ---- third_party: miniz (raw deflate, for Clone Hero .srb bundles) -------
@@ -83,16 +89,28 @@ target_compile_options(miniz PRIVATE /W1 /EHsc)
 # miniaudio (public domain/MIT-0), stb_vorbis (public domain), libogg +
 # libopus (BSD).
 #
-# EXCLUDE_FROM_ALL: each of these builds only when a Preview module links it,
-# so a build that doesn't reach the Preview is byte-for-byte unaffected and
-# the heavy libopus compile stays off the default path until it's wired in.
+# EXCLUDE_FROM_ALL: each of these builds only when a target that links it is
+# built. hydra_audio links all four, so the CLI tools never compile them.
 #
-# miniaudio drives the output device, resampling, and mixing; each audio
-# format is decoded to PCM by dedicated code (stb_vorbis for OGG, libopus +
-# libogg for OPUS, miniaudio's own dr_libs for MP3/WAV/FLAC).
+# miniaudio drives the output device and converts sample rates and channel
+# counts; each audio format is decoded to PCM by dedicated code (stb_vorbis
+# for OGG, libopus + libogg for OPUS, miniaudio's own dr_libs for MP3/WAV/FLAC).
 add_library(miniaudio STATIC EXCLUDE_FROM_ALL third_party/miniaudio/miniaudio.c)
 target_include_directories(miniaudio PUBLIC third_party/miniaudio)
 target_compile_options(miniaudio PRIVATE /W1)
+# Compile out what Hydra never calls (option names from miniaudio.h's own
+# table): encoders, generators, the high-level engine, its node graph and
+# resource manager, and every backend but WASAPI. PUBLIC so every file that
+# includes miniaudio.h sees the same declarations as the implementation.
+target_compile_definitions(miniaudio PUBLIC
+    MA_NO_ENCODING
+    MA_NO_GENERATION
+    MA_NO_ENGINE
+    MA_NO_NODE_GRAPH
+    MA_NO_RESOURCE_MANAGER
+    MA_ENABLE_ONLY_SPECIFIC_BACKENDS
+    MA_ENABLE_WASAPI
+)
 
 add_library(stb_vorbis STATIC EXCLUDE_FROM_ALL third_party/stb/stb_vorbis.c)
 target_include_directories(stb_vorbis PUBLIC third_party/stb)
@@ -116,11 +134,12 @@ add_subdirectory(third_party/opus EXCLUDE_FROM_ALL)
 # stb_image's implementation may be compiled in exactly one TU across the binary
 # (it defines non-static symbols), yet both the GUI icons and the Preview
 # renderer's textures decode images. So the STB_IMAGE_IMPLEMENTATION lives
-# here behind image/decode.h and both link this one lib (docs/adr/0008).
+# here behind image/decode.h and both link this one lib.
 add_library(hydra_image STATIC src/image/decode.cpp)
 target_include_directories(hydra_image PUBLIC src PRIVATE third_party/stb)
-# stb_image.h is third-party; keep it out of the /W4 sweep like icons.cpp.
-target_compile_options(hydra_image PRIVATE /W1 /EHsc)
+# stb_image.h is third-party; keep it out of the /W4 sweep. /utf-8 as for
+# every Hydra target (see hydra_warnings).
+target_compile_options(hydra_image PRIVATE /W1 /EHsc /utf-8)
 
 # ---- hydra_core: everything below the GUI/CLI shells ---------------------
 add_library(hydra_core STATIC
@@ -185,7 +204,8 @@ target_link_libraries(hydra_audio PRIVATE
     miniaudio stb_vorbis opus ogg hydra_warnings)
 
 # ---- hydra_render: the Preview 3D note-highway renderer (GUI-side) --------
-# A faithful port of Onyx's 3D drum previewer (docs/adr/0008) rendering to an
+# A faithful port of Onyx's 3D drum previewer
+# (docs/adr/0008-preview-is-a-faithful-port-of-onyx.md) rendering to an
 # offscreen D3D11 target (docs/adr/0005). The pure half — the .obj reader, the
 # config, the instant timeline (track_state) and the draw-list builder
 # (highway_draw, where every Onyx number lives) — is device-free and
@@ -209,9 +229,6 @@ target_link_libraries(hydra_render PRIVATE
 # ---- hydra_dm: the DMBot leaderboards feature (GUI-only) -----------------
 # Kept out of hydra_core so the CLI tools don't link WinHTTP or carry the
 # comparison page. third_party/json parses the leaderboard API responses.
-# /utf-8: dm_report.cpp's HTML template embeds non-ASCII glyphs (arrows, em
-# dash) in string literals; without this MSVC reads the source in the system
-# code page and can mangle them.
 add_library(hydra_dm STATIC
     src/app/dm_report.cpp
     src/net/dmbot_client.cpp
@@ -219,7 +236,6 @@ add_library(hydra_dm STATIC
 target_link_libraries(hydra_dm PUBLIC hydra_core)
 target_link_libraries(hydra_dm PRIVATE winhttp hydra_warnings)
 target_include_directories(hydra_dm PRIVATE third_party/json)
-target_compile_options(hydra_dm PRIVATE /utf-8)
 
 # ---- hydra_ui: the window-independent GUI ---------------------------------
 # Everything but the Win32 window (main.cpp), shared by Hydra.exe and the
@@ -239,25 +255,45 @@ add_library(hydra_ui STATIC
     src/ui/theme.cpp
     src/ui/win32_dialogs.cpp
 )
-# stb_image.h is third-party; keep icons.cpp out of our /W4 sweep like the
-# other vendored libraries above.
-set_source_files_properties(src/ui/icons.cpp PROPERTIES COMPILE_OPTIONS "/W1")
-target_include_directories(hydra_ui PRIVATE third_party/stb)
 # hydra_render + hydra_audio join the GUI here (Phase 5): the Preview tab's
 # controller (preview_controller.cpp) drives the offscreen renderer and the
 # audio engine, and preview_load_job.cpp's PreviewLoadJob decodes + mixes
 # stems. PUBLIC so the exes link them transitively.
 target_link_libraries(hydra_ui PUBLIC hydra_dm imgui imgui_test_engine hydra_render hydra_audio)
-# shell32/ole32: the folder-picker dialog (opening reports moved down to
-# hydra_core's report_files.cpp with the rest of the report-file handling);
+# ole32: the folder-picker dialog (COM's IFileOpenDialog). shell32 is not
+# needed here: hydra_core links it for report_files.cpp's ShellExecuteW.
 # hydra_image: icons.cpp decodes its PNGs through the shared stb TU.
-target_link_libraries(hydra_ui PRIVATE ole32 shell32 hydra_image hydra_warnings)
+target_link_libraries(hydra_ui PRIVATE ole32 hydra_image hydra_warnings)
+
+# Attached GUI testing (`Hydra.exe --uitest ...`, docs/agents/ui-testing.md)
+# builds the GUI tests into the exe. On for dev builds; the "ship" preset (the
+# installer's build) turns it off, so the shipped exe carries no tests and no
+# repo paths.
+option(HYDRA_UITEST_ATTACHED
+       "Build Hydra.exe with the attached GUI test harness (off for the installer)" ON)
+
+# ---- hydra_uitest_harness: the GUI tests, compiled once --------------------
+# The harness, the script runner and the tests. hydra_uitest always links
+# them; Hydra.exe links them when HYDRA_UITEST_ATTACHED is on. The repo paths
+# the tests need are compiled in here and nowhere else.
+add_library(hydra_uitest_harness STATIC
+    tests/ui/uitest_harness.cpp
+    tests/ui/uitest_script.cpp
+    tests/ui/uitest_tests.cpp
+)
+target_include_directories(hydra_uitest_harness PUBLIC tests/ui)
+target_link_libraries(hydra_uitest_harness PUBLIC hydra_ui PRIVATE hydra_warnings)
+target_compile_definitions(hydra_uitest_harness PRIVATE
+    HYDRA_INPUT_DIR="${CMAKE_SOURCE_DIR}/testdata/input"
+    HYDRA_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets/preview"
+    HYDRA_RESOURCE_DIR="${CMAKE_SOURCE_DIR}/resource"
+)
 
 # ---- Hydra.exe: the GUI shell ---------------------------------------------
 # The SP cap (once a separate "Uncapped" build) is a runtime setting, so there
 # is one exe.
 add_executable(Hydra WIN32 src/ui/main.cpp src/ui/hydra.rc)
-target_link_libraries(Hydra PRIVATE hydra_ui d3d11 dxgi d3dcompiler shell32 hydra_warnings)
+target_link_libraries(Hydra PRIVATE hydra_ui d3d11 dxgi d3dcompiler hydra_warnings)
 # GUI-subsystem app entered from a standard int main(), like the ImGui example.
 target_link_options(Hydra PRIVATE /ENTRY:mainCRTStartup)
 # resource/ (fonts, icons) is read relative to the exe at runtime; keep a
@@ -274,21 +310,12 @@ add_custom_command(TARGET Hydra POST_BUILD
             "${CMAKE_SOURCE_DIR}/assets" "$<TARGET_FILE_DIR:Hydra>/assets"
 )
 
-# Attached GUI testing (`Hydra.exe --uitest ...`, docs/agents/ui-testing.md):
-# the exe carries the test harness + tests so a test can run inside the real
-# window at watchable speed.
-target_sources(Hydra PRIVATE
-    tests/ui/uitest_harness.cpp
-    tests/ui/uitest_script.cpp
-    tests/ui/uitest_tests.cpp
-)
-target_include_directories(Hydra PRIVATE tests/ui)
-target_compile_definitions(Hydra PRIVATE
-    HYDRA_UITEST_ATTACHED
-    HYDRA_INPUT_DIR="${CMAKE_SOURCE_DIR}/testdata/input"
-    HYDRA_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets/preview"
-    HYDRA_RESOURCE_DIR="${CMAKE_SOURCE_DIR}/resource"
-)
+# Attached GUI testing: a test runs inside the real window at watchable speed.
+# main.cpp compiles the --uitest path only under HYDRA_UITEST_ATTACHED.
+if(HYDRA_UITEST_ATTACHED)
+    target_link_libraries(Hydra PRIVATE hydra_uitest_harness)
+    target_compile_definitions(Hydra PRIVATE HYDRA_UITEST_ATTACHED)
+endif()
 
 # ---- hydra_batch / hydra_report: the command-line tools ------------------
 # Both read the same settings INI and database the GUI uses.
@@ -313,6 +340,7 @@ add_executable(hydra_tests
     tests/test_audio_decode.cpp
     tests/test_audio_mixer.cpp
     tests/test_audio_player.cpp
+    tests/test_audio_device.cpp
     tests/test_obj_loader.cpp
     tests/test_preview_config.cpp
     tests/test_track_state.cpp
@@ -368,19 +396,11 @@ target_compile_definitions(hydra_tests PRIVATE
 
 # ---- hydra_uitest: the headless GUI test runner ----------------------------
 # Runs the real ImGui UI with no window, driven by the Dear ImGui Test Engine;
-# see docs/agents/ui-testing.md.
-add_executable(hydra_uitest
-    tests/ui/uitest_main.cpp
-    tests/ui/uitest_harness.cpp
-    tests/ui/uitest_script.cpp
-    tests/ui/uitest_tests.cpp
-)
-target_link_libraries(hydra_uitest PRIVATE hydra_ui d3d11 dxgi d3dcompiler hydra_warnings)
-target_compile_definitions(hydra_uitest PRIVATE
-    HYDRA_INPUT_DIR="${CMAKE_SOURCE_DIR}/testdata/input"
-    HYDRA_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets/preview"
-    HYDRA_RESOURCE_DIR="${CMAKE_SOURCE_DIR}/resource"
-)
+# see docs/agents/ui-testing.md. The GUI tests themselves live in
+# hydra_uitest_harness (above), which Hydra.exe shares in dev builds.
+add_executable(hydra_uitest tests/ui/uitest_main.cpp)
+target_link_libraries(hydra_uitest PRIVATE
+    hydra_uitest_harness d3d11 dxgi d3dcompiler hydra_warnings)
 
 enable_testing()
 add_test(NAME hydra_tests COMMAND hydra_tests)

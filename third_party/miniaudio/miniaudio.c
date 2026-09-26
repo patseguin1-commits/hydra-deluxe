@@ -1,9 +1,8 @@
 /* Single implementation translation unit for miniaudio.
- * Hydra uses miniaudio only for the output device, resampling, and mixing;
- * each audio format is decoded to PCM by our own code (stb_vorbis for OGG,
- * libopus for OPUS, dr_libs for MP3), so miniaudio's own decoders and
- * encoders are compiled out to keep this unit small. */
+ * Hydra uses miniaudio for the output device (WASAPI only), sample-rate and
+ * channel conversion, and its dr_libs decoders for WAV, MP3 and FLAC. OGG
+ * goes to stb_vorbis and OPUS to libopus instead. The MA_NO_* and
+ * MA_ENABLE_* switches are PUBLIC definitions on the miniaudio target in
+ * CMakeLists.txt, so this file and every includer see the same set. */
 #define MINIAUDIO_IMPLEMENTATION
-#define MA_NO_ENCODING
-#define MA_NO_GENERATION
 #include "miniaudio.h"

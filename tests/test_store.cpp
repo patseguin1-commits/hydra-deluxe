@@ -1582,3 +1582,10 @@ TEST_CASE("has_record and a lookup agree on which rows are readable") {
     }
     CHECK(store.has_record(ready));
 }
+
+// SQLite switches a feature on when its SQLITE_ENABLE_* macro is defined at
+// all, whatever its value (sqlite.org/compile.html), so the old
+// "SQLITE_ENABLE_FTS5=0" compiled full-text search in. Hydra never uses it.
+TEST_CASE("the vendored SQLite is built without FTS5") {
+    CHECK(sqlite3_compileoption_used("ENABLE_FTS5") == 0);
+}

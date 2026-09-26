@@ -8,9 +8,7 @@
 
 #include "app/preview_source.h"
 
-// Match the macros the miniaudio implementation TU was compiled with.
-#define MA_NO_ENCODING
-#define MA_NO_GENERATION
+// miniaudio's configuration macros come from the miniaudio target.
 #include "miniaudio.h"
 
 namespace hydra::audio {
