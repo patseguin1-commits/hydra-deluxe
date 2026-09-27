@@ -151,7 +151,7 @@
     {
       "id": "14",
       "subject": "Task 14: The user guide and developer docs describe the new interface",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         "9",
         "10",
