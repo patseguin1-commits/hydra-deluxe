@@ -134,6 +134,10 @@ Unit tests go in `tests/test_preview_view.cpp`, written first:
 
 The whole suite must still report `Status: SUCCESS!`. Then `hydra_uitest`
 checks on the Preview tab that the box shows the right text for an analyzed
-chart, both idle and inside an SP window. It also checks a narrow window, where
-the box must not cover the highway. If it does, the box moves up rather than
-shrinking.
+chart, both idle and inside an SP window, and saves a screenshot of the active
+box to look at.
+
+The test harness always draws at 1280×800, so a narrower window can only be
+checked by eye in the real app. If the box covers the highway there, it moves
+to the top-right corner beside the top of the gauge, where the highway is
+narrowest. It does not shrink.
