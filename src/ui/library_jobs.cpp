@@ -1,11 +1,14 @@
 #include "ui/library_jobs.h"
 
+#include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <stdexcept>
 
 #include "app/config.h"
 #include "app/report.h"
 #include "app/report_files.h"
+#include "app/user_messages.h"
 
 namespace hydra::ui {
 
@@ -88,6 +91,49 @@ void ScanJob::run() {
 
 // ---- BatchJob ---------------------------------------------------------
 
+namespace {
+
+double steady_seconds() {
+    using namespace std::chrono;
+    return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+
+}  // namespace
+
+void BatchClock::start(double now) {
+    started_ = now;
+    paused_at_.reset();
+    finished_at_.reset();
+    paused_total_ = 0.0;
+}
+
+void BatchClock::pause(double now) {
+    if (started_ && !paused_at_ && !finished_at_) paused_at_ = now;
+}
+
+void BatchClock::resume(double now) {
+    if (!paused_at_ || finished_at_) return;
+    paused_total_ += now - *paused_at_;
+    paused_at_.reset();
+}
+
+void BatchClock::finish(double now) {
+    if (!started_ || finished_at_) return;
+    finished_at_ = paused_at_ ? *paused_at_ : now;
+    paused_at_.reset();
+}
+
+double BatchClock::elapsed_s(double now) const {
+    if (!started_) return 0.0;
+    const double end = finished_at_ ? *finished_at_ : paused_at_ ? *paused_at_ : now;
+    return std::max(0.0, end - *started_ - paused_total_);
+}
+
+std::optional<double> batch_eta_s(double elapsed_s, int completed, int total) {
+    if (total <= 0 || completed < kEtaMinFinished || completed > total) return std::nullopt;
+    return elapsed_s / completed * (total - completed);
+}
+
 BatchJob::BatchJob(std::optional<std::string> search, app::BatchRun run,
                    store::RecordStore& store, bool redo)
     : search_(std::move(search)),
@@ -96,11 +142,84 @@ BatchJob::BatchJob(std::optional<std::string> search, app::BatchRun run,
       redo_(redo),
       workers_(app::batch_worker_count()) {}
 
-void BatchJob::start() { spawn([this] { run(); }); }
+BatchJob::BatchJob(std::vector<store::ChartLibraryEntry> charts, app::BatchRun run,
+                   store::RecordStore& store, bool redo)
+    : given_(std::move(charts)),
+      run_(std::move(run)),
+      store_(store),
+      redo_(redo),
+      workers_(app::batch_worker_count()) {}
+
+void BatchJob::set_analyzer_for_test(app::ChartAnalyzer analyze, int workers) {
+    analyze_ = std::move(analyze);
+    workers_ = std::max(1, workers);
+}
+
+void BatchJob::start() {
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        const double now = steady_seconds();
+        clock_.start(now);
+        if (snap_.paused) clock_.pause(now);  // paused before it started
+    }
+    spawn([this] { run(); });
+}
+
+void BatchJob::pause() {
+    {
+        std::lock_guard<std::mutex> lock(pause_mu_);
+        if (paused_) return;
+        paused_ = true;
+    }
+    std::lock_guard<std::mutex> lock(mu_);
+    if (snap_.finished) return;
+    snap_.paused = true;
+    clock_.pause(steady_seconds());
+}
+
+void BatchJob::resume() {
+    {
+        std::lock_guard<std::mutex> lock(pause_mu_);
+        if (!paused_) return;
+        paused_ = false;
+    }
+    pause_cv_.notify_all();
+    std::lock_guard<std::mutex> lock(mu_);
+    snap_.paused = false;
+    clock_.resume(steady_seconds());
+}
+
+void BatchJob::stop() {
+    cancel_.store(true);
+    {
+        // Taking the lock puts this stop between a waiting worker's checks,
+        // so no worker can sleep through it.
+        std::lock_guard<std::mutex> lock(pause_mu_);
+    }
+    pause_cv_.notify_all();
+}
+
+void BatchJob::wait_while_paused() {
+    std::unique_lock<std::mutex> lock(pause_mu_);
+    pause_cv_.wait(lock, [this] { return !paused_ || cancel_.load(); });
+    if (cancel_.load()) throw app::AnalysisCancelled{};
+}
+
+void BatchJob::note_started(const std::string& notespath) {
+    auto it = by_path_.find(notespath);
+    if (it == by_path_.end()) return;
+    const app::ScanItem& item = items_[it->second];
+    std::lock_guard<std::mutex> lock(mu_);
+    snap_.current_title = item.title;
+    snap_.current_artist = item.artist;
+}
 
 BatchJob::Snapshot BatchJob::snapshot() const {
     std::lock_guard<std::mutex> lock(mu_);
-    return snap_;
+    Snapshot s = snap_;
+    s.elapsed_s = clock_.elapsed_s(steady_seconds());
+    if (!s.finished && !s.paused) s.eta_s = batch_eta_s(s.elapsed_s, s.completed, s.total);
+    return s;
 }
 
 void BatchJob::run() {
@@ -108,18 +227,22 @@ void BatchJob::run() {
     // SELECT over a big library takes long enough to freeze a frame.
     try {
         std::vector<store::ChartLibraryEntry> entries =
-            store_.list_chart_library(search_, 0, -1);  // LIMIT -1 = no limit
+            given_ ? std::move(*given_)
+                   : store_.list_chart_library(search_, 0, -1);  // LIMIT -1 = no limit
         items_.reserve(entries.size());
         for (const store::ChartLibraryEntry& e : entries)
             items_.push_back({e.md5, e.title, e.artist, e.charter, e.notespath, e.rootfolder});
     } catch (const std::exception& e) {
         std::lock_guard<std::mutex> lock(mu_);
         snap_.preparing = false;
-        snap_.failures.push_back(std::string("Could not load the library: ") + e.what());
+        snap_.failures.push_back(app::plain_error(e));
+        snap_.failure_details.push_back(std::string("Could not load the library: ") + e.what());
         ++snap_.failed;
+        clock_.finish(steady_seconds());
         snap_.finished = true;
         return;
     }
+    for (size_t i = 0; i < items_.size(); ++i) by_path_.emplace(items_[i].notespath, i);
 
     {
         std::lock_guard<std::mutex> lock(mu_);
@@ -127,6 +250,7 @@ void BatchJob::run() {
     }
     if (cancel_.load()) {
         std::lock_guard<std::mutex> lock(mu_);
+        clock_.finish(steady_seconds());
         snap_.finished = true;
         return;
     }
@@ -138,7 +262,6 @@ void BatchJob::run() {
         std::lock_guard<std::mutex> lock(mu_);
         snap_.total = p.total;
         snap_.completed = p.completed;
-        snap_.current_title = p.current_title;
         if (!total_known) {
             snap_.skipped = static_cast<int>(items_.size()) - p.total;
             total_known = true;
@@ -147,13 +270,28 @@ void BatchJob::run() {
     callbacks.on_error = [this](const std::string& title, const std::string& error) {
         std::lock_guard<std::mutex> lock(mu_);
         ++snap_.failed;
-        snap_.failures.push_back(title + ": " + error);
+        snap_.failures.push_back(title + ": " + app::plain_error_text(error));
+        snap_.failure_details.push_back(title + ": " + error);
     };
     callbacks.cancel = &cancel_;
+    // The pause gate and the "now analyzing" line sit in front of the real
+    // analyzer, so run_batch and its pool stay as they are.
+    const app::ChartAnalyzer inner =
+        analyze_ ? analyze_ : app::ChartAnalyzer(app::analyze_chart_file);
+    callbacks.analyze = [this, inner](const std::string& path,
+                                      const app::AnalysisSettings& settings,
+                                      const std::function<void(float)>& on_progress) {
+        wait_while_paused();
+        note_started(path);
+        return inner(path, settings, on_progress);
+    };
     app::run_batch(items_, run_, store_, redo_, workers_, callbacks);
 
     std::lock_guard<std::mutex> lock(mu_);
     snap_.current_title.clear();
+    snap_.current_artist.clear();
+    snap_.paused = false;
+    clock_.finish(steady_seconds());
     snap_.finished = true;
 }
 
@@ -187,6 +325,7 @@ void AnalyzeJob::start() {
         });
     } catch (const std::exception& e) {
         error_ = e.what();
+        message_ = app::plain_error(e);
         ok_ = false;
         finished_.store(true);
     }
@@ -228,10 +367,9 @@ void ReportJob::run() {
         if (is_cancelled()) return false;
         if (report.rows == 0) throw std::runtime_error("no records stored yet");
 
-        std::filesystem::path outpath = app::report_html_path();
-        app::write_report_file(outpath, report.html);
-        if (open_when_done_ && !app::open_in_browser(outpath.wstring()))
-            throw std::runtime_error("could not open " + outpath.u8string());
+        // A browser that won't open the page is not a failed report: the
+        // page is saved, and the finished strip says so (audit B1).
+        outcome_ = publish_report(app::report_html_path(), report.html, open_when_done_);
         return true;
     });
 }

@@ -182,6 +182,7 @@ add_library(hydra_core STATIC
     src/app/fill_report.cpp
     src/app/report.cpp
     src/app/report_files.cpp
+    src/app/user_messages.cpp
 )
 target_include_directories(hydra_core PUBLIC src)
 target_compile_definitions(hydra_core PUBLIC HYDRA_VERSION="${PROJECT_VERSION}")
@@ -379,6 +380,8 @@ add_executable(hydra_tests
     tests/test_config.cpp
     tests/test_rules.cpp
     tests/test_dm_report.cpp
+    tests/test_user_messages.cpp
+    tests/test_library_jobs.cpp
     tests/test_fill_deadline.cpp
     tests/test_fill_report.cpp
     tests/test_app_state.cpp

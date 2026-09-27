@@ -7,12 +7,15 @@
 #ifndef HYDRA_UI_DM_JOBS_H
 #define HYDRA_UI_DM_JOBS_H
 
+#include <filesystem>
 #include <string>
 #include <vector>
 
+#include "app/dm_report.h"
 #include "net/dmbot_client.h"
 #include "store/record_store.h"
 #include "ui/job_base.h"
+#include "ui/report_outcome.h"
 
 namespace hydra::ui {
 
@@ -57,6 +60,15 @@ public:
     int matched() const { return matched_; }
     int above() const { return above_; }
     int unmatched() const { return unmatched_; }
+    // Every count the comparison produced, whatever app/dm_report.h names
+    // them (T3 splits "not in your library" in two). Valid once ok().
+    const app::dm_report::DmReportStats& stats() const { return stats_; }
+
+    // Valid once finished() && ok(): where the page was written, whether the
+    // browser opened it, and why not when it was asked to and didn't.
+    const std::filesystem::path& saved_path() const { return outcome_.saved_path; }
+    bool opened() const { return outcome_.opened; }
+    const std::string& open_problem() const { return outcome_.open_problem; }
 
 private:
     void run();
@@ -67,6 +79,8 @@ private:
     store::Lens lens_;
     bool open_when_done_;
     int total_ = 0, matched_ = 0, above_ = 0, unmatched_ = 0;
+    app::dm_report::DmReportStats stats_;
+    ReportOutcome outcome_;
 };
 
 }  // namespace hydra::ui
