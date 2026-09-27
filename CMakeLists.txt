@@ -268,6 +268,7 @@ add_library(hydra_ui STATIC
     src/ui/library_jobs.cpp
     src/ui/library_table.cpp
     src/ui/library_toolbar.cpp
+    src/ui/settings_bar.cpp
     src/ui/library_view.cpp
     src/ui/preview_controller.cpp
     src/ui/dynamics_load_job.cpp

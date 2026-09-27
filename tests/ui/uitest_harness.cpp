@@ -253,8 +253,8 @@ void reset_app(Harness& h, const std::string& rules_text) {
         if (url.find("/all-users") != std::string::npos)
             return std::string(R"([{"id":"111","username":"alice","elo":1500,
                                      "stats":{"total_scores":1,"total_score":100000}}])");
-        std::string md5 = (h.app && !h.app->current_page.rows.empty())
-                              ? h.app->current_page.rows[0].md5
+        std::string md5 = (h.app && h.app->view_row_count() > 0)
+                              ? h.app->view_row(0).md5
                               : "00000000000000000000000000000000";
         return std::string(R"({"scores":[{"identifier":")") + md5 +
                R"(","song_name":"x","artist":"y","charter_refs":["z"],"score":100000,)"
@@ -363,23 +363,19 @@ void dump_widgets(ImGuiTestContext* ctx, const std::string& window_name) {
 void dump_state(Harness& h) {
     auto& a = *h.app;
     std::printf("state:\n");
-    std::printf("  library_total=%lld page_rows=%zu page_total=%lld page=%d search=\"%s\"\n",
-                (long long)a.library_total, a.current_page.rows.size(),
-                (long long)a.current_page.total_count, a.table_viewpage, a.search.c_str());
-    for (size_t i = 0; i < a.current_page.rows.size(); ++i) {
-        const auto& r = a.current_page.rows[i];
-        const char* st = "new";
-        if (i < a.current_page.summaries.size()) {
-            auto s = a.current_page.summaries[i].state;
-            st = s == hydra::store::RecordStatus::Ready   ? "current"
-                 : s == hydra::store::RecordStatus::Stale ? "stale"
-                                                          : "new";
-        }
+    std::printf("  library_total=%lld view_rows=%zu search=\"%s\"\n",
+                (long long)a.library_total, a.view_row_count(), a.search.c_str());
+    for (size_t i = 0; i < a.view_row_count(); ++i) {
+        const auto& r = a.view_row(i);
+        const auto s = a.view_row_status(i);
+        const char* st = s == hydra::store::RecordStatus::Ready   ? "current"
+                         : s == hydra::store::RecordStatus::Stale ? "stale"
+                                                                  : "new";
         std::printf("    row[%zu] \"%s\" - %s (%s) md5=%s bestpath=%s\n", i, r.title.c_str(),
                     r.artist.c_str(), r.charter.c_str(), r.md5.c_str(), st);
     }
-    std::printf("  selected=%s show_details=%s viewed_record=%s paths=%zu\n",
-                a.selected ? a.selected->title.c_str() : "(none)", yes_no(a.show_details),
+    std::printf("  selected=%s panel_open=%s viewed_record=%s paths=%zu\n",
+                a.selected ? a.selected->title.c_str() : "(none)", yes_no(a.details_open()),
                 yes_no(a.viewed.record.has_value()),
                 a.viewed.record ? a.viewed.record->paths.size() : 0);
     if (a.viewed.record && !a.viewed.record->paths.empty())
@@ -431,33 +427,77 @@ std::string escape_ref(const std::string& label) {
 void scan_library(ImGuiTestContext* ctx) {
     Harness& h = harness(ctx);
     ctx->SetRef("//Hydra");
-    ctx->ItemClick("Scan charts");
+    ctx->ItemClick("Scan library");
     IM_CHECK(wait_until(ctx, [&] { return h.app->scan_job && h.app->scan_job->snapshot().finished; }, 60));
     ctx->SetRef("//Scanning charts");
-    IM_CHECK(visible_text(h).find("chart(s) found") != std::string::npos);
+    // State, not the modal's wording: T13 rewrites "chart(s) found" with
+    // real plurals in this same wave.
+    IM_CHECK(h.app->scan_job->snapshot().charts_found > 0);
     ctx->ItemClick("Continue");
     ctx->Yield(2);
     ctx->SetRef("//Hydra");
     IM_CHECK(h.app->scan_job == nullptr);
     IM_CHECK(h.app->library_total > 0);
-    IM_CHECK(!h.app->current_page.rows.empty());
+    IM_CHECK(h.app->view_row_count() > 0);
 }
 
-// Click library row `index` and wait for the Song Details modal.
+// Point the ref at the song panel. It is a child window of the main window,
+// and child window names are mangled, so go through WindowInfo.
+void set_panel_ref(ImGuiTestContext* ctx) {
+    ImGuiWindow* panel = ctx->WindowInfo("//Hydra/##songpanel").Window;
+    IM_CHECK(panel != nullptr);
+    ctx->SetRef(panel);
+}
+
+// Click row `index` of the library view and wait for the song panel.
 void open_details(ImGuiTestContext* ctx, size_t index) {
     Harness& h = harness(ctx);
-    IM_CHECK(index < h.app->current_page.rows.size());
-    std::string title = h.app->current_page.rows[index].title;
+    IM_CHECK(index < h.app->view_row_count());
+    const std::string title = h.app->view_row(index).title;
     ctx->SetRef("//Hydra");
     ctx->ItemClick(("**/" + escape_ref(title)).c_str());
     ctx->Yield(3);
-    IM_CHECK(h.app->show_details);
+    IM_CHECK(h.app->details_open());
     IM_CHECK(h.app->selected && h.app->selected->title == title);
-    ctx->SetRef("//$FOCUSED");
-    IM_CHECK(visible_text(h).find("Song Details") != std::string::npos);
+    set_panel_ref(ctx);
+    if (ctx->IsError()) return;
     // The ImGui context outlives reset_app, so the tab bar remembers the tab a
     // previous test left selected. Land on Paths deterministically.
     ctx->ItemClick("##DetailsTabs/Paths");
+}
+
+// Narrow the library with `search` typed into the search box, then open the
+// row titled `title`.
+void open_titled(ImGuiTestContext* ctx, const std::string& search, const std::string& title) {
+    Harness& h = harness(ctx);
+    ctx->SetRef("//Hydra");
+    ctx->ItemInputValue("**/##search", search.c_str());
+    size_t idx = 0;
+    auto find_row = [&] {
+        for (size_t i = 0; i < h.app->view_row_count(); ++i)
+            if (h.app->view_row(i).title == title) { idx = i; return true; }
+        return false;
+    };
+    IM_CHECK(wait_until(ctx, find_row, 5));
+    open_details(ctx, idx);
+}
+
+// The analyze button's ref for the open song: its label depends on whether
+// the song has a result.
+std::string analyze_button_ref(Harness& h) {
+    return h.app->viewed.status == hydra::store::RecordStatus::NotAnalyzed ? "**/Analyze this song"
+                                                                          : "**/Re-analyze";
+}
+
+// Analyze the open song and wait for a Ready record.
+void analyze_open_song(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    set_panel_ref(ctx);
+    if (ctx->IsError()) return;
+    ctx->ItemClick("##DetailsTabs/Paths");
+    ctx->ItemClick(analyze_button_ref(h).c_str());
+    IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
+    IM_CHECK(h.app->viewed.status == hydra::store::RecordStatus::Ready);
 }
 
 // Shared: open chart 0's Preview and wait for the load. Returns false on error.

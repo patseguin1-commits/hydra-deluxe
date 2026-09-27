@@ -218,8 +218,10 @@ void run_frame(AppState& app, FrameText* capture) {
         ImGui::LogToBuffer();
     }
 
+    // State first, once per frame: the panel's closing edge, storing and
+    // reaping the analyze job, a finished Dynamics count.
+    app.tick(ImGui::GetTime());
     render_main_window(app);
-    render_details_modal(app);
     // The number boxes apply edits live but leave the INI until the edit
     // ends (AppState::edit_settings). An edit has ended once no widget is
     // active: the +/- button is released, or the text box lost focus.

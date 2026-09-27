@@ -1,9 +1,9 @@
-// The song details window's pieces, shared between the files that draw it.
-// Only the details files include this; everything else uses details_view.h.
+// The song panel's pieces, shared between the files that draw it. Only the
+// details files include this; everything else uses details_view.h.
 //
-// details_panel.cpp  the window itself, the song info, the stored-result
-//                    panel, the controls, the analyze job's lifecycle and
-//                    progress, and the record states the tabs share
+// details_panel.cpp  the panel itself: its header, the headline and analyze
+//                    button, the analyze progress, and the record states the
+//                    tabs share (the analyze job's lifecycle is AppState::tick)
 // paths_tab.cpp      the Paths tab: the path list and a path's details
 // preview_tab.cpp    the Preview tab: transport row, highway and overlays
 // dynamics_tab.cpp   the Dynamics tab
