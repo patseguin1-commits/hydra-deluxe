@@ -23,8 +23,8 @@ The search that computes a chart's paths and stores the result as a record.
 
 **Record**:
 The stored result of one analysis: the kept paths, their scores, and the
-settings the analysis ran with. Its key is the chart, the chart mode, the SP
-cap, and the analysis settings (the ms limit and the score range). A chart
+settings the analysis ran with. Its key is the chart and its analysis
+settings: the chart mode, the SP cap, the path limit and the score range. A chart
 keeps one record per settings combination; records share their stored paths,
 so a path found under several combinations is stored once. A record is stale
 unless both hold: it carries a results stamp this build accepts (a stamp that
@@ -41,9 +41,23 @@ Hero's rule and the default. Other values answer what-if questions; their
 scores are not achievable in game.
 _Avoid_: edition, uncapped, SP meter
 
-**Auto cap**:
-Raising the SP cap until the best score stops improving, so the result
-approximates no ceiling at all. The record keeps the cap it settled on.
+**Analysis settings**:
+The six settings that make up a record's identity, shown together in the
+settings bar and applied to every song: difficulty, Pro Drums and 2x Bass
+(together the chart mode), the SP cap, the score range, and the path limit.
+Changing one shows the records made under the new combination; changing it
+back brings the old ones back without analyzing again. The backend limit is
+not one of them: it only hides backend rows on screen and never re-analyzes.
+_Avoid_: view options
+
+**Library search**:
+What the user types to narrow the library. Every word must match the title,
+artist, charter or folder, in any order; `"quotes"` match a phrase, and
+`title:`, `artist:`, `charter:` and `folder:` limit a word or phrase to one
+field. `stars:N` (exactly N stars) and `squeeze<=N` (hardest squeeze at most N
+ms) test the stored best path and only ever match ready records. Matching
+folds case and accents away, so `beyonce` finds "Beyoncé", and ignores Clone
+Hero's rich-text tags.
 
 ### Paths
 
