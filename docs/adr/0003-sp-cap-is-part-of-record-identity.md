@@ -1,5 +1,10 @@
 # The SP cap is part of a record's identity
 
+> **Superseded 2026-09-27: Auto was removed.** The SP cap is now always a
+> number, and it is still part of a record's identity. The parts below about
+> Auto are history. Records Auto made are deleted the first time the new
+> version opens a database.
+
 A record is the stored result of analyzing one chart. Since 1.6 it is keyed by
 chart, chart mode, and the SP cap it ran at. A 4-bar result and a 64-bar
 what-if for the same chart are two rows that never overwrite each other.
