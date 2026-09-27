@@ -22,16 +22,20 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "app/config.h"
 #include "app/rules_file.h"
 #include "app/report.h"
 #include "app/report_files.h"
 #include "core/model.h"
+#include "core/winstr.h"
 #include "store/record_store.h"
 
-int main(int argc, char** argv) {
+int main() {
     SetConsoleOutputCP(CP_UTF8);
+    const std::vector<std::string> args = hydra::utf8_argv();
+    const int argc = static_cast<int>(args.size());
 
     int64_t max_paths = hydra::app::report::kDefaultReportPaths;
     std::string out = "hydra_paths.html";
@@ -40,12 +44,12 @@ int main(int argc, char** argv) {
     bool open_when_done = true;
 
     for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
+        const std::string& arg = args[i];
         if (arg == "--all-paths") max_paths = hydra::app::report::kEveryPathSentinel;
-        else if (arg == "--paths" && i + 1 < argc) max_paths = std::atoll(argv[++i]);
-        else if (arg == "--out" && i + 1 < argc) out = argv[++i];
-        else if (arg == "--db" && i + 1 < argc) dbpath = argv[++i];
-        else if (arg == "--rules" && i + 1 < argc) rulespath = argv[++i];
+        else if (arg == "--paths" && i + 1 < argc) max_paths = std::atoll(args[++i].c_str());
+        else if (arg == "--out" && i + 1 < argc) out = args[++i];
+        else if (arg == "--db" && i + 1 < argc) dbpath = args[++i];
+        else if (arg == "--rules" && i + 1 < argc) rulespath = args[++i];
         else if (arg == "--no-open") open_when_done = false;
         else {
             std::fprintf(stderr, "Unknown option: %s\n", arg.c_str());

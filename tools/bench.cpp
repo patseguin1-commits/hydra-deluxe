@@ -27,6 +27,7 @@
 #include "app/analysis.h"
 #include "app/config.h"
 #include "app/rules_file.h"
+#include "core/winstr.h"
 #include "corpus_util.h"
 #include "parse/song.h"
 #include "search/pather.h"
@@ -169,7 +170,7 @@ static void scan_mode(const std::string& folder, const std::string& dbpath,
         // Real libraries carry ANSI-encoded song.ini metadata; replace
         // invalid UTF-8 instead of throwing (both sides of a diff replace
         // identically, so equivalence still holds).
-        std::ofstream f(dumppath, std::ios::binary | std::ios::trunc);
+        std::ofstream f(std::filesystem::u8path(dumppath), std::ios::binary | std::ios::trunc);
         f << arr.dump(1, ' ', false, nlohmann::json::error_handler_t::replace) << "\n";
         std::printf("  dumped %zu items to %s\n", sorted.size(), dumppath.c_str());
     }
@@ -229,23 +230,25 @@ static void dump_db(const std::string& dbpath, const std::string& outpath) {
                        {"title", e.title},
                        {"artist", e.artist},
                        {"charter", e.charter}});
-    std::ofstream f(outpath, std::ios::binary | std::ios::trunc);
+    std::ofstream f(std::filesystem::u8path(outpath), std::ios::binary | std::ios::trunc);
     f << arr.dump(1, ' ', false, nlohmann::json::error_handler_t::replace) << "\n";
     std::printf("dumped %zu rows from %s\n", rows.size(), dbpath.c_str());
 }
 
-int main(int argc, char** argv) {
+int main() {
     // --rules <path> may sit anywhere; take it out so the positional mode
     // checks below see the same argv they always did.
-    std::vector<char*> args;
+    const std::vector<std::string> all = utf8_argv();
+    std::vector<std::string> argv;
     std::string rules_path;
-    for (int i = 0; i < argc; ++i) {
-        if (i > 0 && std::string(argv[i]) == "--rules" && i + 1 < argc) {
-            rules_path = argv[++i];
+    for (size_t i = 0; i < all.size(); ++i) {
+        if (i > 0 && all[i] == "--rules" && i + 1 < all.size()) {
+            rules_path = all[++i];
             continue;
         }
-        args.push_back(argv[i]);
+        argv.push_back(all[i]);
     }
+    const int argc = static_cast<int>(argv.size());
     try {
         g_rules = app::load_rules_file(rules_path.empty()
                                            ? app::default_rules_path()
@@ -254,14 +257,12 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "%s\n", e.what());
         return 2;
     }
-    argc = static_cast<int>(args.size());
-    argv = args.data();
 
-    if (argc > 3 && std::string(argv[1]) == "--dump-db") {
+    if (argc > 3 && argv[1] == "--dump-db") {
         dump_db(argv[2], argv[3]);
         return 0;
     }
-    if (argc > 2 && std::string(argv[1]) == "--scan") {
+    if (argc > 2 && argv[1] == "--scan") {
         std::string folder = argv[2], db, dump, dumprel;
         for (int i = 3; i < argc; ++i) {
             std::string arg = argv[i];
