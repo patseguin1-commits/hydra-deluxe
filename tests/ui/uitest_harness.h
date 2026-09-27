@@ -89,8 +89,9 @@ struct Harness {
 // means no rules file, so every other test runs today's rules.
 void reset_app(Harness& h, const std::string& rules_text = "");
 
-// Register every C++ test (uitest_tests.cpp) and, when h.script_path is set,
-// the "script" test (uitest_script.cpp). Each test's UserData is &h.
+// Register every C++ test (the uitest_<area>.cpp files, in the order
+// uitest_tests.cpp fixes) and, when h.script_path is set, the "script" test
+// (uitest_script.cpp). Each test's UserData is &h.
 void register_tests(Harness& h);
 void register_script_test(Harness& h);
 
@@ -124,6 +125,28 @@ bool screenshot(ImGuiTestContext* ctx, const std::string& file);
 // Escape '/' and '#' in a label so it can be used as one path segment of an
 // ImGuiTestRef ("**/" + escape(title)).
 std::string escape_ref(const std::string& label);
+
+// ---- the checked-in C++ tests ---------------------------------------------
+
+// One checked-in test: the name --test and --list use, and its body.
+struct TestEntry {
+    const char* name;
+    void (*fn)(ImGuiTestContext*);
+};
+
+// Each area file's tests, in the order that file lists them.
+const std::vector<TestEntry>& library_tests();       // uitest_library.cpp
+const std::vector<TestEntry>& details_tests();       // uitest_details.cpp
+const std::vector<TestEntry>& preview_tests();       // uitest_preview.cpp
+const std::vector<TestEntry>& batch_report_tests();  // uitest_batch_reports.cpp
+
+// Steps most tests start with (defined in uitest_harness.cpp).
+// Scan testdata/input through the UI and land on the populated library.
+void scan_library(ImGuiTestContext* ctx);
+// Click library row `index`, wait for Song Details, and land on its Paths tab.
+void open_details(ImGuiTestContext* ctx, size_t index);
+// Fresh app, scan, open chart 0's Preview and wait for the load. False on error.
+bool open_preview(ImGuiTestContext* ctx);
 
 }  // namespace uitest
 

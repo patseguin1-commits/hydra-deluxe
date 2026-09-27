@@ -427,4 +427,52 @@ std::string escape_ref(const std::string& label) {
     return out;
 }
 
+// Scan testdata/input through the UI and land on the populated library.
+void scan_library(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    ctx->SetRef("//Hydra");
+    ctx->ItemClick("Scan charts");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->scan_job && h.app->scan_job->snapshot().finished; }, 60));
+    ctx->SetRef("//Scanning charts");
+    IM_CHECK(visible_text(h).find("chart(s) found") != std::string::npos);
+    ctx->ItemClick("Continue");
+    ctx->Yield(2);
+    ctx->SetRef("//Hydra");
+    IM_CHECK(h.app->scan_job == nullptr);
+    IM_CHECK(h.app->library_total > 0);
+    IM_CHECK(!h.app->current_page.rows.empty());
+}
+
+// Click library row `index` and wait for the Song Details modal.
+void open_details(ImGuiTestContext* ctx, size_t index) {
+    Harness& h = harness(ctx);
+    IM_CHECK(index < h.app->current_page.rows.size());
+    std::string title = h.app->current_page.rows[index].title;
+    ctx->SetRef("//Hydra");
+    ctx->ItemClick(("**/" + escape_ref(title)).c_str());
+    ctx->Yield(3);
+    IM_CHECK(h.app->show_details);
+    IM_CHECK(h.app->selected && h.app->selected->title == title);
+    ctx->SetRef("//$FOCUSED");
+    IM_CHECK(visible_text(h).find("Song Details") != std::string::npos);
+    // The ImGui context outlives reset_app, so the tab bar remembers the tab a
+    // previous test left selected. Land on Paths deterministically.
+    ctx->ItemClick("##DetailsTabs/Paths");
+}
+
+// Shared: open chart 0's Preview and wait for the load. Returns false on error.
+bool open_preview(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return false;
+    open_details(ctx, 0);
+    if (ctx->IsError()) return false;
+    ctx->ItemClick("**/Preview");
+    IM_CHECK_RETV(wait_until(ctx, [&] { return h.app->preview && h.app->preview->active(); }, 10), false);
+    IM_CHECK_RETV(wait_until(ctx, [&] { return !h.app->preview->loading(); }, 120), false);
+    IM_CHECK_RETV(h.app->preview->error().empty(), false);
+    return true;
+}
+
 }  // namespace uitest
