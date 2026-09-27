@@ -429,18 +429,6 @@ int64_t tick_at(const SongTiming& timing, double ms) {
     return tick < 0 ? 0 : tick;
 }
 
-// Moonscraper's "[measure:beat:tick]". Timecode counts measures and beats from
-// zero; the box shows both 1-based, with the tick still counted from the beat
-// line, so the caller adds the two offsets.
-std::string bracket_str(int64_t measure, int64_t beat, int64_t tick_in_beat) {
-    char buf[64];
-    std::snprintf(buf, sizeof buf, "[%lld:%lld:%03lld]",
-                  static_cast<long long>(measure),
-                  static_cast<long long>(beat),
-                  static_cast<long long>(tick_in_beat));
-    return buf;
-}
-
 // The song length the time box shows: never negative.
 double shown_length(double length_ms) { return length_ms < 0.0 ? 0.0 : length_ms; }
 
@@ -467,13 +455,6 @@ PreviewTimeBox build_time_box(const PreviewScene& scene, double now_ms,
     // 0 at measure 1, beat 1, exactly as it always has.
     const int64_t now_tick = scene.timing ? tick_at(*scene.timing, now) : 0;
     const int64_t end_tick = scene.timing ? tick_at(*scene.timing, len) : 0;
-    auto mbt_str = [&scene](int64_t tick) {
-        if (!scene.timing) return bracket_str(1, 1, 0);
-        const Timecode tc = scene.timing->timecode(tick);
-        const int64_t* mbt = tc.measure_beats_ticks();
-        return bracket_str(mbt[0] + 1, mbt[1] + 1, mbt[2]);
-    };
-    box.measure_beat = mbt_str(now_tick) + " / " + mbt_str(end_tick);
     box.position = scene.timing ? format_measure(*scene.timing, now_tick) : "m1.1.0";
     box.length = scene.timing ? format_measure(*scene.timing, end_tick) : "m1.1.0";
 
@@ -484,9 +465,6 @@ PreviewTimeBox build_time_box(const PreviewScene& scene, double now_ms,
         if (t.ms > now) break;
         bpm = t.bpm;
     }
-    char buf[64];
-    std::snprintf(buf, sizeof buf, "BPM: %.3f", bpm);
-    box.bpm = buf;
     // The time signature in force at the playhead's tick, as the chart wrote
     // it; 4/4 before any, the chart default.
     int ts_num = 4, ts_den = 4;
@@ -495,16 +473,16 @@ PreviewTimeBox build_time_box(const PreviewScene& scene, double now_ms,
         ts_num = t.numerator;
         ts_den = t.denominator;
     }
-    std::snprintf(buf, sizeof buf, "Time signature: %d/%d", ts_num, ts_den);
-    box.time_sig = buf;
+    char buf[64];
     std::snprintf(buf, sizeof buf, "BPM %.3f \xC2\xB7 %d/%d", bpm, ts_num, ts_den);
     box.tempo = buf;
 
+    std::string section;
     for (const PreviewSection& s : scene.sections) {
         if (s.tick > now_tick) break;
-        box.section = s.name;
+        section = s.name;
     }
-    if (!box.section.empty()) box.section_line = "Section " + box.section;
+    if (!section.empty()) box.section_line = "Section " + section;
     return box;
 }
 

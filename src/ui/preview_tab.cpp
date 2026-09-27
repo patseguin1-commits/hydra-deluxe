@@ -223,6 +223,7 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
     ImGui::PushFont(g_mono_font, 0.0f);
     text_in_slot(box.timestamp.c_str(), readout_w);
     ImGui::PopFont();
+    ImGui::NewLine();  // text_in_slot leaves the cursor on its line; the highway goes below
 
     // Keys: Space plays or pauses, Left/Right jump 5 s, comma/period step
     // 5 ticks, [ and ] jump between activations; a held arrow or comma/period repeats. Not while a text field

@@ -132,13 +132,17 @@ void test_preview_path_overlay(ImGuiTestContext* ctx) {
     for (const hydra::Path* p : h.app->viewed.record->all_allzero_paths())
         rows.push_back(p);
     const hydra::Path* other = nullptr;
+    size_t other_index = 0;  // its place in the list: the list follows all_paths()
     for (size_t i = 1; i < paths.size() && other == nullptr; ++i) {
         std::string label = paths[i]->pathstring();
         if (label == paths[0]->pathstring()) continue;
         size_t seen = 0;
         for (const hydra::Path* p : rows)
             if (p->pathstring() == label) ++seen;
-        if (seen == 1) other = paths[i];
+        if (seen == 1) {
+            other = paths[i];
+            other_index = i;
+        }
     }
     IM_CHECK(other != nullptr);  // the fixture must keep 2+ distinguishable paths
     const std::string first_key = hydra::app::path_overlay_key(paths[0]);
@@ -168,9 +172,10 @@ void test_preview_path_overlay(ImGuiTestContext* ctx) {
     double held = h.app->preview->position_ms();
     IM_CHECK(held > 0.0);
 
-    // Pick the other path and come back to the Preview.
+    // Pick the other path in the Preview's list, then visit Paths and come
+    // back, so the Preview is re-opened on the same chart.
+    pick_preview_path(ctx, other_index);
     ctx->ItemClick("##DetailsTabs/Paths");
-    ctx->ItemClick(("**/" + escape_ref(other_label)).c_str());
     ctx->Yield(2);
     ctx->ItemClick("##DetailsTabs/Preview");
     ctx->Yield(2);
@@ -181,9 +186,9 @@ void test_preview_path_overlay(ImGuiTestContext* ctx) {
     IM_CHECK_FLOAT_NEAR_EQ(h.app->preview->position_ms(), held, 1.0);
     IM_CHECK(h.app->preview->overlay_path_key() != first_overlay);
 
-    // The same chart still previews the first path when it is selected again.
+    // The same chart still previews the first path when it is picked again.
+    pick_preview_path(ctx, 0);
     ctx->ItemClick("##DetailsTabs/Paths");
-    ctx->ItemClick(("**/" + escape_ref(first_label)).c_str());
     ctx->Yield(2);
     ctx->ItemClick("##DetailsTabs/Preview");
     ctx->Yield(2);
@@ -247,13 +252,13 @@ void test_preview_controls(ImGuiTestContext* ctx) {
     pc.step_ticks(0);  // pause and snap onto the displayed tick
     IM_CHECK(!pc.playing());
     const double t0 = pc.position_ms();
-    const std::string mb0 = pc.time_box().measure_beat;
+    const std::string mb0 = pc.time_box().position;
     pc.step_ticks(1);
     IM_CHECK(pc.position_ms() > t0);
     IM_CHECK(pc.position_ms() - t0 < 20.0);  // one tick, at any real tempo
-    IM_CHECK(pc.time_box().measure_beat != mb0);
+    IM_CHECK(pc.time_box().position != mb0);
     pc.step_ticks(-1);
-    IM_CHECK_STR_EQ(pc.time_box().measure_beat.c_str(), mb0.c_str());
+    IM_CHECK_STR_EQ(pc.time_box().position.c_str(), mb0.c_str());
 }
 
 // The SP drain box beside the gauge. Its values are build_drain_box's, pinned
@@ -366,13 +371,13 @@ void test_preview_buttons_keys(ImGuiTestContext* ctx) {
     // the time box to it.
     ctx->ItemClick(("**/" + escape_ref("< 5 Ticks")).c_str());
     const double t0 = pc.position_ms();
-    const std::string mb0 = pc.time_box().measure_beat;
+    const std::string mb0 = pc.time_box().position;
     ctx->KeyPress(ImGuiKey_Period);
     const double t5 = pc.position_ms();
     IM_CHECK(t5 > t0);
-    IM_CHECK(pc.time_box().measure_beat != mb0);
+    IM_CHECK(pc.time_box().position != mb0);
     ctx->KeyPress(ImGuiKey_Comma);
-    IM_CHECK_STR_EQ(pc.time_box().measure_beat.c_str(), mb0.c_str());
+    IM_CHECK_STR_EQ(pc.time_box().position.c_str(), mb0.c_str());
 
     // The key steps 5 ticks: the same place five single steps reach.
     for (int i = 0; i < 5; ++i) pc.step_ticks(1);
