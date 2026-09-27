@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Preview tab, panel widened</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&amp;family=Shippori+Antique+B1&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#1e1e1f;font-family:'Shippori Antique B1',system-ui,sans-serif;color:#fafafa}
+a{color:#00c8c8}a:hover{color:#5fe3e3}
+.btn{font-family:inherit;font-size:13px;line-height:18px;color:#ffffff;background:#007a7a;border:1px solid #007a7a;border-radius:3px;padding:5px 12px;cursor:pointer;white-space:nowrap}
+.btn2{font-family:inherit;font-size:13px;line-height:18px;color:#fafafa;background:#333337;border:1px solid #55555c;border-radius:3px;padding:5px 12px;cursor:pointer;white-space:nowrap}
+.icon{font-family:inherit;font-size:15px;line-height:18px;color:#fafafa;background:#333337;border:1px solid #55555c;border-radius:3px;width:30px;height:30px;padding:0;cursor:pointer}
+.inp{font-family:inherit;font-size:13px;color:#fafafa;background:#333337;border:1px solid #4a4a50;border-radius:2px;padding:4px 6px;height:26px;box-sizing:border-box}
+.lbl{font-size:13px;color:#c8c8c8;white-space:nowrap}
+.dim{color:#919191}
+.mono{font-family:'Courier Prime',monospace}
+.gold{color:#fad200}
+.warn{color:#ff9a3c}
+.cell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 8px}
+.help{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border:1px solid #6a6a70;border-radius:50%;font-size:10px;color:#b0b0b0;margin-left:3px}
+.sep{width:1px;height:26px;background:#46464c}
+.tab{font-family:inherit;font-size:13px;color:#c8c8c8;background:transparent;border:0;border-bottom:2px solid transparent;padding:8px 14px;cursor:pointer}
+.tabon{font-family:inherit;font-size:13px;color:#ffffff;background:transparent;border:0;border-bottom:2px solid #00b4b4;padding:8px 14px;cursor:pointer}
+.tp{font-family:inherit;font-size:13px;color:#fafafa;background:#333337;border:1px solid #55555c;border-radius:3px;padding:4px 10px;cursor:pointer;white-space:nowrap}
+.ov{background:rgba(18,18,20,0.88);border:1px solid #3e3e44;border-radius:4px;padding:8px 10px;font-family:'Courier Prime',monospace;font-size:13px;line-height:18px}
+input[type=checkbox]{accent-color:#00a0a0;width:15px;height:15px;margin:0}
+</style>
+</helmet>
+<div style="width: 1280px; height: 800px; box-sizing: border-box; background: #252526; display: flex; flex-direction: column; overflow: hidden">
+
+<div style="height: 48px; flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid #3a3a3e">
+<button class="btn2">Manage folders… (1)</button>
+<button class="btn2">Scan library</button>
+<button class="btn">Analyze library…</button>
+<button class="btn2">Compare with dmleaderboards…</button>
+<div style="flex-grow: 1"></div>
+<button class="btn2">Open path report</button>
+</div>
+
+<div style="height: 56px; flex-shrink: 0; display: flex; align-items: center; gap: 14px; padding: 0 12px; background: #2b2b2e; border-bottom: 1px solid #3a3a3e">
+<div style="display: flex; flex-direction: column; gap: 1px; width: 92px">
+<span style="font-size: 12px; color: #fafafa">Analysis settings</span>
+<span style="font-size: 11px; color: #919191">for every song</span>
+</div>
+<div class="sep"></div>
+<label class="lbl" style="display: flex; align-items: center; gap: 6px">Difficulty
+<select class="inp" style="width: 84px"><option>Expert</option></select>
+</label>
+<label class="lbl" style="display: flex; align-items: center; gap: 5px"><input type="checkbox" checked="checked">Pro Drums</label>
+<label class="lbl" style="display: flex; align-items: center; gap: 5px"><input type="checkbox" checked="checked">2x Bass</label>
+<div class="sep"></div>
+<label class="lbl" style="display: flex; align-items: center; gap: 6px">SP cap<span class="help">?</span>
+<input class="inp" type="number" value="4" style="width: 48px"><span class="dim">bars</span>
+</label>
+<div class="sep"></div>
+<label class="lbl" style="display: flex; align-items: center; gap: 6px">Score range<span class="help">?</span>
+<input class="inp" type="number" value="2" style="width: 48px">
+<select class="inp" style="width: 76px"><option>scores</option></select>
+</label>
+<div class="sep"></div>
+<label class="lbl" style="display: flex; align-items: center; gap: 6px"><input type="checkbox" checked="checked">Path limit<span class="help">?</span>
+<input class="inp" type="number" value="10" style="width: 54px"><span class="dim">ms</span>
+</label>
+</div>
+
+<div style="flex-grow: 1; display: flex; min-height: 0">
+
+<div style="width: 380px; flex-shrink: 0; display: flex; flex-direction: column; min-height: 0; padding: 10px 0 0 12px; box-sizing: border-box">
+<div style="display: flex; align-items: center; gap: 8px; padding-right: 10px">
+<span style="font-size: 16px">Library</span>
+<span class="dim" style="font-size: 13px">97 charts</span>
+<div style="flex-grow: 1"></div>
+<input class="inp" type="search" aria-label="Search" placeholder="Search" style="width: 150px">
+</div>
+<div style="margin-top: 10px; display: grid; grid-template-columns: 200px minmax(0, 1fr); height: 30px; align-items: center; background: #34343a; font-size: 13px; margin-right: 10px">
+<div class="cell" style="color: #ffffff">Title ▲</div>
+<div class="cell" style="color: #d0d0d0">Best path</div>
+</div>
+<div style="flex-grow: 1; overflow: hidden; padding-right: 10px">
+<sc-for list="{{rows}}" as="r" hint-placeholder-count="20">
+<div style="display: grid; grid-template-columns: 200px minmax(0, 1fr); height: 26px; align-items: center; font-size: 13px; background: {{r.bg}}; outline: {{r.outline}}">
+<div class="cell">{{r.title}}</div>
+<div class="cell mono" style="color: {{r.bestColor}}">{{r.best}}</div>
+</div>
+</sc-for>
+</div>
+</div>
+
+<div style="width: 6px; flex-shrink: 0; background: #2f2f33; border-left: 1px solid #3a3a3e; border-right: 1px solid #3a3a3e; cursor: col-resize"></div>
+
+<div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; background: #28282a">
+<div style="display: flex; align-items: center; gap: 8px; padding: 10px 14px 0 16px">
+<span style="font-size: 20px">Burnout</span>
+<span style="font-size: 13px; color: #c8c8c8">Green Day · charted by Hoph2o</span>
+<div style="flex-grow: 1"></div>
+<span class="gold" style="font-size: 18px">378,315</span>
+<span class="gold mono" style="font-size: 16px">3- 1 2</span>
+<span class="dim" style="font-size: 13px">· 7 stars</span>
+<div style="width: 10px"></div>
+<button class="icon" aria-label="Previous song">‹</button>
+<button class="icon" aria-label="Next song">›</button>
+<button class="icon" aria-label="Close panel (Esc)">×</button>
+</div>
+
+<div role="tablist" style="margin: 6px 14px 0 10px; display: flex; border-bottom: 1px solid #3e3e44">
+<button class="tab" role="tab" aria-selected="false">Paths</button>
+<button class="tabon" role="tab" aria-selected="true">Preview</button>
+<button class="tab" role="tab" aria-selected="false">Dynamics</button>
+<button class="tab" role="tab" aria-selected="false">Stars</button>
+</div>
+
+<div style="padding: 8px 14px 0 16px; display: flex; align-items: center; gap: 6px">
+<label class="lbl" style="display: flex; align-items: center; gap: 6px">Showing
+<select class="inp mono" style="width: 170px"><option>3- 1 2  (optimal)</option><option>0 4 1</option><option>2 1 2</option><option>0 0 0 0  (no squeezes)</option></select>
+</label>
+<div style="flex-grow: 1"></div>
+<button class="tp" aria-label="Previous activation ([)">‹ Act</button>
+<button class="tp" aria-label="Next activation (])">Act ›</button>
+<div class="sep"></div>
+<button class="tp">−5 s</button>
+<button class="tp">‹ 5 ticks</button>
+<button class="btn" style="width: 64px">Play</button>
+<button class="tp">5 ticks ›</button>
+<button class="tp">+5 s</button>
+<div class="sep"></div>
+<label class="lbl" style="display: flex; align-items: center; gap: 6px">Vol<input type="range" value="40" style="width: 70px; accent-color: #00a0a0"></label>
+</div>
+
+<div style="padding: 8px 14px 0 16px; display: flex; align-items: center; gap: 10px">
+<div style="flex-grow: 1; position: relative; height: 22px">
+<div style="position: absolute; left: 0; right: 0; top: 9px; height: 4px; background: #3a3a3e; border-radius: 2px"></div>
+<div style="position: absolute; left: 0; width: 27.7%; top: 9px; height: 4px; background: #00a0a0; border-radius: 2px"></div>
+<div style="position: absolute; left: 30%; top: 3px; width: 3px; height: 16px; background: #fad200"></div>
+<div style="position: absolute; left: 54%; top: 3px; width: 3px; height: 16px; background: #fad200"></div>
+<div style="position: absolute; left: 81%; top: 3px; width: 3px; height: 16px; background: #fad200"></div>
+<div style="position: absolute; left: calc(27.7% - 7px); top: 4px; width: 14px; height: 14px; border-radius: 50%; background: #fafafa"></div>
+</div>
+<span class="mono" style="font-size: 13px">0:35.000 / 2:06.253</span>
+</div>
+<div style="padding: 2px 14px 0 16px; font-size: 11px; color: #a0a0a0">Gold marks are this path's activations. Marker positions in this mock are illustrative.</div>
+
+<div style="flex-grow: 1; margin: 8px 14px 10px 16px; position: relative; background: #141416; border: 1px solid #3a3a3e; border-radius: 3px; overflow: hidden">
+<div style="position: absolute; left: 50%; top: 20px; width: 520px; height: 420px; margin-left: -260px; clip-path: polygon(38% 0, 62% 0, 100% 100%, 0 100%); background: linear-gradient(90deg, #3b1618 0 25%, #3a3212 25% 50%, #122a3d 50% 75%, #153421 75% 100%)"></div>
+<div style="position: absolute; left: 50%; top: 380px; width: 480px; height: 14px; margin-left: -240px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px">
+<div style="border: 2px solid #e03a3a; border-radius: 2px"></div><div style="border: 2px solid #e0b020; border-radius: 2px"></div><div style="border: 2px solid #2f8fe0; border-radius: 2px"></div><div style="border: 2px solid #35b060; border-radius: 2px"></div>
+</div>
+<div style="position: absolute; left: 50%; top: 320px; width: 82px; height: 14px; margin-left: -232px; background: #d83636; border-radius: 5px"></div>
+<div style="position: absolute; left: 50%; top: 260px; width: 70px; height: 12px; margin-left: -196px; background: #d83636; border-radius: 5px"></div>
+<div style="position: absolute; left: 50%; top: 205px; width: 60px; height: 11px; margin-left: -160px; background: #d83636; border-radius: 5px"></div>
+<div style="position: absolute; left: 50%; top: 150px; width: 50px; height: 10px; margin-left: -60px; background: #d8a820; border-radius: 5px"></div>
+<div style="position: absolute; left: 50%; top: 100px; width: 40px; height: 8px; margin-left: 20px; background: #2f8fe0; border-radius: 4px"></div>
+
+<div class="ov" style="position: absolute; left: 10px; top: 10px">
+<div>m27.2.450  <span class="dim">of m96.3.240</span></div>
+<div><span class="dim">BPM</span> 191.001  <span class="dim">·</span> 4/4</div>
+<div><span class="dim">Section</span> chorus_1</div>
+</div>
+<div class="ov" style="position: absolute; left: 10px; top: 92px">
+<div style="font-size: 22px; line-height: 28px">75,655</div>
+<div class="dim">x4 · combo 330</div>
+</div>
+<div class="ov" style="position: absolute; left: 10px; bottom: 10px; max-width: 250px">
+<div class="gold">Next: activation 1 of 3</div>
+<div>at m32.1.0 · [Kick - GreenCym]</div>
+</div>
+<div class="ov" style="position: absolute; right: 44px; top: 10px; text-align: right">
+<div class="dim">SP drain if activated</div>
+<div>1 bar per 2.5 s</div>
+<div>full meter 10.1 s</div>
+</div>
+<div style="position: absolute; right: 10px; top: 10px; bottom: 10px; width: 22px; display: flex; flex-direction: column; align-items: center; gap: 4px">
+<span style="font-size: 11px; color: #fad200">SP</span>
+<div style="flex-grow: 1; width: 12px; border: 1px solid #55555c; position: relative; background: #1e1e1f">
+<div style="position: absolute; left: 0; right: 0; bottom: 0; height: 75%; background: #d4b000"></div>
+<div style="position: absolute; left: 0; right: 0; top: 25%; height: 1px; background: #141416"></div>
+<div style="position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: #141416"></div>
+<div style="position: absolute; left: 0; right: 0; top: 75%; height: 1px; background: #141416"></div>
+</div>
+<span class="mono" style="font-size: 11px">[n]/4</span>
+</div>
+</div>
+
+<div style="padding: 0 14px 8px 16px; font-size: 11px; color: #a0a0a0">Space play/pause · ← → 5 s · , . 5 ticks · [ ] previous/next activation</div>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+renderVals() {
+var titles = ['(b) The Decade of Statues','87','Acid Romance','Act One, Scene One','Actors','Alchemic Web Of Deceit','All These People','Allies','Apex','April Ha Ha','Avalanche [Bring Me The Horizon]','Awakening','Band Like That','Beautiful Madness','Beg','Bend','Bled to Be Free (The Operation)','Blight','Blister','Book (feat. Matt Garstka)','Bug Thief [Iglooghost] (B&X)','Burnout','Chair','Chocolate Jackalope','City Of Ocala','Deadbolt'];
+var rows = titles.map(function (t, i) {
+var sel = t === 'Burnout';
+return {
+title: t,
+best: sel ? '378,315  3- 1 2' : 'Not analyzed',
+bestColor: sel ? '#fad200' : '#919191',
+bg: sel ? '#0d4747' : (i % 2 ? '#29292c' : 'transparent'),
+outline: sel ? '1px solid #00b4b4' : 'none'
+};
+});
+return { rows: rows };
+}
+}
+</script>
+</body>
+</html>

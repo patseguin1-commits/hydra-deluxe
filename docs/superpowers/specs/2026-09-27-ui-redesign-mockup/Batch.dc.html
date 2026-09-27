@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Batch running in the background</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&amp;family=Shippori+Antique+B1&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#1e1e1f;font-family:'Shippori Antique B1',system-ui,sans-serif;color:#fafafa}
+a{color:#00c8c8}a:hover{color:#5fe3e3}
+.btn{font-family:inherit;font-size:13px;line-height:18px;color:#ffffff;background:#007a7a;border:1px solid #007a7a;border-radius:3px;padding:5px 12px;cursor:pointer;white-space:nowrap}
+.btn2{font-family:inherit;font-size:13px;line-height:18px;color:#fafafa;background:#333337;border:1px solid #55555c;border-radius:3px;padding:5px 12px;cursor:pointer;white-space:nowrap}
+.off{font-family:inherit;font-size:13px;line-height:18px;color:#ebebeb;background:#555558;border:1px solid #555558;border-radius:3px;padding:5px 12px;white-space:nowrap}
+.inp{font-family:inherit;font-size:13px;color:#b8b8b8;background:#2a2a2d;border:1px dashed #55555c;border-radius:2px;padding:4px 6px;height:26px;box-sizing:border-box}
+.lbl{font-size:13px;color:#b8b8b8;white-space:nowrap}
+.dim{color:#919191}
+.mono{font-family:'Courier Prime',monospace}
+.gold{color:#fad200}
+.cell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 8px}
+.chip{font-family:inherit;font-size:12px;color:#fafafa;background:#2d2d30;border:1px solid #4a4a50;border-radius:12px;padding:3px 10px;cursor:pointer}
+.chipon{font-family:inherit;font-size:12px;color:#ffffff;background:#006666;border:1px solid #00b4b4;border-radius:12px;padding:3px 10px;cursor:pointer}
+.sep{width:1px;height:26px;background:#46464c}
+input[type=checkbox]{accent-color:#707070;width:15px;height:15px;margin:0}
+</style>
+</helmet>
+<div style="width: 1280px; height: 800px; box-sizing: border-box; background: #252526; display: flex; flex-direction: column; overflow: hidden">
+
+<div style="height: 48px; flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid #3a3a3e">
+<button class="btn2">Manage folders… (1)</button>
+<button class="off" disabled="disabled" title="Busy: a batch is running">Scan library</button>
+<button class="off" disabled="disabled" title="Busy: a batch is running">Analyze library…</button>
+<button class="btn2">Compare with dmleaderboards…</button>
+<div style="flex-grow: 1"></div>
+<button class="btn2">Open path report</button>
+</div>
+
+<div style="flex-shrink: 0; padding: 8px 12px; background: #16393a; border-bottom: 1px solid #1f5c5c; display: flex; align-items: center; gap: 14px" role="status">
+<div style="display: flex; flex-direction: column; gap: 5px; flex-grow: 1; min-width: 0">
+<div style="display: flex; align-items: baseline; gap: 10px; font-size: 13px">
+<span>Analyzing library...</span>
+<span class="mono">22 of 96</span>
+<span style="color: #c8e6e6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Now: Chair · Sufferer</span>
+<div style="flex-grow: 1"></div>
+<span style="color: #c8e6e6">[elapsed] elapsed · about [ETA] left</span>
+</div>
+<div style="height: 6px; background: #0b2324; border-radius: 3px; position: relative">
+<div style="position: absolute; left: 0; top: 0; bottom: 0; width: 22.9%; background: #00b4b4; border-radius: 3px"></div>
+</div>
+<div style="font-size: 12px; color: #c8e6e6">21 analyzed · 0 failed · 1 skipped (already had a result)</div>
+</div>
+<button class="btn2">Pause</button>
+<button class="btn2" title="Keeps the 21 results already finished">Stop</button>
+</div>
+
+<div style="height: 56px; flex-shrink: 0; display: flex; align-items: center; gap: 14px; padding: 0 12px; background: #2b2b2e; border-bottom: 1px solid #3a3a3e">
+<div style="display: flex; flex-direction: column; gap: 1px; width: 92px">
+<span style="font-size: 12px; color: #fafafa">Analysis settings</span>
+<span style="font-size: 11px; color: #c8c8c8; display: flex; align-items: center; gap: 4px">
+<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="#c8c8c8" stroke-width="1.4"><rect x="2" y="5.5" width="8" height="5.5" rx="1"></rect><path d="M4 5.5V4a2 2 0 0 1 4 0v1.5"></path></svg>locked</span>
+</div>
+<div class="sep"></div>
+<label class="lbl" style="display: flex; align-items: center; gap: 6px">Difficulty
+<select class="inp" disabled="disabled" style="width: 84px"><option>Expert</option></select>
+</label>
+<label class="lbl" style="display: flex; align-items: center; gap: 5px"><input type="checkbox" checked="checked" disabled="disabled">Pro Drums</label>
+<label class="lbl" style="display: flex; align-items: center; gap: 5px"><input type="checkbox" checked="checked" disabled="disabled">2x Bass</label>
+<div class="sep"></div>
+<label class="lbl" style="display: flex; align-items: center; gap: 6px">SP cap
+<input class="inp" type="number" value="4" disabled="disabled" style="width: 48px"><span class="dim">bars</span>
+</label>
+<div class="sep"></div>
+<label class="lbl" style="display: flex; align-items: center; gap: 6px">Score range
+<input class="inp" type="number" value="2" disabled="disabled" style="width: 48px"><span class="dim">scores</span>
+</label>
+<div class="sep"></div>
+<label class="lbl" style="display: flex; align-items: center; gap: 6px">Path limit
+<input class="inp" type="number" value="10" disabled="disabled" style="width: 54px"><span class="dim">ms</span>
+</label>
+<div style="flex-grow: 1"></div>
+<span style="font-size: 12px; color: #c8c8c8">Stop the batch to change these.</span>
+</div>
+
+<div style="flex-grow: 1; display: flex; flex-direction: column; min-height: 0; padding: 10px 12px 0 12px">
+<div style="display: flex; align-items: center; gap: 10px">
+<span style="font-size: 16px">Library</span>
+<span class="dim" style="font-size: 13px">97 charts</span>
+<div style="width: 16px"></div>
+<button class="chipon" aria-pressed="true">All 97</button>
+<button class="chip" aria-pressed="false">Not analyzed 75</button>
+<button class="chip" aria-pressed="false">Stale 0</button>
+<button class="chip" aria-pressed="false">Analyzed 22</button>
+<div style="flex-grow: 1"></div>
+<label style="display: flex; align-items: center; gap: 6px; font-size: 13px; color: #c8c8c8">Search
+<input class="inp" type="search" placeholder="title, artist, or charter" style="width: 230px; border-style: solid; color: #fafafa; background: #333337">
+</label>
+</div>
+<div style="margin-top: 10px; display: grid; grid-template-columns: 290px 230px 190px 250px minmax(0, 1fr); height: 30px; align-items: center; background: #34343a; font-size: 13px">
+<div class="cell" style="color: #ffffff">Title ▲</div>
+<div class="cell" style="color: #d0d0d0">Artist</div>
+<div class="cell" style="color: #d0d0d0">Charter</div>
+<div class="cell" style="color: #d0d0d0">Folder</div>
+<div class="cell" style="color: #d0d0d0">Best path</div>
+</div>
+<div style="flex-grow: 1; overflow: hidden">
+<sc-for list="{{rows}}" as="r" hint-placeholder-count="20">
+<div style="display: grid; grid-template-columns: 290px 230px 190px 250px minmax(0, 1fr); height: 26px; align-items: center; font-size: 13px; background: {{r.bg}}">
+<div class="cell">{{r.title}}</div>
+<div class="cell" style="color: #d8d8d8">{{r.artist}}</div>
+<div class="cell" style="color: #d8d8d8">{{r.charter}}</div>
+<div class="cell dim">{{r.folder}}</div>
+<div class="cell mono" style="color: {{r.bestColor}}">{{r.best}}</div>
+</div>
+</sc-for>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+renderVals() {
+var data = [
+['(b) The Decade of Statues','Between the Buried and Me','Grinnz, Onyxite, RAT KING','common\\Summer Blast _25 Setlist\\Tier 6'],
+['87','Polyphia','Bloodline','common\\Summer Blast _25 Setlist\\Tier 6'],
+['Acid Romance','Alpha Wolf','Bloodline','common\\IB24\\T3'],
+['Act One, Scene One','The Fall of Troy','highfine','common\\IB24\\T2'],
+['Actors','Don Broco','Hoph2o','common\\Summer Blast _25 Setlist\\Tier 1'],
+['Alchemic Web Of Deceit','Equipoise','Xane60','common\\Summer Blast _25 Setlist\\Tier 8'],
+['All These People','sungazer','Onyxite','common\\IB24\\T4'],
+['Allies','Mutemath','Jols','common\\Summer Blast _25 Setlist\\Tier 3'],
+['Apex','1.O.M.','Moochalacho','common\\IB24\\T4'],
+['April Ha Ha','Nothing','tomato','common\\Summer Blast _25 Setlist\\Tier 1'],
+['Avalanche [Bring Me The Horizon]','Matt McGuire','Bloodline','common\\Summer Blast _25 Setlist\\Tier 2'],
+['Awakening','Mahavishnu Orchestra','Onyxite','common\\IB24\\T7'],
+['Band Like That','fanclubwallet','Lowlander2, Nathan Resi','common\\IB24\\T2'],
+['Beautiful Madness','Neck Deep','Hoph2o','common\\IB24\\T3'],
+['Beg','Evans Blue','highfine','common\\IB24\\T1'],
+['Bend','Lockslip','Dichotic','common\\IB24\\T6'],
+['Bled to Be Free (The Operation)','RX Bandits','GanonMetroid','common\\Summer Blast _25 Setlist\\Tier 6'],
+['Blight','Fallen Monarch','RAT KING','common\\IB24\\T6'],
+['Blister','Kinglet','Boo','common\\Summer Blast _25 Setlist\\Tier 7'],
+['Book (feat. Matt Garstka)','CHON','Onyxite','common\\IB24\\T3'],
+['Bug Thief [Iglooghost] (B&X)','Xane60 & SoundHaven','Bloodline','common\\IB24\\T7'],
+['Burnout','Green Day','Hoph2o','common\\Summer Blast _25 Setlist\\Tier 4'],
+['Chair','Sufferer','Satan','common\\Summer Blast _25 Setlist\\Tier 4'],
+['Chocolate Jackalope','Dance Gavin Dance','Boo','common\\IB24\\T4'],
+['City Of Ocala','A Day to Remember','Hoph2o','common\\Summer Blast _25 Setlist\\Tier 2']
+];
+var rows = data.map(function (d, i) {
+var now = d[0] === 'Chair';
+var kept = d[0] === 'Burnout';
+var done = i < 21;
+return {
+title: d[0], artist: d[1], charter: d[2], folder: d[3],
+best: now ? 'Analyzing...' : (kept ? '378,315  3- 1 2' : (done ? '[score]  [path]' : 'Not analyzed')),
+bestColor: now ? '#5fe3e3' : ((done || kept) ? '#fad200' : '#919191'),
+bg: now ? '#16393a' : (i % 2 ? '#29292c' : 'transparent')
+};
+});
+return { rows: rows };
+}
+}
+</script>
+</body>
+</html>
