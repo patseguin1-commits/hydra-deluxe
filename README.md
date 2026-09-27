@@ -17,22 +17,23 @@ Hungry for more info? Check out [the wiki](https://github.com/DragonDelgar/hydra
 
 1. Download the installer (`Hydra-<version>-setup.exe`) from the [latest release](https://github.com/DragonDelgar/hydra/releases) and run it. It installs to `C:\Program Files\Hydra`, adds Start Menu shortcuts, and installs the Microsoft VC++ runtime if your PC doesn't have it. The installer isn't code-signed, so Windows SmartScreen may warn — choose "More info" → "Run anyway".
 2. Run Hydra from the Start Menu.
-3. Click `Add folder...` and then pick your Clone Hero songs folder (or whichever folder contains the songs you want to add). Hydra reads `.mid`, `.chart`, `.sng`, and `.srb` charts.
-4. Click `Scan charts`.
-5. Once it's done, songs should appear in a table. Search for or find the page of the song you want to get the path for, then click on the song.
-6. Click the `Analyze paths!` button.
+3. Click `Manage folders...`, then `Add folder...`, and pick your Clone Hero songs folder (or whichever folder contains the songs you want to add). Hydra reads `.mid`, `.chart`, `.sng`, and `.srb` charts.
+4. Click `Scan library`.
+5. Once it's done, songs should appear in a table. Type in the search box to find the song you want to get the path for, then click on the song. Its panel opens beside the library.
+6. Click the `Analyze this song` button.
 7. Once it's done, paths should appear. The first path is optimal. There may be other paths tied for optimal, listed under the same score. Below that are some of the next-highest scores and their paths, which could come in handy if the optimal path is too annoying or difficult.
-8. Click a path on the left side to show its details on the right side.
-9. You can return to browsing songs by X-ing out of the Song Details window.
+8. Click a path on the left side of the panel to show its activations on the right side.
+9. Use `<` and `>` to step to the previous or next song, or close the panel with its `X` (or `Escape`) to go back to browsing.
 
 ### Where your data lives
 
-Hydra keeps its records database, settings, and generated reports next to
-Hydra.exe — for an installed copy that's `C:\Program Files\Hydra` (the
-installer makes that folder writable for regular users). Uninstalling keeps
-your `hydra*.db` / `hydra*_settings.ini` there; delete the folder manually if
-you really want them gone. Moving from a zip install? Copy your old
-`hydra*.db`, `hydra*_settings.ini`, and `hydra*_ui.ini` into
+Hydra keeps its records database and settings next to Hydra.exe — for an
+installed copy that's `C:\Program Files\Hydra` (the installer makes that
+folder writable for regular users). Reports (the path report and the
+leaderboard comparison) are saved in your `Documents\Hydra` folder instead.
+Uninstalling keeps your `hydra*.db` / `hydra*_settings.ini` there; delete the
+folder manually if you really want them gone. Moving from a zip install? Copy
+your old `hydra*.db`, `hydra*_settings.ini`, and `hydra*_ui.ini` into
 `C:\Program Files\Hydra` and your library and records come with you.
 
 ## Command line tools
@@ -152,8 +153,8 @@ thrown away. That rule is why banking SP has a ceiling, why the longest
 activation is 8 measures, and why a phrase collected late in an activation can
 be worth nothing at all.
 
-The **SP cap** setting (in a song's details, next to the timing limit) lets you
-change that number, to answer what the paths would be if the meter held more.
+The **SP cap** setting (in the Analysis settings bar on the main screen) lets
+you change that number, to answer what the paths would be if the meter held more.
 With a higher cap an activation runs 2 measures per bar spent up to that
 ceiling, and a phrase collected during SP is worth its full 2 measures more
 often. **Scores at any cap other than 4 are not achievable in Clone Hero.**
@@ -171,35 +172,10 @@ Before 1.6 this shipped as a second program, Hydra Uncapped, with its own
 `hydra_uncapped.db`. Hydra does not read that file; analyze those charts again
 at the cap you want.
 
-### "Auto": how "no ceiling" is actually reached
-
-Searching with no ceiling at all is the honest way to ask the question and the
-wrong way to answer it. A path holding a different number of bars is a
-different path and nothing merges them, so cost climbs about 2.5x every time
-the ceiling doubles. On a discography, "no ceiling" means every bar count up to
-several hundred, and the search doesn't finish.
-
-It doesn't need to. What a chart can do with SP is limited by the music, not by
-the meter: past some ceiling the optimizer runs out of things to spend it on
-and the score stops moving. So the **Auto** cap raises the ceiling — 16, 32,
-64, … — until two runs in a row agree, and reports that score along with the
-ceiling it settled on. When you pick Auto and a chart already has a record
-above 4 bars, that record is reused instead of running the ladder again.
-
-Two agreeing runs are strong evidence, not proof. A chart that runs out of
-ladder, or out of time (the 120s ladder budget), says so in the path details
-instead of quietly passing for a finished answer.
-
-Measured with the retired 1.3.1 build (Expert Pro Drums 2x, depth 4); the
-current build is faster, so read these as an upper bound and a shape, not
-exact numbers:
-
-| chart | 4 bars | Auto | settled at |
-|---|---|---|---|
-| Hail The Sun — Discography (961 SP phrases) | 3.7s | 36.4s | 64 bars |
-| Rise Against — Discography | 6.1s | 38.1s | 64 bars |
-| blink-182 — Discography (1,732 SP phrases) | 7.3s | 87.5s | 128 bars |
-| Endless Setlist I (4.4 hours of music) | 7.7s | 98.8s | 128 bars |
+Earlier versions also had an automatic cap setting. It kept raising the cap
+until the score stopped changing. It has been removed: pick a number instead.
+Results saved under the automatic setting are deleted the first time the new
+version opens the database.
 
 ## Acknowledgements
 - Boddy, Beud, and Nick (BongOfDestiny) for active beta testing
