@@ -1,0 +1,444 @@
+#include <string>
+#include <vector>
+
+#include "uitest_harness.h"
+
+#include "app/preview_view.h"
+#include "core/model.h"
+#include "render/overlay_layout.h"
+#include "ui/app_state.h"
+#include "ui/preview_controller.h"
+#include "ui/preview_load_job.h"
+
+namespace uitest {
+
+namespace {
+
+void test_preview(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    open_details(ctx, 0);
+    if (ctx->IsError()) return;
+    // The loading bar's numbers: reading sits at 0, decoding spreads stems
+    // over the middle, mixing and building fill the tail. The test charts
+    // load too fast to catch on screen, so pin the math down here.
+    {
+        using P = hydra::ui::PreviewLoadJob::Progress;
+        using S = hydra::ui::PreviewLoadJob::Step;
+        // Locals, not P{...} inline: the braces' commas split the IM_CHECK
+        // macro arguments.
+        const P reading{S::Reading, 0, 0};
+        const P decode0{S::Decoding, 0, 4};
+        const P decode2{S::Decoding, 2, 4};
+        const P decode4{S::Decoding, 4, 4};
+        const P mixing{S::Mixing, 4, 4};
+        const P building{S::Building, 4, 4};
+        IM_CHECK_EQ(reading.fraction(), 0.0f);
+        IM_CHECK_STR_EQ(reading.label().c_str(), "Reading chart");
+        IM_CHECK_FLOAT_NEAR_EQ(decode0.fraction(), 0.10f, 1e-5f);
+        IM_CHECK_FLOAT_NEAR_EQ(decode2.fraction(), 0.475f, 1e-5f);
+        IM_CHECK_STR_EQ(decode2.label().c_str(), "Decoding audio 3/4");
+        IM_CHECK_STR_EQ(decode4.label().c_str(), "Decoding audio 4/4");
+        IM_CHECK_FLOAT_NEAR_EQ(mixing.fraction(), 0.85f, 1e-5f);
+        IM_CHECK_FLOAT_NEAR_EQ(building.fraction(), 0.95f, 1e-5f);
+        IM_CHECK_STR_EQ(building.label().c_str(), "Building scene");
+    }
+
+    ctx->ItemClick("**/Preview");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->preview && h.app->preview->active(); }, 10));
+    // While the load is in flight the tab shows a step label and a progress
+    // bar, not a bare "Loading..." (a big chart decodes for seconds). The
+    // test charts load fast, so only check when we actually caught it loading.
+    if (h.app->preview->loading()) {
+        std::string text = visible_text(h);
+        IM_CHECK(text.find("Loading preview:") != std::string::npos);
+        IM_CHECK(text.find('%') != std::string::npos);
+        IM_CHECK(!h.app->preview->load_progress().label.empty());
+    }
+    IM_CHECK(wait_until(ctx, [&] { return !h.app->preview->loading(); }, 120));
+    IM_CHECK_STR_EQ(h.app->preview->error().c_str(), "");
+    IM_CHECK(!h.app->preview->playing());
+    ctx->ItemClick("**/Play");
+    IM_CHECK(h.app->preview->playing());
+    ctx->ItemClick("**/Pause");
+    IM_CHECK(!h.app->preview->playing());
+}
+
+// An analysis started while the Preview tab is visible must still store its
+// record and reap the job: persistence must not depend on the Paths tab
+// drawing. Pre-fix, analyze_job sat "finished" forever and the record was
+// never stored (the preview-then-analyze 300 s hang).
+void test_analyze_on_preview(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_preview(ctx)) return;
+    ctx->ItemClick("**/Analyze paths!");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
+    IM_CHECK(h.app->viewed.record.has_value());
+    IM_CHECK(!h.app->viewed.record->paths.empty());
+    // Switching to Paths shows the stored result, no re-analyze.
+    ctx->ItemClick("##DetailsTabs/Paths");
+    std::string best = h.app->viewed.record->best_path().pathstring();
+    IM_CHECK(wait_until(ctx, [&] { return visible_text(h).find(best) != std::string::npos; }, 5));
+}
+
+// The path overlay follows the Paths tab's selection. Re-opening the Preview
+// for a chart that was already open used to be a plain no-op, so the overlay
+// stayed on whatever path had been selected the first time -- the record's
+// optimal path. Picking another path must swap the overlay in place: no
+// re-parse, no audio re-decode, and the playhead left where it was.
+void test_preview_path_overlay(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    open_details(ctx, 0);
+    if (ctx->IsError()) return;
+    ctx->ItemClick("**/Analyze paths!");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
+    IM_CHECK(h.app->viewed.record.has_value());
+
+    // A second path to switch to. Path rows are labeled by pathstring, so the
+    // one picked must differ from the first path's and be unique among every
+    // row the panel draws (the all-0 section included).
+    std::vector<const hydra::Path*> paths = h.app->viewed.record->all_paths();
+    std::vector<const hydra::Path*> rows = paths;
+    for (const hydra::Path* p : h.app->viewed.record->all_allzero_paths())
+        rows.push_back(p);
+    const hydra::Path* other = nullptr;
+    for (size_t i = 1; i < paths.size() && other == nullptr; ++i) {
+        std::string label = paths[i]->pathstring();
+        if (label == paths[0]->pathstring()) continue;
+        size_t seen = 0;
+        for (const hydra::Path* p : rows)
+            if (p->pathstring() == label) ++seen;
+        if (seen == 1) other = paths[i];
+    }
+    IM_CHECK(other != nullptr);  // the fixture must keep 2+ distinguishable paths
+    const std::string first_key = hydra::app::path_overlay_key(paths[0]);
+    const std::string other_key = hydra::app::path_overlay_key(other);
+    const std::string first_label = paths[0]->pathstring();
+    const std::string other_label = other->pathstring();
+    IM_CHECK(first_key != other_key);
+    size_t first_rows = 0;
+    for (const hydra::Path* p : rows)
+        if (p->pathstring() == first_label) ++first_rows;
+    IM_CHECK_EQ(first_rows, (size_t)1);  // the first path's row is addressable too
+
+    // The Preview opens on the default selection: the record's first path.
+    ctx->ItemClick("##DetailsTabs/Preview");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->preview && h.app->preview->active(); }, 10));
+    IM_CHECK(wait_until(ctx, [&] { return !h.app->preview->loading(); }, 120));
+    IM_CHECK_STR_EQ(h.app->preview->error().c_str(), "");
+    // The overlay key carries the SP cap after the path's own key, so match the
+    // prefix and then compare whole keys against this first one.
+    const std::string first_overlay = h.app->preview->overlay_path_key();
+    IM_CHECK_EQ(first_overlay.rfind(first_key, 0), (size_t)0);
+
+    // Park the playhead mid-song: a reload would rewind it to zero.
+    IM_CHECK(h.app->preview->length_ms() > 0.0);
+    h.app->preview->seek_ms(h.app->preview->length_ms() * 0.5);
+    ctx->Yield(2);
+    double held = h.app->preview->position_ms();
+    IM_CHECK(held > 0.0);
+
+    // Pick the other path and come back to the Preview.
+    ctx->ItemClick("##DetailsTabs/Paths");
+    ctx->ItemClick(("**/" + escape_ref(other_label)).c_str());
+    ctx->Yield(2);
+    ctx->ItemClick("##DetailsTabs/Preview");
+    ctx->Yield(2);
+    IM_CHECK(!h.app->preview->loading());  // swapped in place, not reloaded
+    IM_CHECK(wait_until(ctx, [&] {
+        return h.app->preview->overlay_path_key().rfind(other_key, 0) == 0;
+    }, 10));
+    IM_CHECK_FLOAT_NEAR_EQ(h.app->preview->position_ms(), held, 1.0);
+    IM_CHECK(h.app->preview->overlay_path_key() != first_overlay);
+
+    // The same chart still previews the first path when it is selected again.
+    ctx->ItemClick("##DetailsTabs/Paths");
+    ctx->ItemClick(("**/" + escape_ref(first_label)).c_str());
+    ctx->Yield(2);
+    ctx->ItemClick("##DetailsTabs/Preview");
+    ctx->Yield(2);
+    IM_CHECK(!h.app->preview->loading());
+    IM_CHECK(wait_until(ctx, [&] {
+        return h.app->preview->overlay_path_key() == first_overlay;
+    }, 10));
+}
+
+// The Preview's finer time controls and running score, driven through the
+// controller inside the real app. preview-buttons-keys drives the same
+// through the panel's buttons and keys.
+void test_preview_controls(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_preview(ctx)) return;  // chart 0, not analyzed yet
+    auto& pc = *h.app->preview;
+
+    // No analyzed path: no score box.
+    IM_CHECK(!pc.score_box().shown);
+
+    // Analyze from the Preview tab, then visit Paths and come back so the
+    // overlay (and with it the score) is rebuilt from the new record's path.
+    ctx->ItemClick("**/Analyze paths!");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
+    IM_CHECK(h.app->viewed.record.has_value());
+    ctx->ItemClick("##DetailsTabs/Paths");
+    ctx->Yield(2);
+    ctx->ItemClick("##DetailsTabs/Preview");
+    // Wait for the reload to finish and the score box to appear, rather than
+    // assume a fixed number of frames is enough.
+    IM_CHECK(wait_until(ctx, [&] { return !pc.loading() && pc.score_box().shown; }, 60));
+
+    // At the song's end the box reads the selected path's total.
+    IM_CHECK(pc.length_ms() > 12000.0);
+    pc.seek_ms(pc.length_ms());
+    hydra::app::PreviewScoreBox end = pc.score_box();
+    IM_CHECK(end.shown);
+    IM_CHECK(end.available);
+    const hydra::Path* shown = h.app->viewed.record->all_paths().front();
+    IM_CHECK_STR_EQ(end.score.c_str(), hydra::group_thousands(shown->totalscore()).c_str());
+
+    // 5 s jumps, clamped to the song's ends.
+    pc.seek_ms(10000.0);
+    pc.jump_ms(5000.0);
+    IM_CHECK_FLOAT_NEAR_EQ(pc.position_ms(), 15000.0, 0.5);
+    pc.jump_ms(-5000.0);
+    IM_CHECK_FLOAT_NEAR_EQ(pc.position_ms(), 10000.0, 0.5);
+    pc.jump_ms(-60000.0);
+    IM_CHECK_FLOAT_NEAR_EQ(pc.position_ms(), 0.0, 0.5);
+    pc.jump_ms(pc.length_ms() + 60000.0);
+    IM_CHECK_FLOAT_NEAR_EQ(pc.position_ms(), pc.length_ms(), 0.5);
+
+    // A jump while playing keeps playing.
+    pc.seek_ms(10000.0);
+    pc.play();
+    IM_CHECK(pc.playing());
+    pc.jump_ms(5000.0);
+    IM_CHECK(pc.playing());
+
+    // A tick step pauses, and one step each way returns to the same tick.
+    pc.step_ticks(0);  // pause and snap onto the displayed tick
+    IM_CHECK(!pc.playing());
+    const double t0 = pc.position_ms();
+    const std::string mb0 = pc.time_box().measure_beat;
+    pc.step_ticks(1);
+    IM_CHECK(pc.position_ms() > t0);
+    IM_CHECK(pc.position_ms() - t0 < 20.0);  // one tick, at any real tempo
+    IM_CHECK(pc.time_box().measure_beat != mb0);
+    pc.step_ticks(-1);
+    IM_CHECK_STR_EQ(pc.time_box().measure_beat.c_str(), mb0.c_str());
+}
+
+// The SP drain box beside the gauge. Its values are build_drain_box's, pinned
+// by the unit tests; this checks the panel feeds it the playhead and the
+// viewed path, and saves a frame of the active box to look at.
+void test_preview_drain_box(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_preview(ctx)) return;  // chart 0, not analyzed yet
+    auto& pc = *h.app->preview;
+
+    // Analyze, then visit Paths and come back so the overlay is rebuilt from
+    // the new record's path (as preview-controls does).
+    ctx->ItemClick("**/Analyze paths!");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
+    IM_CHECK(h.app->viewed.record.has_value());
+    ctx->ItemClick("##DetailsTabs/Paths");
+    ctx->Yield(2);
+    ctx->ItemClick("##DetailsTabs/Preview");
+    IM_CHECK(wait_until(ctx, [&] { return !pc.loading() && pc.score_box().shown; }, 60));
+    IM_CHECK(pc.sp_meter_has_curve());
+
+    // Before anything is banked or spent: the idle box.
+    pc.seek_ms(0.0);
+    hydra::app::PreviewDrainBox idle = pc.drain_box();
+    IM_CHECK(idle.shown);
+    IM_CHECK(!idle.active);
+    IM_CHECK_STR_EQ(idle.header.c_str(), "SP drain (if activated)");
+    IM_CHECK(idle.rate.rfind("1 bar / ", 0) == 0);
+    IM_CHECK(idle.detail.rfind("full meter ", 0) == 0);
+
+    // Somewhere the path has SP running. Walk the playhead to find it, so the
+    // test needs no timing of its own.
+    double active_ms = -1.0;
+    for (double t = 0.0; t <= pc.length_ms() && active_ms < 0.0; t += 50.0) {
+        pc.seek_ms(t);
+        if (pc.drain_box().active) active_ms = t;
+    }
+    IM_CHECK(active_ms >= 0.0);
+    pc.seek_ms(active_ms);
+    hydra::app::PreviewDrainBox on = pc.drain_box();
+    IM_CHECK_STR_EQ(on.header.c_str(), "SP drain");
+    IM_CHECK(on.rate.rfind("1 bar / ", 0) == 0);
+    IM_CHECK(on.detail.rfind("empties in ", 0) == 0);
+
+    // A frame of the active box, for a person to look at.
+    ctx->Yield(2);
+    IM_CHECK(screenshot(ctx, "drain-box-active.png"));
+}
+
+// Sets the harness display width for one test and puts it back however the
+// test ends, so a failed check cannot leave later tests on a narrow display.
+struct DisplayWidth {
+    Harness& h;
+    int saved;
+    DisplayWidth(Harness& harness_, int width) : h(harness_), saved(harness_.width) {
+        h.width = width;
+    }
+    ~DisplayWidth() { h.width = saved; }
+};
+
+// The Preview's text boxes shrink to sit beside the highway in a narrow
+// window and keep their size in a normal one. The Song Details modal follows
+// the display size, so narrowing the display narrows the Preview.
+void test_preview_overlay_fit(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_preview(ctx)) return;
+    auto& pc = *h.app->preview;
+
+    ctx->Yield(3);
+    IM_CHECK_EQ(pc.overlay_scale(), 1.0f);  // the default display: full size
+    IM_CHECK(screenshot(ctx, "overlay-fit-wide.png"));
+
+    DisplayWidth narrow(h, 640);
+    ctx->Yield(5);
+    IM_CHECK(pc.overlay_scale() < 1.0f);
+    IM_CHECK(pc.overlay_scale() >= hydra::render::kOverlayMinScale);
+    IM_CHECK(screenshot(ctx, "overlay-fit-narrow.png"));
+}
+
+// The Preview's new transport buttons and keys: -5s / +5s and Left / Right
+// jump 5 s, < 5 Ticks / 5 Ticks > and comma / period step 5 chart ticks, Space
+// plays and pauses.
+void test_preview_buttons_keys(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_preview(ctx)) return;
+    auto& pc = *h.app->preview;
+    IM_CHECK(!pc.playing());
+    IM_CHECK(pc.length_ms() > 16000.0);
+
+    pc.seek_ms(10000.0);
+    ctx->ItemClick("**/+5s");
+    IM_CHECK_FLOAT_NEAR_EQ(pc.position_ms(), 15000.0, 0.5);
+    ctx->ItemClick("**/-5s");
+    IM_CHECK_FLOAT_NEAR_EQ(pc.position_ms(), 10000.0, 0.5);
+
+    // The arrows jump exactly 5 s. Had keyboard navigation also taken the
+    // arrow and nudged the scrubber, the playhead would be off by the nudge.
+    ctx->KeyPress(ImGuiKey_RightArrow);
+    IM_CHECK_FLOAT_NEAR_EQ(pc.position_ms(), 15000.0, 0.5);
+    ctx->KeyPress(ImGuiKey_LeftArrow);
+    IM_CHECK_FLOAT_NEAR_EQ(pc.position_ms(), 10000.0, 0.5);
+
+    // A tick step pauses.
+    ctx->ItemClick("**/Play");
+    IM_CHECK(pc.playing());
+    ctx->ItemClick("**/5 Ticks >");
+    IM_CHECK(!pc.playing());
+
+    // After a step the playhead sits on a tick; period then comma returns
+    // the time box to it.
+    ctx->ItemClick(("**/" + escape_ref("< 5 Ticks")).c_str());
+    const double t0 = pc.position_ms();
+    const std::string mb0 = pc.time_box().measure_beat;
+    ctx->KeyPress(ImGuiKey_Period);
+    const double t5 = pc.position_ms();
+    IM_CHECK(t5 > t0);
+    IM_CHECK(pc.time_box().measure_beat != mb0);
+    ctx->KeyPress(ImGuiKey_Comma);
+    IM_CHECK_STR_EQ(pc.time_box().measure_beat.c_str(), mb0.c_str());
+
+    // The key steps 5 ticks: the same place five single steps reach.
+    for (int i = 0; i < 5; ++i) pc.step_ticks(1);
+    IM_CHECK_FLOAT_NEAR_EQ(pc.position_ms(), t5, 0.001);
+    pc.step_ticks(-5);
+    IM_CHECK_FLOAT_NEAR_EQ(pc.position_ms(), t0, 0.001);
+
+    // Space plays and pauses. Tab puts the keyboard focus box on the button
+    // after "< 5 Ticks"; had navigation also taken Space it would have
+    // pressed that button too, which undoes the toggle or steps the playhead.
+    ctx->ItemClick(("**/" + escape_ref("< 5 Ticks")).c_str());
+    ctx->KeyPress(ImGuiKey_Tab);
+    IM_CHECK(!pc.playing());
+    const double t1 = pc.position_ms();
+    ctx->KeyPress(ImGuiKey_Space);
+    IM_CHECK(pc.playing());
+    IM_CHECK(pc.position_ms() >= t1);
+    ctx->KeyPress(ImGuiKey_Space);
+    IM_CHECK(!pc.playing());
+}
+
+// Click-and-hold on the time bar while playing. Onyx pauses playback for the
+// hold; Hydra used to keep playing and re-seek the audio to the held time
+// every frame, which came out as a buzz. The transport must be paused while
+// the mouse is down, sit still at the held time, and resume on release.
+void test_scrub_hold(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_preview(ctx)) return;
+    ctx->ItemClick("**/Play");
+    IM_CHECK(h.app->preview->playing());
+    ctx->MouseMove("**/##scrub");
+    ctx->MouseDown(0);
+    ctx->Yield(5);
+    IM_CHECK(!h.app->preview->playing());
+    double held = h.app->preview->position_ms();
+    ctx->Yield(30);
+    IM_CHECK_FLOAT_NEAR_EQ(h.app->preview->position_ms(), held, 0.5);
+    ctx->MouseUp(0);
+    ctx->Yield(2);
+    IM_CHECK(h.app->preview->playing());
+    // The same hold while paused stays paused afterwards.
+    ctx->ItemClick("**/Pause");
+    ctx->MouseMove("**/##scrub");
+    ctx->MouseDown(0);
+    ctx->Yield(5);
+    ctx->MouseUp(0);
+    ctx->Yield(2);
+    IM_CHECK(!h.app->preview->playing());
+}
+
+// A widget must not move under the mouse because a number next to it changed
+// width (the font is proportional). The Vol slider sits after the live time
+// readout; the page arrows straddle the page counter.
+void test_layout_drift(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_preview(ctx)) return;
+    ctx->ItemClick("**/Play");
+    ImVec2 vol0 = ctx->ItemInfo("**/##volume").RectFull.Min;
+    ImVec2 play0 = ctx->ItemInfo("**/Pause").RectFull.Min;
+    ImVec2 scrub0 = ctx->ItemInfo("**/##scrub").RectFull.Min;
+    float scrubw0 = ctx->ItemInfo("**/##scrub").RectFull.GetWidth();
+    double t0 = h.app->preview->position_ms();
+    // Let the readout pass through several different digit strings.
+    IM_CHECK(wait_until(ctx, [&] { return h.app->preview->position_ms() > t0 + 1500.0; }, 10));
+    for (int i = 0; i < 20; ++i) {
+        ctx->Yield(3);
+        IM_CHECK_FLOAT_NEAR_EQ(ctx->ItemInfo("**/##volume").RectFull.Min.x, vol0.x, 0.01f);
+        IM_CHECK_FLOAT_NEAR_EQ(ctx->ItemInfo("**/##scrub").RectFull.Min.x, scrub0.x, 0.01f);
+        IM_CHECK_FLOAT_NEAR_EQ(ctx->ItemInfo("**/##scrub").RectFull.GetWidth(), scrubw0, 0.01f);
+    }
+    ctx->ItemClick("**/Pause");
+    // Play/Pause swap must not shift the scrubber either.
+    IM_CHECK_FLOAT_NEAR_EQ(ctx->ItemInfo("**/##scrub").RectFull.Min.x, scrub0.x, 0.01f);
+    (void)play0;
+}
+
+}  // namespace
+
+const std::vector<TestEntry>& preview_tests() {
+    static const std::vector<TestEntry> entries = {
+        {"preview", test_preview},
+        {"analyze-on-preview", test_analyze_on_preview},
+        {"preview-path-overlay", test_preview_path_overlay},
+        {"preview-controls", test_preview_controls},
+        {"preview-drain-box", test_preview_drain_box},
+        {"preview-overlay-fit", test_preview_overlay_fit},
+        {"preview-buttons-keys", test_preview_buttons_keys},
+        {"scrub-hold", test_scrub_hold},
+        {"layout-drift", test_layout_drift},
+    };
+    return entries;
+}
+
+}  // namespace uitest
