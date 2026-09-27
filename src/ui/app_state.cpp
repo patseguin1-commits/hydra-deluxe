@@ -5,6 +5,7 @@
 #include "app/config.h"
 #include "app/rules_file.h"
 #include "app/report_files.h"
+#include "app/user_messages.h"
 #include "core/winstr.h"
 #include "ui/preview_controller.h"
 
@@ -109,10 +110,41 @@ void AppState::set_rows_per_page(int rows) {
     refresh_page();
 }
 
+// Over the page the table shows today. T12 re-implements these three over its
+// whole-library model (library_view_order()); every caller stays the same.
+size_t AppState::view_row_count() const { return current_page.rows.size(); }
+
+const store::ChartLibraryEntry& AppState::view_row(size_t i) const {
+    return current_page.rows[i];
+}
+
+store::RecordStatus AppState::view_row_status(size_t i) const {
+    return i < current_page.summaries.size() ? current_page.summaries[i].state
+                                             : store::RecordStatus::NotAnalyzed;
+}
+
+std::optional<size_t> AppState::relative_row(int delta) const {
+    if (!selected || delta == 0) return std::nullopt;
+    const size_t n = view_row_count();
+    for (size_t i = 0; i < n; ++i) {
+        // notespath, not md5: the same chart can sit in two folders.
+        if (view_row(i).notespath != selected->notespath) continue;
+        const long long j = static_cast<long long>(i) + delta;
+        if (j < 0 || j >= static_cast<long long>(n)) return std::nullopt;
+        return static_cast<size_t>(j);
+    }
+    return std::nullopt;
+}
+
+bool AppState::can_select_relative(int delta) const { return relative_row(delta).has_value(); }
+
+void AppState::select_relative(int delta) {
+    if (std::optional<size_t> i = relative_row(delta)) select(view_row(*i));
+}
+
 void AppState::select(const store::ChartLibraryEntry& entry) {
-    // The previous chart's window, torn down the one way. A row can only be
-    // clicked while the window is closed, when this already ran, so it is a
-    // no-op in the app; it matters for callers that select directly.
+    // The previous chart's panel, torn down the one way: a row click or
+    // previous / next swaps the song while the panel stays open.
     close_details();
     parked_lookups_.clear();  // a new chart: nothing parked applies
     selected = entry;
@@ -122,12 +154,10 @@ void AppState::select(const store::ChartLibraryEntry& entry) {
 
 void AppState::close_details() {
     show_details = false;
-    // With the window gone there is nowhere to show an analysis' progress,
-    // and the search would keep burning CPU unseen.
-    // The main window reaps the job once the cancel lands.
-    if (analyze_job && !analyze_job->finished()) analyze_job->cancel();
+    // A running analysis keeps going: tick() stores it when it finishes,
+    // whichever song is showing by then. (Closing used to cancel it.)
     // The audio device must stop, and the GPU and decode work must not keep
-    // running behind a hidden window.
+    // running behind a hidden panel.
     if (preview) preview->close();
     // Keep a count that already finished; cancel one still parsing.
     reap_dynamics();
@@ -154,6 +184,7 @@ bool AppState::selected_file_ok(double now) {
 
 void AppState::refresh_viewed_record() {
     if (!selected) {
+        viewed_summary = store::PathSummary{};
         viewed = store::RecordLookup{};
         viewed_key_.reset();
         return;
@@ -162,6 +193,7 @@ void AppState::refresh_viewed_record() {
     viewed = store->get_record(key);
     viewed_key_ = std::move(key);
     record_generation.bump();
+    refresh_viewed_summary();
 }
 
 void AppState::show_record_for_settings() {
@@ -191,9 +223,80 @@ void AppState::show_record_for_settings() {
         viewed = std::move(*found);
         viewed_key_ = std::move(key);
         record_generation.bump();  // selected_path must re-sync, as after a read
+        refresh_viewed_summary();
     } else {
         refresh_viewed_record();
     }
+}
+
+void AppState::refresh_viewed_summary() {
+    viewed_summary = store::PathSummary{};
+    if (!selected || viewed.status != store::RecordStatus::Ready) return;
+    // One chart, one query, only when the record changes -- never per frame.
+    std::vector<store::SummaryLookup> found = store->get_summaries(
+        {selected->md5}, settings.chartmode_key(), settings.cap_query(), settings.lens());
+    if (!found.empty()) viewed_summary = std::move(found.front().summary);
+}
+
+bool AppState::analyze_running() const { return analyze_job && !analyze_job->finished(); }
+
+bool AppState::batch_running() const { return batch_job && !batch_job->snapshot().finished; }
+
+bool AppState::analyze_job_shown() const {
+    return analyze_job && show_details && selected &&
+           analyze_job->song().notespath == selected->notespath;
+}
+
+void AppState::tick(double now) {
+    if (!show_details && details_ui.prev_open) close_details();
+    details_ui.prev_open = show_details;
+    update_analyze_job(now);
+    reap_dynamics();
+}
+
+void AppState::update_analyze_job(double now) {
+    // Keyed on the job generation, not the job's address: a freed AnalyzeJob's
+    // block can be handed straight back to the next make_unique, and a pointer
+    // compare then carries `stored`/`done_at` over from the previous job.
+    DetailsViewState& d = details_ui;
+    if (d.analyze_watcher.changed(analyze_generation)) {
+        d.done_at = -1.0;
+        d.stored = false;
+        d.store_error.clear();
+    }
+    AnalyzeJob* job = analyze_job.get();
+    if (!job || !job->finished()) return;
+    if (job->is_cancelled()) {  // the panel's Cancel: nothing to store
+        analyze_job.reset();
+        return;
+    }
+    // A result or error for a song the panel isn't showing goes to the status
+    // line; one for the shown song stays in the panel until Continue.
+    const bool shown = analyze_job_shown();
+    const std::string title = job->song().title;
+    if (!job->ok()) {
+        if (!shown) {
+            // message() is T4's plain sentence; the raw error() stays in the
+            // panel's detail line for a song that is showing.
+            set_status("Could not analyze " + title + ". " + job->message());
+            analyze_job.reset();
+        }
+        return;
+    }
+    if (!d.stored) {
+        d.stored = true;
+        d.store_error = store_finished_analysis();
+        if (d.store_error.empty()) d.done_at = now;
+    }
+    if (!d.store_error.empty()) {
+        if (!shown) {
+            set_status(d.store_error);
+            analyze_job.reset();
+        }
+        return;
+    }
+    // The panel flashes "Done!" for half a second; nobody sees it otherwise.
+    if (!shown || now - d.done_at > 0.5) analyze_job.reset();
 }
 
 bool AppState::report_file_shown(double now) {
@@ -317,7 +420,7 @@ std::string AppState::store_finished_analysis() {
         refresh_page();  // the library row's Best Path cell is cached per page
         return "";
     } catch (const std::exception& e) {
-        return std::string("Analyzed, but saving failed: ") + e.what();
+        return "Analyzed, but saving failed. " + app::plain_error(e);
     }
 }
 

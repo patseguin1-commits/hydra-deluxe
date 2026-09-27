@@ -401,6 +401,7 @@ add_executable(hydra_tests
     tests/test_fill_deadline.cpp
     tests/test_fill_report.cpp
     tests/test_app_state.cpp
+    tests/test_song_panel_state.cpp
     tests/test_app_shell.cpp
     tests/test_preview_controller.cpp
     tests/test_utf8_paths.cpp
