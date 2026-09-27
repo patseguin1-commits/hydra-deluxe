@@ -1,9 +1,11 @@
 #include "app/path_view.h"
 #include "app/display_format.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 
 #include "core/backend_value.h"
 
@@ -11,15 +13,98 @@ namespace hydra::app {
 
 namespace {
 
-std::string measurestr(const Timecode& tc) {
+std::string bars_text(int bars) {
+    return std::to_string(bars) + (bars == 1 ? " bar" : " bars");
+}
+
+// The separator the new labels use: " · " (U+00B7 in UTF-8).
+const char* const kDot = " \xC2\xB7 ";
+
+}  // namespace
+
+std::string format_measure(const Timecode& tc) {
     const int64_t* mbt = tc.measure_beats_ticks();
-    char buf[32];
+    char buf[48];
     std::snprintf(buf, sizeof(buf), "m%lld.%lld.%lld", (long long)mbt[0] + 1,
                   (long long)mbt[1] + 1, (long long)mbt[2]);
     return buf;
 }
 
-}  // namespace
+std::string format_measure(const SongTiming& timing, int64_t tick) {
+    return format_measure(timing.timecode(tick));
+}
+
+std::string activation_badge(const Activation& act) {
+    const std::optional<double> hardest = act.difficulty();
+    if (!hardest) return {};
+    // difficulty() is the max over the SqIns/SqOuts and a required fill, so
+    // the squeeze that produced it compares equal; a tie names the squeeze.
+    const char* what = "calibration fill";
+    for (const SPSqueeze& sq : act.sqinouts)
+        if (sq.difficulty() == *hardest) {
+            what = sq.kind == SqueezeKind::SqIn ? "squeeze in" : "squeeze out";
+            break;
+        }
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%s %.0f ms", what, *hardest);
+    return buf;
+}
+
+std::vector<TextLine> squeeze_sentences(const Activation& act,
+                                        const BackendRating* squeezed_out,
+                                        double leeway_ms) {
+    std::vector<TextLine> out;
+    for (const SPSqueeze& sq : act.sqinouts) {
+        // timing() is the edge SPSqueeze::description() prints: a SqOut must
+        // be hit later than it, a SqIn earlier than it.
+        const double t = sq.timing();
+        std::string text;
+        if (sq.kind == SqueezeKind::SqOut) {
+            const std::string note =
+                squeezed_out ? "the " + squeezed_out->row.chord.notationstr() + " note"
+                             : std::string("the SP phrase's last note");
+            const std::string when = t >= 0.0
+                                         ? "more than " + format_ms_spaced(std::fabs(t)) + " late"
+                                         : "no more than " + format_ms_spaced(std::fabs(t)) + " early";
+            text = "Hit " + note + " " + when + " so it lands after Star Power ends.";
+            if (squeezed_out) {
+                // What the squeeze-out costs, from the same function the
+                // search prices the row with (the table's "(-N)").
+                const BackendSqueeze& row = squeezed_out->row;
+                const double off = row.offset_ms.value_or(0.0);
+                if (core::counted_without_squeeze(off, leeway_ms)) {
+                    const int value = core::backend_row_value(
+                        off, row.points, row.sqout_points, core::SqOutPosition::Exact, leeway_ms);
+                    const int lost = row.points - value;
+                    text += lost > 0 ? " It scores " + std::to_string(lost) +
+                                           " fewer points, and its SP phrase banks for later."
+                                     : std::string(" It costs no points, and its SP phrase "
+                                                   "banks for later.");
+                } else {
+                    text += " It costs no points, because Hydra's score never counted that "
+                            "note under Star Power, and its SP phrase banks for later.";
+                }
+            } else {
+                text += " Its SP phrase banks for later.";
+            }
+        } else {
+            const std::string when = t <= 0.0
+                                         ? "more than " + format_ms_spaced(std::fabs(t)) + " early"
+                                         : "no more than " + format_ms_spaced(std::fabs(t)) + " late";
+            text = "Hit the SP phrase's last note " + when +
+                   " so it lands before Star Power ends. The phrase then counts while Star "
+                   "Power runs, which makes Star Power last longer.";
+        }
+        out.push_back({std::move(text), sq.is_difficult()});
+    }
+    return out;
+}
+
+const char* const kBackendTimingsLead =
+    "Timing is how far each note sits from the Star Power end, in ms; negative is "
+    "before it. Points is what this path scores for the note under Star Power. A note "
+    "marked (uncounted) lands outside Star Power unless it is squeezed in, so this "
+    "path's score leaves it out.";
 
 RecordStatusView build_record_status(const store::RecordLookup& lookup) {
     RecordStatusView view;
@@ -55,9 +140,18 @@ std::vector<MultSqueezeView> build_multsqueezes(const HydraRecord& record) {
         v.label = msq.notationstr() + "   (+" + std::to_string(msq.points()) +
                   " pts):   " + msq.chord().rowstr();
         v.howto = msq.howto();
+        v.points = msq.points();
         out.push_back(std::move(v));
     }
     return out;
+}
+
+std::string multsqueeze_summary(const std::vector<MultSqueezeView>& squeezes) {
+    if (squeezes.empty()) return "none";
+    int total = 0;
+    for (const MultSqueezeView& s : squeezes) total += s.points;
+    const std::string sum = "+" + group_thousands(total);
+    return squeezes.size() == 1 ? sum : std::to_string(squeezes.size()) + kDot + sum;
 }
 
 const char* const kTransferScaleHint =
@@ -78,7 +172,8 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
                                   const SongTiming* timing,
                                   double hit_window_ms,
                                   std::optional<double> backend_limit_ms,
-                                  const core::Rules& rules) {
+                                  const core::Rules& rules,
+                                  std::optional<double> song_length_ms) {
     ActivationsView view;
     const double W = hit_window_ms;
 
@@ -92,7 +187,7 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
         // advance (IM_TABSIZE) shared with DearPyGui, so the columns line up
         // identically to the Python app.
         std::string ntn = act.notationstr();
-        std::string meas = measurestr(act.timecode);
+        std::string meas = format_measure(act.timecode);
         char hbuf[128];
         std::snprintf(hbuf, sizeof(hbuf), "%-6s(%d SP)\t%9s", ntn.c_str(),
                       act.sp_meter, meas.c_str());
@@ -104,6 +199,17 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
             av.header += buf;
         }
         av.difficult = act.is_difficult();
+        av.number = static_cast<int>(view.acts.size()) + 1;
+        av.notation = ntn;
+        av.measure = meas;
+        av.sp_bars = act.sp_meter;
+        av.bars = bars_text(act.sp_meter);
+        av.badge = activation_badge(act);
+        av.chord = act.chord.rowstr();
+        if (timing && song_length_ms && *song_length_ms > 0.0) {
+            const double at = timing->timecode(act.timecode.ticks()).ms();
+            av.song_fraction = std::clamp(at / *song_length_ms, 0.0, 1.0);
+        }
 
         if (act.is_e_critical()) {
             // Positive = hit early, the same sign as the header and the report:
@@ -202,8 +308,7 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
         if (rate.cap_clamped) {
             if (timing && act.clamp_tick) {
                 av.overfill_warning =
-                    "SP overfilled at " +
-                    measurestr(timing->timecode(*act.clamp_tick));
+                    "SP overfilled at " + format_measure(*timing, *act.clamp_tick);
             } else {
                 av.overfill_warning = "SP overfilled";
             }
@@ -211,6 +316,10 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
 
         for (const SPSqueeze& sq : act.sqinouts)
             av.sqinouts.push_back({sq.description(), sq.is_difficult()});
+        const BackendRating* squeezed_out = nullptr;
+        for (const BackendRating& br : rate.backends)
+            if (br.squeezed_out) squeezed_out = &br;
+        av.squeeze_sentences = squeeze_sentences(act, squeezed_out, rules.backend_leeway_ms);
 
         av.backends.reserve(rate.backends.size());
         for (const BackendRating& br : rate.backends) {
@@ -279,8 +388,32 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
             }
             av.backends.push_back(std::move(row));
         }
+        const size_t shown = av.backends.size();
+        av.backends_label = std::to_string(shown) + (shown == 1 ? " note" : " notes") +
+                            " near the SP end";
 
         view.acts.push_back(std::move(av));
+    }
+
+    // The line beside the heading: how many, how many bars each, what is left.
+    if (!view.acts.empty()) {
+        int lo = view.acts.front().sp_bars, hi = lo;
+        for (const ActivationRowView& a : view.acts) {
+            lo = std::min(lo, a.sp_bars);
+            hi = std::max(hi, a.sp_bars);
+        }
+        const std::string bars =
+            lo == hi ? bars_text(lo) + (view.acts.size() > 1 ? " each" : "")
+                     : std::to_string(lo) + " to " + std::to_string(hi) + " bars";
+        const std::string left = path.leftover_sp == 0
+                                     ? std::string("no SP left over")
+                                     : bars_text(path.leftover_sp) + " of SP left over";
+        view.summary = std::to_string(view.acts.size()) + kDot + bars + kDot + left;
+    }
+    if (timing && song_length_ms && *song_length_ms > 0.0) {
+        const int64_t end_tick = std::llround(timing->ms_index().tick_at_ms(*song_length_ms));
+        view.timeline_end =
+            "m" + std::to_string((long long)timing->timecode(end_tick).measure_beats_ticks()[0] + 1);
     }
 
     view.footer.push_back(
@@ -377,6 +510,72 @@ PathListView build_path_list(const HydraRecord& record) {
     return view;
 }
 
+std::string within_label(int depth_mode, int depth_value) {
+    const bool points = depth_mode == 1;
+    const std::string n = points ? group_thousands(depth_value) : std::to_string(depth_value);
+    const char* unit = points ? (depth_value == 1 ? " point" : " points")
+                              : (depth_value == 1 ? " score" : " scores");
+    return "Within " + n + unit;
+}
+
+PathButtonsView build_path_buttons(const HydraRecord& record, int depth_mode, int depth_value) {
+    PathButtonsView view;
+    view.within_label = within_label(depth_mode, depth_value);
+    const PathListView list = build_path_list(record);
+    const int64_t best = record.paths.empty() ? 0 : record.best_path().totalscore();
+
+    auto add = [&](const Path* p, PathButtonView::Group group) {
+        PathButtonView b;
+        b.path = p;
+        b.group = group;
+        b.notation = p->pathstring();
+        b.title = group_thousands(p->totalscore()) + kDot + b.notation;
+        if (group == PathButtonView::Group::AllZero) {
+            // What the all-0 path costs against the optimal one.
+            const int64_t delta = p->totalscore() - best;
+            if (delta < 0) b.detail = group_thousands(-delta) + " below optimal";
+            if (delta > 0) b.detail = group_thousands(delta) + " above optimal";
+        } else if (std::optional<double> hardest = p->difficulty()) {
+            b.detail = "hardest squeeze " + format_ms_spaced(*hardest);
+            b.detail_warn = p->is_difficult();
+        }
+        view.buttons.push_back(std::move(b));
+    };
+    for (size_t g = 0; g < list.groups.size(); ++g)
+        for (const Path* p : list.groups[g].paths)
+            add(p, g == 0 ? PathButtonView::Group::Optimal : PathButtonView::Group::Within);
+    if (list.show_allzero)
+        for (const Path* p : list.allzero) add(p, PathButtonView::Group::AllZero);
+    return view;
+}
+
+void PathsTabUi::reset(size_t rows) {
+    act_open.assign(rows, 0);
+    backends_open.assign(rows, 0);
+    if (rows > 0) act_open[0] = 1;
+}
+
+bool PathsTabUi::all_open() const {
+    if (act_open.empty()) return false;
+    for (char open : act_open)
+        if (!open) return false;
+    return true;
+}
+
+void PathsTabUi::set_all(bool open) {
+    std::fill(act_open.begin(), act_open.end(), static_cast<char>(open ? 1 : 0));
+}
+
+void PathsTabUi::click_row(size_t i) {
+    if (i >= act_open.size()) return;
+    if (act_open[i]) {
+        act_open[i] = 0;
+        return;
+    }
+    std::fill(act_open.begin(), act_open.end(), static_cast<char>(0));
+    act_open[i] = 1;
+}
+
 const RecordStatusView& PathsTabCache::status(const store::RecordLookup& lookup,
                                                int record_generation) {
     if (record_generation != status_generation_) {
@@ -410,21 +609,38 @@ const PathsTabCache::Row& PathsTabCache::row(const Path* path) const {
 const PathsTabCache::Details& PathsTabCache::details(
     const Path& path, const HydraRecord& record, int record_generation,
     const SongTiming* timing, double hit_window_ms, std::optional<double> backend_limit_ms,
-    const core::Rules& rules) {
-    if (record_generation != details_generation_ || &path != details_path_ ||
-        hit_window_ms != details_hit_window_ms_ ||
-        backend_limit_ms != details_backend_limit_ms_) {
+    const core::Rules& rules, std::optional<double> song_length_ms) {
+    const bool new_path = record_generation != details_generation_ || &path != details_path_;
+    if (new_path || hit_window_ms != details_hit_window_ms_ ||
+        backend_limit_ms != details_backend_limit_ms_ ||
+        song_length_ms != details_song_length_ms_) {
         details_.squeezes = build_multsqueezes(record);
-        details_.activations =
-            build_activations(path, record, timing, hit_window_ms, backend_limit_ms, rules);
+        details_.activations = build_activations(path, record, timing, hit_window_ms,
+                                                 backend_limit_ms, rules, song_length_ms);
         details_.breakdown = build_score_breakdown(path);
         details_generation_ = record_generation;
         details_path_ = &path;
         details_hit_window_ms_ = hit_window_ms;
         details_backend_limit_ms_ = backend_limit_ms;
+        details_song_length_ms_ = song_length_ms;
+        // What is unfolded belongs to the path; a display setting keeps it.
+        if (new_path) ui_.reset(details_.activations.acts.size());
         ++details_builds_;
     }
     return details_;
+}
+
+const PathButtonsView& PathsTabCache::buttons(const HydraRecord& record, int record_generation,
+                                              int depth_mode, int depth_value) {
+    if (record_generation != buttons_generation_ || depth_mode != buttons_depth_mode_ ||
+        depth_value != buttons_depth_value_) {
+        buttons_ = build_path_buttons(record, depth_mode, depth_value);
+        buttons_generation_ = record_generation;
+        buttons_depth_mode_ = depth_mode;
+        buttons_depth_value_ = depth_value;
+        ++buttons_builds_;
+    }
+    return buttons_;
 }
 
 }  // namespace hydra::app
