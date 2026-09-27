@@ -11,6 +11,7 @@
 #include "core/winstr.h"
 #include "imgui.h"
 #include "imgui_internal.h"  // SetKeyOwner, owner-aware IsKeyPressed
+#include "render/overlay_layout.h"
 #include "ui/dynamics_load_job.h"
 #include "ui/fonts.h"
 #include "ui/generation.h"
@@ -724,11 +725,26 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
         ImGui::Image((ImTextureID)(intptr_t)srv,
                      ImVec2(static_cast<float>(w), static_cast<float>(h)));
 
-        // The time box, drawn over the image the way Onyx draws its own
-        // (top-left, monospace, on a translucent dark panel): time / length,
+        // The text overlays: the time box and score box top-left, the SP drain
+        // box top-right beside the gauge. They share one scale, fitted by
+        // render::overlay_scale so they sit beside the highway: their
+        // configured size whenever there is room, smaller in a narrow window,
+        // never below kOverlayMinScale (under that they overlap rather than
+        // become unreadable). Everything is measured at scale 1 first, then
+        // drawn at the fitted scale. The gauge keeps its size.
+        ImFont* font = g_mono_font ? g_mono_font : ImGui::GetFont();
+        const render::PreviewConfig& pcfg = pc->preview_config();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImVec2 origin = ImGui::GetItemRectMin();
+        const ImVec2 img_max = ImGui::GetItemRectMax();
+        auto text_width = [font](float sz, const char* s) {
+            return font->CalcTextSizeA(sz, FLT_MAX, 0.0f, s).x;
+        };
+
+        // The time box's lines, the way Onyx draws its own (top-left,
+        // monospace, on a translucent dark panel): time / length,
         // [measure:beat:tick] for both, BPM, the time signature, and the
-        // practice section. The section line is absent on charts that have no
-        // sections.
+        // practice section (absent on charts that have none).
         hydra::app::PreviewTimeBox box = pc->time_box();
         const char* lines[5];
         int line_count = 0;
@@ -737,22 +753,68 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
         lines[line_count++] = box.bpm.c_str();
         lines[line_count++] = box.time_sig.c_str();
         if (!box.section.empty()) lines[line_count++] = box.section.c_str();
-        ImFont* font = g_mono_font ? g_mono_font : ImGui::GetFont();
-        const render::PreviewConfig& pcfg = pc->preview_config();
-        const float size = px(pcfg.text.time_box_size);
-        const float margin = px(pcfg.text.time_box_margin);
-        const float pad = px(8.0f);
-        ImVec2 origin = ImGui::GetItemRectMin();
-        float text_w = 0.0f;
+        hydra::app::PreviewScoreBox score = pc->score_box();
+        const bool has_gauge = pc->sp_meter_has_curve();
+        hydra::app::PreviewDrainBox drain = pc->drain_box();
+        const bool drain_drawn = has_gauge && drain.shown;
+        const char* d_lines[3] = {drain.header.c_str(), drain.rate.c_str(),
+                                  drain.detail.c_str()};
+
+        // The gauge's geometry, which is not scaled.
+        const float bar_w = px(14.0f);
+        const float inset = px(10.0f);
+        const float v_margin = px(10.0f);
+        const float d_gap = px(6.0f);  // between the drain box and the gauge
+        const float gauge_left = img_max.x - inset - bar_w;
+
+        // Scale-1 sizes, and the extents the fit needs (image pixels).
+        const float size1 = px(pcfg.text.time_box_size);
+        const float margin1 = px(pcfg.text.time_box_margin);
+        const float pad1 = px(8.0f);
+        const float gap1 = px(6.0f);
+        const float line_h1 = size1 * 1.25f;
+        float time_text_w1 = 0.0f;
         for (int i = 0; i < line_count; ++i)
-            text_w = std::max(text_w,
-                              font->CalcTextSizeA(size, FLT_MAX, 0.0f, lines[i]).x);
+            time_text_w1 = std::max(time_text_w1, text_width(size1, lines[i]));
+        render::OverlayBoxes fit;
+        fit.left_w = margin1 + time_text_w1 + pad1 * 2.0f;
+        fit.left_h = margin1 + line_h1 * static_cast<float>(line_count) + pad1;
+        if (score.shown) {
+            const float score_size1 = score.available ? size1 * 1.8f : size1;
+            float score_w1 = text_width(score_size1, score.score.c_str());
+            if (!score.detail.empty())
+                score_w1 = std::max(score_w1, text_width(size1, score.detail.c_str()));
+            const float score_lines_h1 =
+                score_size1 * 1.2f + (score.detail.empty() ? 0.0f : line_h1);
+            fit.left_w = std::max(fit.left_w, margin1 + score_w1 + pad1 * 2.0f);
+            fit.left_h += gap1 + pad1 + score_lines_h1 + pad1;
+        }
+        if (drain_drawn) {
+            float drain_w1 = 0.0f;
+            for (const char* l : d_lines) drain_w1 = std::max(drain_w1, text_width(size1, l));
+            fit.right_w = drain_w1 + pad1 * 2.0f;
+            fit.right_h = line_h1 * 3.0f + pad1 * 2.0f;
+            fit.right_edge = gauge_left - d_gap - origin.x;
+            fit.right_top = v_margin;
+        }
+        fit.gap = gap1;
+        const float scale = render::overlay_scale(pcfg, w, h, fit);
+        pc->set_overlay_scale(scale);
+
+        const float size = size1 * scale;
+        const float margin = margin1 * scale;
+        const float pad = pad1 * scale;
+        const float gap = gap1 * scale;
         const float line_h = size * 1.25f;
-        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const float corner = px(6.0f) * scale;
+
+        // The time box.
+        float text_w = 0.0f;
+        for (int i = 0; i < line_count; ++i) text_w = std::max(text_w, text_width(size, lines[i]));
         ImVec2 box_min(origin.x, origin.y);
         ImVec2 box_max(origin.x + margin + text_w + pad * 2.0f,
                        origin.y + margin + line_h * static_cast<float>(line_count) + pad);
-        dl->AddRectFilled(box_min, box_max, IM_COL32(0, 0, 0, 128), px(6.0f),
+        dl->AddRectFilled(box_min, box_max, IM_COL32(0, 0, 0, 128), corner,
                           ImDrawFlags_RoundCornersBottomRight);
         for (int i = 0; i < line_count; ++i)
             dl->AddText(font, size, ImVec2(origin.x + margin, origin.y + margin + line_h * i),
@@ -763,22 +825,17 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
         // grey. Absent until the chart is analyzed; "Score unavailable" (at
         // the time box's size) when the path can't be replayed to its stored
         // score. Right corners rounded, since it sits against the left edge.
-        hydra::app::PreviewScoreBox score = pc->score_box();
         if (score.shown) {
             const float score_size = score.available ? size * 1.8f : size;
             const float score_h = score_size * 1.2f;
-            const float gap = px(6.0f);
-            const float score_w =
-                font->CalcTextSizeA(score_size, FLT_MAX, 0.0f, score.score.c_str()).x;
+            const float score_w = text_width(score_size, score.score.c_str());
             const float detail_w =
-                score.detail.empty()
-                    ? 0.0f
-                    : font->CalcTextSizeA(size, FLT_MAX, 0.0f, score.detail.c_str()).x;
+                score.detail.empty() ? 0.0f : text_width(size, score.detail.c_str());
             const float lines_h = score_h + (score.detail.empty() ? 0.0f : line_h);
             ImVec2 s_min(origin.x, box_max.y + gap);
             ImVec2 s_max(origin.x + margin + std::max(score_w, detail_w) + pad * 2.0f,
                          s_min.y + pad + lines_h + pad);
-            dl->AddRectFilled(s_min, s_max, IM_COL32(0, 0, 0, 128), px(6.0f),
+            dl->AddRectFilled(s_min, s_max, IM_COL32(0, 0, 0, 128), corner,
                               ImDrawFlags_RoundCornersRight);
             dl->AddText(font, score_size, ImVec2(origin.x + margin, s_min.y + pad),
                         IM_COL32(255, 255, 255, 255), score.score.c_str());
@@ -792,12 +849,8 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
         // Hydra's own overlay, like the time box above -- not part of the Onyx
         // render. The value is the view-model's curve read at the playhead, so
         // it is anchored to the same engine truth the path overlay is.
-        if (pc->sp_meter_has_curve()) {
-            ImVec2 img_max = ImGui::GetItemRectMax();
-            const float bar_w = px(14.0f);
-            const float inset = px(10.0f);
-            const float v_margin = px(10.0f);
-            ImVec2 gauge_min(img_max.x - inset - bar_w, origin.y + v_margin);
+        if (has_gauge) {
+            ImVec2 gauge_min(gauge_left, origin.y + v_margin);
             ImVec2 gauge_max(img_max.x - inset, img_max.y - v_margin);
             if (gauge_max.y > gauge_min.y) {
                 dl->AddRectFilled(gauge_min, gauge_max, IM_COL32(0, 0, 0, 128), px(4.0f));
@@ -822,32 +875,27 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
                                 IM_COL32(0, 0, 0, 160), px(1.0f));
                 }
             }
+        }
 
-            // The SP drain box, bottom-right just left of the gauge, in the
-            // time box's panel style and right-aligned: how long a bar of SP
-            // lasts at the playhead, then "empties in" (gold, SP running on
-            // the path) or "full meter" (grey, if activated here). Every
-            // number is build_drain_box's.
-            hydra::app::PreviewDrainBox drain = pc->drain_box();
-            if (drain.shown) {
-                const char* d_lines[3] = {drain.header.c_str(), drain.rate.c_str(),
-                                          drain.detail.c_str()};
-                float d_w = 0.0f;
-                for (const char* l : d_lines)
-                    d_w = std::max(d_w, font->CalcTextSizeA(size, FLT_MAX, 0.0f, l).x);
-                const float d_gap = px(6.0f);
-                ImVec2 d_max(gauge_min.x - d_gap, img_max.y - v_margin);
-                ImVec2 d_min(d_max.x - d_w - pad * 2.0f, d_max.y - line_h * 3.0f - pad * 2.0f);
-                dl->AddRectFilled(d_min, d_max, IM_COL32(0, 0, 0, 128), px(6.0f));
-                const ImU32 accent = drain.active ? IM_COL32(255, 204, 51, 255)  // SP gold
-                                                  : IM_COL32(200, 200, 200, 255);
-                const ImU32 colors[3] = {accent, IM_COL32(255, 255, 255, 255), accent};
-                for (int i = 0; i < 3; ++i) {
-                    const float lw = font->CalcTextSizeA(size, FLT_MAX, 0.0f, d_lines[i]).x;
-                    dl->AddText(font, size,
-                                ImVec2(d_max.x - pad - lw, d_min.y + pad + line_h * static_cast<float>(i)),
-                                colors[i], d_lines[i]);
-                }
+        // The SP drain box, top-right just left of the gauge and level with
+        // its top, where the highway is narrowest; right-aligned in the time
+        // box's panel style. How long a bar of SP lasts at the playhead, then
+        // "empties in" (gold, SP running on the path) or "full meter" (grey,
+        // if activated here). Every number is build_drain_box's.
+        if (drain_drawn) {
+            float d_w = 0.0f;
+            for (const char* l : d_lines) d_w = std::max(d_w, text_width(size, l));
+            ImVec2 d_min(gauge_left - d_gap - d_w - pad * 2.0f, origin.y + v_margin);
+            ImVec2 d_max(gauge_left - d_gap, d_min.y + line_h * 3.0f + pad * 2.0f);
+            dl->AddRectFilled(d_min, d_max, IM_COL32(0, 0, 0, 128), corner);
+            const ImU32 accent = drain.active ? IM_COL32(255, 204, 51, 255)  // SP gold
+                                              : IM_COL32(200, 200, 200, 255);
+            const ImU32 colors[3] = {accent, IM_COL32(255, 255, 255, 255), accent};
+            for (int i = 0; i < 3; ++i) {
+                const float lw = text_width(size, d_lines[i]);
+                dl->AddText(font, size,
+                            ImVec2(d_max.x - pad - lw, d_min.y + pad + line_h * static_cast<float>(i)),
+                            colors[i], d_lines[i]);
             }
         }
     }

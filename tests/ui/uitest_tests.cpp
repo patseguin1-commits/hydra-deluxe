@@ -14,6 +14,7 @@
 #include "app/preview_view.h"
 #include "app/report_files.h"
 #include "core/model.h"
+#include "render/overlay_layout.h"
 #include "ui/app_state.h"
 #include "ui/dynamics_load_job.h"
 #include "ui/preview_controller.h"
@@ -427,6 +428,36 @@ void test_preview_drain_box(ImGuiTestContext* ctx) {
     // A frame of the active box, for a person to look at.
     ctx->Yield(2);
     IM_CHECK(screenshot(ctx, "drain-box-active.png"));
+}
+
+// Sets the harness display width for one test and puts it back however the
+// test ends, so a failed check cannot leave later tests on a narrow display.
+struct DisplayWidth {
+    Harness& h;
+    int saved;
+    DisplayWidth(Harness& harness_, int width) : h(harness_), saved(harness_.width) {
+        h.width = width;
+    }
+    ~DisplayWidth() { h.width = saved; }
+};
+
+// The Preview's text boxes shrink to sit beside the highway in a narrow
+// window and keep their size in a normal one. The Song Details modal follows
+// the display size, so narrowing the display narrows the Preview.
+void test_preview_overlay_fit(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_preview(ctx)) return;
+    auto& pc = *h.app->preview;
+
+    ctx->Yield(3);
+    IM_CHECK_EQ(pc.overlay_scale(), 1.0f);  // the default display: full size
+    IM_CHECK(screenshot(ctx, "overlay-fit-wide.png"));
+
+    DisplayWidth narrow(h, 640);
+    ctx->Yield(5);
+    IM_CHECK(pc.overlay_scale() < 1.0f);
+    IM_CHECK(pc.overlay_scale() >= hydra::render::kOverlayMinScale);
+    IM_CHECK(screenshot(ctx, "overlay-fit-narrow.png"));
 }
 
 // The Preview's new transport buttons and keys: -5s / +5s and Left / Right
@@ -1215,6 +1246,7 @@ void register_tests(Harness& h) {
         {"preview-path-overlay", test_preview_path_overlay},
         {"preview-controls", test_preview_controls},
         {"preview-drain-box", test_preview_drain_box},
+        {"preview-overlay-fit", test_preview_overlay_fit},
         {"preview-buttons-keys", test_preview_buttons_keys},
         {"scrub-hold", test_scrub_hold},
         {"layout-drift", test_layout_drift},

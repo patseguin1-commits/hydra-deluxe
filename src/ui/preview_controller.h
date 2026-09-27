@@ -154,12 +154,18 @@ public:
     // The SP drain box the panel draws beside the gauge.
     hydra::app::PreviewDrainBox drain_box() const;
 
+    // The text overlays' scale the panel last drew at (1 = full size). The
+    // panel sets it each frame; only the GUI test reads it back.
+    void set_overlay_scale(float scale) { overlay_scale_ = scale; }
+    float overlay_scale() const { return overlay_scale_; }
+
     // The Preview's look, as read from 3d-config.json by the renderer. Before
     // the first render (no renderer yet) this is the struct's defaults, which
     // are Onyx's values.
     const render::PreviewConfig& preview_config() const;
 
 private:
+    float overlay_scale_ = 1.0f;
     ID3D11Device* device_;
     ID3D11DeviceContext* context_;
 

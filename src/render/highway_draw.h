@@ -79,6 +79,12 @@ struct HighwayCamera {
 // right-handed. `aspect` is the track rectangle's width / height.
 HighwayCamera make_camera(const PreviewConfig& cfg, float aspect);
 
+// The track rectangle's height in a width x height preview: Onyx lays out one
+// highway min(height, width * height_width_ratio) tall, anchored at the
+// bottom. The renderer sizes its scene target with this and the overlay
+// layout projects through it, so the two cannot disagree. At least 1.
+int track_height(const PreviewConfig& cfg, int width, int height);
+
 // Onyx timeToZ: z_now at `now`, z_future at now + secs_future * speed, linear.
 double time_to_z(const PreviewConfig& cfg, double now_s, double t_s, double speed);
 // Its inverse: the time at a depth (used for the window's near edge).
