@@ -151,6 +151,9 @@ public:
     // The score box the panel draws under the time box.
     hydra::app::PreviewScoreBox score_box() const;
 
+    // The SP drain box the panel draws beside the gauge.
+    hydra::app::PreviewDrainBox drain_box() const;
+
     // The Preview's look, as read from 3d-config.json by the renderer. Before
     // the first render (no renderer yet) this is the struct's defaults, which
     // are Onyx's values.
