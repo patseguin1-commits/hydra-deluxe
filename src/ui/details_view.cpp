@@ -8,6 +8,7 @@
 #include "app/dynamics_breakdown.h"
 #include "app/path_view.h"
 #include "core/model.h"   // group_thousands
+#include "core/stars.h"
 #include "core/winstr.h"
 #include "imgui.h"
 #include "imgui_internal.h"  // SetKeyOwner, owner-aware IsKeyPressed
@@ -578,6 +579,33 @@ void render_analyze_progress(AppState& app) {
     ImGui::EndChild();
 }
 
+// The states a record-backed tab shows before its own content: the analyze
+// progress, the not-analyzed prompt, the stale warning and "No paths found.".
+// Returns true only when the record is ready to draw. The Paths and Stars tabs
+// both call this, so the states read the same on each.
+bool render_record_state(AppState& app, const char* not_analyzed_text) {
+    if (app.analyze_job) {
+        render_analyze_progress(app);
+        return false;
+    }
+    if (app.viewed.status == store::RecordStatus::NotAnalyzed) {
+        ImGui::TextUnformatted(not_analyzed_text);
+        return false;
+    }
+    if (app.viewed.status == store::RecordStatus::Stale) {
+        ImGui::TextColored(
+            kWarningColor,
+            "This record is out of date. To make sure you have the latest "
+            "results, please re-analyze.");
+        return false;
+    }
+    if (app.viewed.record->paths.empty()) {
+        ImGui::TextUnformatted("No paths found.");
+        return false;
+    }
+    return true;
+}
+
 // The Preview tab: a transport row over the 3D note highway. Reached only while
 // the tab is shown, so the controller (and its decode + GPU work) spins up lazily
 // on first view, per the "render only while active" gating.
@@ -1102,6 +1130,56 @@ void render_dynamics_panel(AppState& app) {
     ImGui::EndChild();
 }
 
+// ---- Stars tab -------------------------------------------------------------
+
+// Clone Hero's star cutoffs for this chart. Every number is star_cutoffs()'s,
+// read from the record's best path (the base score and solo bonus are the
+// same on every path); this only draws them. The states before the table are
+// render_record_state's, shared with the Paths tab.
+void render_stars_panel(AppState& app) {
+    if (!render_record_state(
+            app, "After analyzing this song, star cutoffs will show up here."))
+        return;
+
+    const StarCutoffs sc = star_cutoffs(app.viewed.record->best_path());
+    const bool has_solo = sc.solo_bonus > 0;
+
+    ImGui::Text("Base score: %s", group_thousands(sc.base).c_str());
+    if (has_solo)
+        ImGui::Text("Solo bonus: %s (not counted toward stars)",
+                    group_thousands(sc.solo_bonus).c_str());
+    ImGui::Spacing();
+
+    const int table_flags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg;
+    if (ImGui::BeginTable("##startable", has_solo ? 4 : 3, table_flags)) {
+        ImGui::TableSetupColumn("Stars");
+        ImGui::TableSetupColumn("Multiplier");
+        ImGui::TableSetupColumn("Cutoff");
+        if (has_solo) ImGui::TableSetupColumn("With full solo bonus");
+        ImGui::TableHeadersRow();
+
+        for (int stars = 1; stars <= kMaxStars; ++stars) {
+            const int64_t cutoff = sc.cutoffs[stars - 1];
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("%d", stars);
+            ImGui::TableNextColumn();
+            ImGui::Text("%.1f", static_cast<double>(kStarMultipliers[stars - 1]));
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(group_thousands(cutoff).c_str());
+            if (has_solo) {
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(group_thousands(cutoff + sc.solo_bonus).c_str());
+            }
+        }
+        ImGui::EndTable();
+    }
+
+    ImGui::Spacing();
+    ImGui::TextUnformatted(
+        "A star counts once your score, without the solo bonus, reaches its cutoff.");
+}
+
 }  // namespace
 
 void render_details_modal(AppState& app) {
@@ -1212,21 +1290,9 @@ void render_details_modal(AppState& app) {
     // pauses playback rather than tearing the whole scene down.
     if (ImGui::BeginTabBar("##DetailsTabs")) {
         if (ImGui::BeginTabItem("Paths")) {
-            if (app.analyze_job) {
-                render_analyze_progress(app);
-            } else if (app.viewed.status == store::RecordStatus::NotAnalyzed) {
-                ImGui::TextUnformatted(
-                    "After analyzing this song, paths will show up here.");
-            } else if (app.viewed.status == store::RecordStatus::Stale) {
-                ImGui::TextColored(
-                    kWarningColor,
-                    "This record is out of date. To make sure you have the latest "
-                    "results, please re-analyze.");
-            } else if (app.viewed.record->paths.empty()) {
-                ImGui::TextUnformatted("No paths found.");
-            } else {
+            if (render_record_state(
+                    app, "After analyzing this song, paths will show up here."))
                 render_path_panel(app, selected_path);
-            }
             ImGui::EndTabItem();
         }
 
@@ -1241,6 +1307,11 @@ void render_details_modal(AppState& app) {
 
         if (ImGui::BeginTabItem("Dynamics")) {
             render_dynamics_panel(app);
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Stars")) {
+            render_stars_panel(app);
             ImGui::EndTabItem();
         }
 
