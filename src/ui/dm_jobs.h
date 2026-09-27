@@ -1,7 +1,7 @@
 // The two dmleaderboards jobs: fetching the ladder for the user picker
 // (DmFetchUsersJob) and building one user's comparison report
-// (DmReportJob). AppState owns both; library_view.cpp's picker and finished
-// modal are the only readers. Both wrap net/dmbot_client.h calls, which the
+// (DmReportJob). AppState owns both; library_dialogs.cpp's picker and
+// finished modal are the only readers. Both wrap net/dmbot_client.h calls, which the
 // free-tier backend can leave hanging for tens of seconds.
 
 #ifndef HYDRA_UI_DM_JOBS_H

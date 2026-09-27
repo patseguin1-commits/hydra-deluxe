@@ -541,7 +541,7 @@ struct DocumentsSandbox {
 
 }  // namespace
 
-TEST_CASE("reports_dir is Documents\Hydra, made on first use") {
+TEST_CASE("reports_dir is Documents\\Hydra, made on first use") {
     DocumentsSandbox box("made");
     set_documents_dir_lookup([&box] { return std::optional<fs::path>(box.root); });
 

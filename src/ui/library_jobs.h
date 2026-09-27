@@ -1,7 +1,8 @@
 // The library tab's four background jobs: scanning chart folders (ScanJob),
 // batch-analyzing many charts (BatchJob), analyzing one chart (AnalyzeJob),
 // and building the HTML path report afterwards (ReportJob). AppState owns one
-// of each at most; library_view.cpp and details_view.cpp poll them per frame.
+// of each at most; the library files (library_toolbar.cpp, library_dialogs.cpp)
+// and details_panel.cpp poll them per frame.
 //
 // Every job is polled once per frame from the render thread via snapshot()/
 // finished(); the worker thread never touches ImGui state directly.

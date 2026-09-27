@@ -53,8 +53,8 @@ void DmReportJob::run() {
 
         total_ = report.stats.total;
         matched_ = report.stats.matched;
-        above_ = report.stats.above;
-        unmatched_ = report.stats.unmatched;
+        above_ = report.stats.above_optimal;
+        unmatched_ = report.stats.not_analyzed + report.stats.not_in_library;
         stats_ = report.stats;
 
         // A browser that won't open the page is not a failed report.

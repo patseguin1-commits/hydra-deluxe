@@ -12,7 +12,7 @@
     {
       "id": "1",
       "subject": "Task 1: Split the UI and GUI-test files",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         "0"
       ],
@@ -21,7 +21,7 @@
     {
       "id": "2",
       "subject": "Task 2: The search query module",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         "0"
       ],
@@ -30,7 +30,7 @@
     {
       "id": "3",
       "subject": "Task 3: Report pages and report location",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         "0"
       ],
@@ -39,7 +39,7 @@
     {
       "id": "4",
       "subject": "Task 4: The batch job can pause, stop and tell the time, and job errors read in plain words",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         "0"
       ],
@@ -48,7 +48,7 @@
     {
       "id": "5",
       "subject": "Task 5: Hydra reopens where you left it and rescales when it changes monitor",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         "0"
       ],

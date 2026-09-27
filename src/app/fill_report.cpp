@@ -39,8 +39,8 @@ const char* const kBody = R"page(<div class="wrap fill">
       <select id="sortby"></select>
       <button id="sortdir" type="button" title="Switch between highest-first and lowest-first"></button>
     </span>
-    <input type="search" id="q" placeholder="Search song, artist, or charter">
-    <select id="status">
+    <input type="search" id="q" aria-label="Search charts" placeholder="Search song, artist, or charter">
+    <select id="status" aria-label="Status">
       <option value="">All charts</option>
       <option value="1.1 higher">1.1 higher</option>
       <option value="1.0 higher">1.0 higher</option>
