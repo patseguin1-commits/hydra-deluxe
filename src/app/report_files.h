@@ -10,14 +10,29 @@
 
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 
 namespace hydra::app {
 
-// Where the batch path report lives on disk (next to the db).
+// The folder every report page is saved in: Documents\Hydra, made on first
+// use. It falls back to the database's folder when Documents can't be found
+// or the Hydra folder can't be made there. When a harness has overridden the
+// database path (app::set_path_overrides), reports stay next to that
+// database instead, so no test ever writes into the real Documents folder.
+std::filesystem::path reports_dir();
+
+// The seam behind reports_dir's Documents lookup (SHGetKnownFolderPath by
+// default). A test installs one that returns a scratch folder, or nullopt to
+// act like a machine with no Documents folder; an empty function restores
+// the default.
+using DocumentsDirFn = std::function<std::optional<std::filesystem::path>()>;
+void set_documents_dir_lookup(DocumentsDirFn fn);
+
+// Where the batch path report lives on disk (in reports_dir()).
 std::wstring report_html_path();
 
-// Where the comparison page lives on disk (next to the db).
+// Where the comparison page lives on disk (in reports_dir()).
 std::wstring dm_report_html_path();
 
 // Whether a previously built report page exists on disk (gates the library

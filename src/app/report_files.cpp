@@ -4,6 +4,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <shlobj.h>
 
 #include <fstream>
 #include <stdexcept>
@@ -16,15 +17,45 @@ namespace hydra::app {
 
 namespace {
 
-// Report pages live next to the db.
-std::wstring html_artifact_path(const wchar_t* name) {
-    std::filesystem::path dbp = std::filesystem::u8path(app::db_path());
-    return (dbp.parent_path() / name).wstring();
+std::filesystem::path db_folder() {
+    return std::filesystem::u8path(app::db_path()).parent_path();
 }
 
+// The user's Documents folder, or nullopt when Windows can't name one.
+std::optional<std::filesystem::path> known_documents_dir() {
+    PWSTR raw = nullptr;
+    std::optional<std::filesystem::path> out;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, KF_FLAG_DEFAULT, nullptr, &raw)) &&
+        raw)
+        out = std::filesystem::path(raw);
+    CoTaskMemFree(raw);  // safe on nullptr
+    return out;
+}
+
+// Every report page lives in reports_dir().
+std::wstring html_artifact_path(const wchar_t* name) { return (reports_dir() / name).wstring(); }
+
+DocumentsDirFn g_documents_dir;
 OpenInBrowserFn g_open_in_browser;
 
 }  // namespace
+
+std::filesystem::path reports_dir() {
+    // A harness pointed the app at a scratch database: keep its pages there.
+    if (!path_overrides().db_path.empty()) return db_folder();
+
+    std::optional<std::filesystem::path> docs =
+        g_documents_dir ? g_documents_dir() : known_documents_dir();
+    if (!docs || docs->empty()) return db_folder();
+
+    const std::filesystem::path dir = *docs / L"Hydra";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (!std::filesystem::is_directory(dir, ec)) return db_folder();
+    return dir;
+}
+
+void set_documents_dir_lookup(DocumentsDirFn fn) { g_documents_dir = std::move(fn); }
 
 void set_open_in_browser(OpenInBrowserFn fn) { g_open_in_browser = std::move(fn); }
 

@@ -10,6 +10,9 @@
 #include <windows.h>
 
 #include <atomic>
+#include <algorithm>
+#include <cmath>
+#include <map>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -19,6 +22,7 @@
 #include <vector>
 
 #include "app/analysis.h"
+#include "app/config.h"
 #include "app/dm_report.h"
 #include "app/fill_report.h"
 #include "app/html_page.h"
@@ -496,4 +500,78 @@ TEST_CASE("report pages: write samples for the browser check" * doctest::skip())
                       dm_report::build_dm_html(dm, "Sample subtitle", "Sample footer"));
     write_report_file(out / "fill.html",
                       fill_report::build_fill_html(fill, "Sample subtitle", "Sample footer"));
+}
+
+// ---- where reports are saved ------------------------------------------------
+
+namespace {
+
+namespace fs = std::filesystem;
+
+// One test's view of the Documents folder. It clears the database override
+// (a harness override keeps reports next to its database, which would hide
+// the Documents rule), and afterwards puts the overrides and the lookup back
+// and deletes its scratch folder.
+struct DocumentsSandbox {
+    PathOverrides previous = path_overrides();
+    fs::path root;
+
+    explicit DocumentsSandbox(const char* tag) {
+        PathOverrides cleared = previous;
+        cleared.db_path.clear();
+        set_path_overrides(cleared);
+        wchar_t tmp[MAX_PATH];
+        GetTempPathW(MAX_PATH, tmp);
+        root = fs::path(tmp) / ("hydra_test_docs_" + std::to_string(GetCurrentProcessId())) /
+               fs::u8path(tag);
+        std::error_code ec;
+        fs::remove_all(root, ec);
+        fs::create_directories(root);
+    }
+
+    ~DocumentsSandbox() {
+        set_documents_dir_lookup({});
+        set_path_overrides(previous);
+        std::error_code ec;
+        fs::remove_all(root, ec);
+    }
+};
+
+}  // namespace
+
+TEST_CASE("reports_dir is Documents\Hydra, made on first use") {
+    DocumentsSandbox box("made");
+    set_documents_dir_lookup([&box] { return std::optional<fs::path>(box.root); });
+
+    const fs::path dir = reports_dir();
+    CHECK(dir == box.root / "Hydra");
+    CHECK(fs::is_directory(dir));
+    // Every report path helper lives in it.
+    CHECK(fs::path(report_html_path()) == dir / "hydra_paths.html");
+    CHECK(fs::path(dm_report_html_path()) == dir / "hydra_dmcompare.html");
+}
+
+TEST_CASE("reports_dir falls back to the database folder without Documents") {
+    DocumentsSandbox box("fallback");
+    const fs::path db_folder = fs::u8path(db_path()).parent_path();
+
+    // No Documents folder at all.
+    set_documents_dir_lookup([] { return std::optional<fs::path>(); });
+    CHECK(reports_dir() == db_folder);
+
+    // A Documents folder where "Hydra" can't be made: a plain file is in the way.
+    { std::ofstream(box.root / "Hydra") << "not a folder"; }
+    set_documents_dir_lookup([&box] { return std::optional<fs::path>(box.root); });
+    CHECK(reports_dir() == db_folder);
+}
+
+TEST_CASE("reports_dir keeps a harness's reports next to its database") {
+    DocumentsSandbox box("override");
+    set_documents_dir_lookup([&box] { return std::optional<fs::path>(box.root); });
+    PathOverrides scratch = path_overrides();
+    scratch.db_path = (box.root / "scratch" / "hydra.db").u8string();
+    set_path_overrides(scratch);
+
+    CHECK(reports_dir() == box.root / "scratch");
+    CHECK_FALSE(fs::exists(box.root / "Hydra"));  // Documents was never touched
 }
