@@ -155,10 +155,12 @@ TEST_CASE("build_activations: the calibration fill reads positive = early on bot
     e0.skips = 0;
     e0.sp_meter = 2;
     e0.e_offset = -12.3;
-    ActivationDetailsView av = view_of(e0);
+    ActivationRowView av = view_of(e0);
     // The fixture sets no timecode, so it sits at tick 0 (m1.1.0); an
     // activation always has one now (record format v7, docs/adr/0017).
-    CHECK(av.header == "E0    (2 SP)\t   m1.1.0\t   12.3ms");
+    CHECK(av.notation == "E0");
+    CHECK(av.measure == "m1.1.0");
+    CHECK(av.badge == "calibration fill 12 ms");
     CHECK(av.calibration == "Calibration fill: 12.3ms (required)");
 
     // E-critical but not E0: no ms in the header, and the details line uses
@@ -168,13 +170,20 @@ TEST_CASE("build_activations: the calibration fill reads positive = early on bot
     e1.sp_meter = 2;
     e1.e_offset = 20.0;
     av = view_of(e1);
-    CHECK(av.header == "E1    (2 SP)\t   m1.1.0");
+    CHECK(av.notation == "E1");
+    CHECK(av.badge.empty());
     CHECK(av.calibration == "Calibration fill: -20.0ms (optional)");
 }
 
-TEST_CASE("build_path_row: right-aligned ms, warn past the difficult floor") {
-    Path p;
-    CHECK(build_path_row(p).ms.empty());  // no activations, no difficulty
+TEST_CASE("path buttons: the hardest squeeze line, warn past the difficult floor") {
+    auto detail_of = [](const Path& p) {
+        HydraRecord rec;
+        rec.paths.push_back(p);
+        PathButtonsView v = build_path_buttons(rec, 0, 2);
+        REQUIRE(v.buttons.size() == 1);
+        return v.buttons[0];
+    };
+    CHECK(detail_of(Path{}).detail.empty());  // no activations, no difficulty
 
     Path hard;
     Activation act;
@@ -182,15 +191,15 @@ TEST_CASE("build_path_row: right-aligned ms, warn past the difficult floor") {
     act.e_offset = 300.0;  // not e-critical
     act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -12.5});
     hard.activations.push_back(act);
-    PathRowView row = build_path_row(hard);
-    CHECK(row.ms == "     12.5 ms");
-    CHECK(row.warn);
+    PathButtonView b = detail_of(hard);
+    CHECK(b.detail == "hardest squeeze 12.5 ms");
+    CHECK(b.detail_warn);
 
     Path easy = hard;
     easy.activations[0].sqinouts[0].offset_ms = -1.5;
-    row = build_path_row(easy);
-    CHECK(row.ms == "      1.5 ms");
-    CHECK_FALSE(row.warn);
+    b = detail_of(easy);
+    CHECK(b.detail == "hardest squeeze 1.5 ms");
+    CHECK_FALSE(b.detail_warn);
 }
 
 TEST_CASE("build_path_list: score groups and the all-0 dedupe rule") {
@@ -206,7 +215,6 @@ TEST_CASE("build_path_list: score groups and the all-0 dedupe rule") {
     CHECK(total == flat.size());
     CHECK(list.groups.front().score_label ==
           group_thousands(flat.front()->totalscore()));
-    CHECK(list.more_label == "More Paths (Path limit: 10 ms)");
 
     // An all-0 path that duplicates a listed path (same score AND notation)
     // stays hidden.
@@ -225,7 +233,7 @@ TEST_CASE("build_path_list: score groups and the all-0 dedupe rule") {
               "   (-100)");
 }
 
-TEST_CASE("build_activations: headers, footer, and backend rows line up") {
+TEST_CASE("build_activations: rows and backend rows line up") {
     const AnalysisResult& ar = analyzed();
     const Path& best = ar.record.best_path();
     const SongTiming& timing = ar.song.timing();
@@ -236,11 +244,10 @@ TEST_CASE("build_activations: headers, footer, and backend rows line up") {
 
     std::vector<Activation> acts = best.all_activations();
     for (size_t i = 0; i < view.acts.size(); ++i) {
-        const ActivationDetailsView& av = view.acts[i];
-        // The header leads with the notation string.
-        CHECK(av.header.rfind(acts[i].notationstr(), 0) == 0);
+        const ActivationRowView& av = view.acts[i];
+        CHECK(av.notation == acts[i].notationstr());
         CHECK(av.difficult == acts[i].is_difficult());
-        CHECK(av.sqinouts.size() == acts[i].sqinouts.size());
+        CHECK(av.squeeze_sentences.size() == acts[i].sqinouts.size());
         CHECK(av.backends.size() == acts[i].display_backends().size());
         for (const BackendRowView& row : av.backends) {
             CHECK(!row.timing.empty());
@@ -248,10 +255,7 @@ TEST_CASE("build_activations: headers, footer, and backend rows line up") {
         }
     }
 
-    REQUIRE(!view.footer.empty());
-    CHECK(view.footer[0].text ==
-          "Leftover SP: " + std::to_string(best.leftover_sp) + ".");
-    CHECK_FALSE(view.footer[0].warn);
+    CHECK(!view.summary.empty());
 }
 
 TEST_CASE("build_activations: the scale warning prints the end that warned") {
@@ -512,11 +516,11 @@ TEST_CASE("find a chart with an uncounted squeezed-out row" * doctest::skip()) {
         if (r.record.paths.empty()) continue;
         ActivationsView v = build_activations(r.record.best_path(), r.record,
                                               &r.song.timing(), 85.0);
-        for (const ActivationDetailsView& av : v.acts)
+        for (const ActivationRowView& av : v.acts)
             for (const BackendRowView& row : av.backends)
                 if (row.rating.find("squeezed out (uncounted)") !=
                     std::string::npos) {
-                    MESSAGE(path << " | " << av.header);
+                    MESSAGE(path << " | activation " << av.number << " " << av.notation);
                     return;
                 }
     }
@@ -539,18 +543,14 @@ TEST_CASE("PathsTabCache: views are built once and rebuilt only when their input
     const SongTiming& timing = ar.song.timing();
     PathsTabCache cache;
 
-    // The list: once per record generation, however many frames ask.
-    for (int frame = 0; frame < 5; ++frame) cache.list(rec, 7);
-    CHECK(cache.list_builds() == 1);
-    const PathListView& list = cache.list(rec, 8);  // the record was re-read
-    CHECK(cache.list_builds() == 2);
+    // The buttons: once per record generation, however many frames ask.
+    for (int frame = 0; frame < 5; ++frame) cache.buttons(rec, 7, 0, 10);
+    CHECK(cache.buttons_builds() == 1);
+    const PathButtonsView& list = cache.buttons(rec, 8, 0, 10);  // the record was re-read
+    CHECK(cache.buttons_builds() == 2);
 
-    // Every listed row carries the path's own label and ms cell.
-    for (const PathGroupView& g : list.groups)
-        for (const Path* p : g.paths) {
-            CHECK(cache.row(p).label == p->pathstring());
-            CHECK(cache.row(p).cell.ms == build_path_row(*p).ms);
-        }
+    // Every button carries its path's own notation.
+    for (const PathButtonView& b : list.buttons) CHECK(b.notation == b.path->pathstring());
 
     // The details: once per (path, record, hit window, backend limit).
     const Path& best = rec.best_path();
@@ -596,11 +596,7 @@ TEST_CASE("PathsTabCache: 600 cached frames cost far less than 600 rebuilds") {
     // What a Paths frame did before: every view, every row label.
     const clock::time_point t0 = clock::now();
     for (int frame = 0; frame < 600; ++frame) {
-        PathListView list = build_path_list(rec);
-        for (const Path* p : rec.all_paths()) {
-            std::string label = p->pathstring();
-            PathRowView row = build_path_row(*p);
-        }
+        PathButtonsView list = build_path_buttons(rec, 0, 10);
         std::vector<MultSqueezeView> sq = build_multsqueezes(rec);
         ActivationsView acts = build_activations(best, rec, &timing, 70.0);
         std::vector<std::string> bd = build_score_breakdown(best);
@@ -608,7 +604,7 @@ TEST_CASE("PathsTabCache: 600 cached frames cost far less than 600 rebuilds") {
     const clock::time_point t1 = clock::now();
     PathsTabCache cache;
     for (int frame = 0; frame < 600; ++frame) {
-        cache.list(rec, 1);
+        cache.buttons(rec, 1, 0, 10);
         cache.details(best, rec, 1, &timing, 70.0, std::nullopt, core::default_rules());
     }
     const clock::time_point t2 = clock::now();

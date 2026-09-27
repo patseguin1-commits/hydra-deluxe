@@ -25,6 +25,10 @@ bool render_record_state(AppState& app, const char* not_analyzed_text);
 // on the right. A click in the list changes `selected_path`.
 void render_path_panel(AppState& app, const Path*& selected_path);
 
+// Copy the selected path's verbose string (Path::pathstring_verbose) and
+// start the "Copied!" flash. The Copy path button and Ctrl+C both call it.
+void copy_selected_path(AppState& app);
+
 // preview_tab.cpp. The transport row and the 3D highway for `selected_path`.
 void render_preview_panel(AppState& app, const Path* selected_path);
 

@@ -13,7 +13,6 @@
 #include <cstdint>
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "core/model.h"
@@ -96,14 +95,7 @@ struct ActivationRowView {
     std::string overfill_warning;  // cap-clamped anchor prose; empty when not clamped
     std::string backends_label;  // "3 notes near the SP end": the rows below, after the backend limit
     std::vector<BackendRowView> backends;
-
-    // The old details modal's fields. Task 10 deletes these three.
-    std::string header;  // "%-6s(%d SP)\t%9s" (+ "\t" and format_ms right-aligned in 9 when difficulty-rated)
-    std::string frontend;       // "Frontend: ..."
-    std::vector<TextLine> sqinouts;
 };
-// The old name, kept so the old Paths tab compiles until Task 10 replaces it.
-using ActivationDetailsView = ActivationRowView;
 
 struct ActivationsView {
     std::vector<ActivationRowView> acts;
@@ -113,7 +105,6 @@ struct ActivationsView {
     // The timeline's right-hand label, "m96": the measure the song's length
     // falls in. Empty when there is no timeline (no timing or no length).
     std::string timeline_end;
-    std::vector<TextLine> footer;  // leftover SP, SP meter, skipped notes. Task 10 deletes it.
 };
 
 // `timing` may be null (no songmeta row): the stored transfer scales are used
@@ -162,24 +153,14 @@ std::vector<std::string> build_score_breakdown(const Path& path);
 
 // ---- path list -------------------------------------------------------------
 
-// The right-aligned ms cell of one path row; `ms` empty when the path has no
-// difficulty.
-struct PathRowView {
-    std::string ms;  // "%9.1f ms"
-    bool warn = false;
-};
-PathRowView build_path_row(const Path& path);
-
 struct PathGroupView {
     std::string score_label;  // comma-grouped score heading
     std::vector<const Path*> paths;
 };
 
 struct PathListView {
-    // Groups in traversal order; the view renders "Optimal Path" before the
-    // first and `more_label` before the second.
+    // Groups in traversal order.
     std::vector<PathGroupView> groups;
-    std::string more_label;  // "More Paths" (+ " (Path limit: N ms)")
 
     // The all-0 section: shown only when the generated list does not already
     // contain that path (same score AND same notation).
@@ -255,10 +236,6 @@ struct PathsTabUi {
 // Pointers inside point into the record, like build_path_list's.
 class PathsTabCache {
 public:
-    struct Row {
-        std::string label;  // the path's pathstring
-        PathRowView cell;   // the right-aligned ms cell
-    };
     struct Details {
         std::vector<MultSqueezeView> squeezes;
         ActivationsView activations;
@@ -267,10 +244,6 @@ public:
 
     // The stored-result panel's lines for `lookup`.
     const RecordStatusView& status(const store::RecordLookup& lookup, int record_generation);
-    // The path list for `record`, with every listed path's row.
-    const PathListView& list(const HydraRecord& record, int record_generation);
-    // The row of a path in the last list() (the all-0 section included).
-    const Row& row(const Path* path) const;
     // The selected path's squeezes, activations and score breakdown. A new
     // path or record also resets ui() for it; a display setting does not.
     const Details& details(const Path& path, const HydraRecord& record, int record_generation,
@@ -286,7 +259,6 @@ public:
 
     // How many times each view was built; for tests.
     int status_builds() const { return status_builds_; }
-    int list_builds() const { return list_builds_; }
     int details_builds() const { return details_builds_; }
     int buttons_builds() const { return buttons_builds_; }
 
@@ -294,11 +266,6 @@ private:
     int status_generation_ = -1;
     RecordStatusView status_;
     int status_builds_ = 0;
-
-    int list_generation_ = -1;
-    PathListView list_;
-    std::unordered_map<const Path*, Row> rows_;
-    int list_builds_ = 0;
 
     int details_generation_ = -1;
     const Path* details_path_ = nullptr;
