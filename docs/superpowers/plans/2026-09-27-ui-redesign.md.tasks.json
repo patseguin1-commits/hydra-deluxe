@@ -57,7 +57,7 @@
     {
       "id": "6",
       "subject": "Task 6: Remove Auto",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         "1",
         "2",
@@ -70,7 +70,7 @@
     {
       "id": "7",
       "subject": "Task 7: Library summaries in the store",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         "1",
         "2",
@@ -83,7 +83,7 @@
     {
       "id": "8",
       "subject": "Task 8: Path and Preview view data",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         "1",
         "2",

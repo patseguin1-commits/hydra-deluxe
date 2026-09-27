@@ -1,5 +1,5 @@
 // Tests for app/path_view: the Song Details screen's derived strings and
-// flags. These forms were previously composed inside ui/details_view.cpp's
+// flags. These forms were previously composed inside ui/paths_tab.cpp's
 // draw functions, where no test could reach them; the view-model is the
 // interface, so the cases here pin the exact display strings.
 

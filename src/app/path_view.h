@@ -1,11 +1,10 @@
 // Path view-model — the derived strings and flags the Song Details screen
 // renders, built here so the derivation is testable without an ImGui frame.
 //
-// Every string below is exactly what the details modal shows; the view layer
-// (ui/details_view.cpp) only lays these out. The same forms were previously
+// Every string below is exactly what the Paths tab shows; the view layer
+// (ui/paths_tab.cpp) only lays these out. The same forms were previously
 // composed inline in the draw functions, where no test could reach them.
-// Follows the LibraryPage::RowSummary pattern (ui/app_state.h): resolve the
-// display facts once, render dumb.
+// Resolve the display facts once, render dumb.
 //
 
 #ifndef HYDRA_APP_PATH_VIEW_H
