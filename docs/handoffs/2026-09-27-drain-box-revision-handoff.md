@@ -82,5 +82,6 @@ The dev build reads `hydra_settings.ini` and `hydra.db` from its own folder. Wit
 ## Loose ends, not part of this work
 
 - **Old worktrees:** Tasks 1 and 2's worktrees are removed. Their merged branches `drain/T1` and `drain/T2` are still there.
-- **A separate session:** it is removing `SongTiming::sp_end_ms`, which has had no callers outside its tests since `c89596b`. It touches `src/core/timing.{h,cpp}` and `tests/test_timing.cpp`, which none of Tasks 4 to 6 touch.
+- **A separate session:** worktree `objective-maxwell-56ed0c` (session `bc9f5a7b`) has commit `64981da`, not yet merged into `hydra-test`. It removes `SongTiming::sp_end_ms` and other port-era dead code. It also touches `src/render/preview_renderer.{h,cpp}` (it removes `width()`/`height()`), and Task 6 edits `preview_renderer.cpp`'s `resize`. Whichever merges second may need a small conflict resolved there. Keep both changes.
+- **An older unmerged fix:** worktree `adoring-hopper-b9c009` has commit `a301d0b` (9/25), "Read command-line arguments as UTF-8 in every entry point". It was never merged into `hydra-test`, and its `utf8_argv()` helper isn't there. Don't remove that worktree until the user decides what to do with it.
 - **Pushing:** nothing has been pushed.
