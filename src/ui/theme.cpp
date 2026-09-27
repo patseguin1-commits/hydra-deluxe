@@ -10,7 +10,7 @@ void apply_theme() {
     // overrides. Values read directly from dpg.show_style_editor(), not
     // Dear ImGui's StyleColorsDark() (which is meaningfully bluer/darker).
     ImVec4 dpg_surface(51 / 255.0f, 51 / 255.0f, 55 / 255.0f, 1.0f);
-    ImVec4 dpg_window(37 / 255.0f, 37 / 255.0f, 38 / 255.0f, 1.0f);
+    const ImVec4 dpg_window = kWindowBgColor;
     ImVec4 dpg_border(78 / 255.0f, 78 / 255.0f, 78 / 255.0f, 1.0f);
     colors[ImGuiCol_WindowBg] = dpg_window;
     colors[ImGuiCol_ChildBg] = dpg_window;
@@ -29,8 +29,9 @@ void apply_theme() {
     // alpha=255; a few of these were previously (and wrongly) given reduced
     // alpha here.
     colors[ImGuiCol_Button] = kButtonColor;
-    colors[ImGuiCol_ButtonHovered] = kAccentColor;
-    colors[ImGuiCol_ButtonActive] = ImVec4(0, 200 / 255.0f, 200 / 255.0f, 1.0f);
+    colors[ImGuiCol_ButtonHovered] = kButtonHoveredColor;
+    colors[ImGuiCol_ButtonActive] = kButtonActiveColor;
+    colors[ImGuiCol_TextDisabled] = kDimTextColor;
     colors[ImGuiCol_CheckMark] = kAccentColor;
     colors[ImGuiCol_FrameBgHovered] = ImVec4(0, 100 / 255.0f, 100 / 255.0f, 1.0f);
     colors[ImGuiCol_FrameBgActive] = ImVec4(0, 150 / 255.0f, 150 / 255.0f, 1.0f);
@@ -92,8 +93,8 @@ void end_disabled_input(bool disabled) {
 void begin_disabled_checkbox(bool disabled) {
     ImGui::BeginDisabled(disabled);
     if (disabled) {
-        ImGui::PushStyleColor(ImGuiCol_Text, kNewSongColor);
-        ImGui::PushStyleColor(ImGuiCol_CheckMark, kNewSongColor);
+        ImGui::PushStyleColor(ImGuiCol_Text, kDimTextColor);
+        ImGui::PushStyleColor(ImGuiCol_CheckMark, kDimTextColor);
         ImGui::PushStyleColor(ImGuiCol_FrameBg, kDisabledInputBgColor);
         ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, kDisabledInputBgColor);
         ImGui::PushStyleColor(ImGuiCol_FrameBgActive, kDisabledInputBgColor);
