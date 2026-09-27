@@ -5,8 +5,12 @@
 #endif
 #include <windows.h>
 
+#include <algorithm>
+#include <charconv>
+#include <cstring>
+
 #include "imgui.h"
-#include "imgui_internal.h"  // g.LogBuffer for FrameText
+#include "imgui_internal.h"  // g.LogBuffer for FrameText; ImGuiSettingsHandler
 
 #include "app/config.h"
 #include "ui/app_state.h"
@@ -16,6 +20,110 @@
 #include "ui/theme.h"
 
 namespace hydra::ui {
+
+namespace {
+
+// What hydra_ui.ini said, then what main.cpp reported since.
+WindowPlacement g_placement;
+// The theme at scale 1, captured by setup_imgui after apply_theme().
+ImGuiStyle g_base_style;
+
+// Reads "<a>,<b>" into two ints; false unless the text is exactly that.
+bool read_int_pair(std::string_view text, int& a, int& b) {
+    const size_t comma = text.find(',');
+    if (comma == std::string_view::npos) return false;
+    const char* first = text.data();
+    const char* mid = first + comma;
+    const char* last = first + text.size();
+    const auto r1 = std::from_chars(first, mid, a);
+    if (r1.ec != std::errc() || r1.ptr != mid) return false;
+    const auto r2 = std::from_chars(mid + 1, last, b);
+    return r2.ec == std::errc() && r2.ptr == last;
+}
+
+// The [Hydra][Window] section's handler. ImGui calls ReadOpen for each
+// "[Hydra][<name>]" header and ReadLine for each line under it, and WriteAll
+// whenever it saves the file.
+void* placement_read_open(ImGuiContext*, ImGuiSettingsHandler*, const char* name) {
+    return std::strcmp(name, "Window") == 0 ? &g_placement : nullptr;
+}
+
+void placement_read_line(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const char* line) {
+    parse_window_placement_line(line, *static_cast<WindowPlacement*>(entry));
+}
+
+void placement_write_all(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuffer* out) {
+    if (!g_placement.valid) return;
+    out->appendf("[%s][Window]\n", handler->TypeName);
+    out->append(format_window_placement(g_placement).c_str());
+    out->append("\n");
+}
+
+}  // namespace
+
+bool placement_on_screen(const ScreenRect& r, const std::vector<ScreenRect>& work_areas) {
+    if (r.width() < kMinVisiblePx || r.height() < kMinVisiblePx) return false;
+    const ScreenRect title_band{r.left, r.top, r.right, r.top + kMinVisiblePx};
+    for (const ScreenRect& area : work_areas) {
+        const int w = std::min(title_band.right, area.right) - std::max(title_band.left, area.left);
+        const int h = std::min(title_band.bottom, area.bottom) - std::max(title_band.top, area.top);
+        if (w >= kMinVisiblePx && h >= kMinVisiblePx / 2) return true;
+    }
+    return false;
+}
+
+std::string format_window_placement(const WindowPlacement& p) {
+    return "Pos=" + std::to_string(p.normal.left) + "," + std::to_string(p.normal.top) + "\n" +
+           "Size=" + std::to_string(p.normal.width()) + "," + std::to_string(p.normal.height()) +
+           "\n" + "Maximized=" + (p.maximized ? "1" : "0") + "\n";
+}
+
+void parse_window_placement_line(std::string_view line, WindowPlacement& p) {
+    int a = 0, b = 0;
+    if (line.substr(0, 4) == "Pos=" && read_int_pair(line.substr(4), a, b)) {
+        const int w = p.normal.width(), h = p.normal.height();
+        p.normal = {a, b, a + w, b + h};
+    } else if (line.substr(0, 5) == "Size=" && read_int_pair(line.substr(5), a, b)) {
+        p.normal.right = p.normal.left + a;
+        p.normal.bottom = p.normal.top + b;
+    } else if (line == "Maximized=1") {
+        p.maximized = true;
+    } else if (line == "Maximized=0") {
+        p.maximized = false;
+    }
+    p.valid = p.normal.width() > 0 && p.normal.height() > 0;
+}
+
+WindowPlacement window_placement() { return g_placement; }
+
+void remember_window_placement(const WindowPlacement& p) {
+    if (p == g_placement) return;
+    g_placement = p;
+    // WndProc can run before the context exists (CreateWindow sends its
+    // first WM_SIZE early); the placement is kept either way.
+    if (ImGui::GetCurrentContext()) ImGui::MarkIniSettingsDirty();
+}
+
+float ui_scale_for_dpi(unsigned dpi) {
+    return dpi == 0 ? 1.0f : static_cast<float>(dpi) / 96.0f;  // 96 = USER_DEFAULT_SCREEN_DPI
+}
+
+ImGuiStyle scaled_style(const ImGuiStyle& base, float scale) {
+    ImGuiStyle style = base;
+    style.ScaleAllSizes(scale);
+    style.FontScaleDpi = scale;
+    return style;
+}
+
+void set_ui_scale(float scale) {
+    if (scale <= 0.0f) return;
+    ImGuiStyle& style = ImGui::GetStyle();
+    // FontSizeBase is filled in by ImGui on the first frame; keep it.
+    const float font_size_base = style.FontSizeBase;
+    style = scaled_style(g_base_style, scale);
+    style.FontSizeBase = font_size_base;
+    g_ui_scale = scale;  // for the views' explicit pixel sizes
+}
 
 void setup_imgui(const ImGuiSetupOptions& options) {
     IMGUI_CHECKVERSION();
@@ -39,15 +147,31 @@ void setup_imgui(const ImGuiSetupOptions& options) {
         io.IniFilename = ini_file.c_str();
     }
 
+    // The main window's placement lives in the same file, as a
+    // [Hydra][Window] section. Read the file now instead of on the first
+    // frame (ImGui skips its own first-frame read once this has run), so
+    // main.cpp can put the window back before it is shown.
+    g_placement = WindowPlacement{};
+    ImGuiSettingsHandler placement_handler;
+    placement_handler.TypeName = "Hydra";
+    placement_handler.TypeHash = ImHashStr("Hydra");
+    placement_handler.ReadOpenFn = placement_read_open;
+    placement_handler.ReadLineFn = placement_read_line;
+    placement_handler.WriteAllFn = placement_write_all;
+    ImGui::AddSettingsHandler(&placement_handler);  // ImGui keeps a copy
+    if (io.IniFilename) ImGui::LoadIniSettingsFromDisk(io.IniFilename);
+
     ImGui::StyleColorsDark();
     apply_theme();
 
-    const float main_scale = options.dpi_scale;
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.ScaleAllSizes(main_scale);
-    style.FontScaleDpi = main_scale;
-    io.ConfigDpiScaleFonts = true;
-    g_ui_scale = main_scale;  // for the views' explicit pixel sizes
+    // Every scale change starts again from this unscaled theme.
+    g_base_style = ImGui::GetStyle();
+    // Hydra sets the font scale itself, in set_ui_scale, together with the
+    // sizes. With ConfigDpiScaleFonts on, ImGui would also overwrite it every
+    // frame from the main viewport's DPI, a second writer that Hydra does not
+    // keep in step with WM_DPICHANGED.
+    io.ConfigDpiScaleFonts = false;
+    set_ui_scale(options.dpi_scale);
 
     // Fonts (resource/ is copied beside the exe by the build; see
     // CMakeLists.txt). exe-relative, not cwd-relative: the app may be
