@@ -9,7 +9,9 @@
 // --jobs <n> runs each chosen test in its own hydra_uitest process, at most n
 // at once, and prints their results in the usual order. Each process has its
 // own scratch folder and a fresh ImGui context, so no test sees another's
-// leftovers. Without --jobs the tests run one after another in this process.
+// leftovers. A few tests (kRunAlone) wait until the rest are done and then
+// run one at a time. Without --jobs the tests run one after another in this
+// process.
 //
 // Prints [PASS]/[FAIL] per test and exits 0 only if everything passed.
 
@@ -38,10 +40,17 @@ int usage() {
     return 2;
 }
 
+// Tests that race a real batch against the frame count: they watch the
+// running strip for a number of frames, and on a machine busy with other test
+// processes each frame is slow enough for the batch to finish first. --jobs
+// starts these last, one at a time, with nothing else running.
+const char* const kRunAlone[] = {"batch-strip-drift", "batch-pause-stop"};
+
 // One test's child process and the file its output goes to.
 struct Child {
     std::string name;
     std::string log;
+    bool alone = false;  // listed in kRunAlone
     HANDLE process = nullptr;
     DWORD exit_code = 1;
 };
@@ -83,6 +92,7 @@ int run_parallel(uitest::Harness& h, const std::vector<std::string>& wanted, int
                 Child c;
                 c.name = t->Name;
                 c.log = h.temp_dir + "\\" + c.name + ".log";
+                for (const char* a : kRunAlone) c.alone = c.alone || c.name == a;
                 children.push_back(c);
                 break;
             }
@@ -102,13 +112,24 @@ int run_parallel(uitest::Harness& h, const std::vector<std::string>& wanted, int
     wchar_t exe[MAX_PATH];
     GetModuleFileNameW(nullptr, exe, MAX_PATH);
 
+    // Start order: the run-alone tests after all the others. Results still
+    // print in registration order.
+    std::vector<size_t> order;
+    for (size_t i = 0; i < children.size(); ++i)
+        if (!children[i].alone) order.push_back(i);
+    for (size_t i = 0; i < children.size(); ++i)
+        if (children[i].alone) order.push_back(i);
+
     std::vector<size_t> running;
     size_t next = 0, done = 0;
     while (done < children.size()) {
-        while (running.size() < static_cast<size_t>(jobs) && next < children.size()) {
-            Child& c = children[next];
+        while (running.size() < static_cast<size_t>(jobs) && next < order.size()) {
+            Child& c = children[order[next]];
+            // A run-alone test waits for an empty machine, and while it runs
+            // nothing else starts (every test after it is run-alone too).
+            if (c.alone && !running.empty()) break;
             if (launch_child(c, exe, passthrough)) {
-                running.push_back(next);
+                running.push_back(order[next]);
             } else {
                 std::fprintf(stderr, "hydra_uitest: could not start the process for %s\n",
                              c.name.c_str());

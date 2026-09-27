@@ -20,9 +20,7 @@ namespace {
 void render_library_pane(AppState& app) {
     detail::render_library(app);
     if (app.library_total == 0)
-        ImGui::TextUnformatted(
-            "No songs scanned. Click \"Manage folders...\" to add your song folder, "
-            "then \"Scan library\" to get started!");
+        ImGui::TextUnformatted(detail::empty_library_message(app.settings));
 }
 
 // The library and, when a song is open, the song panel beside it. The
@@ -85,19 +83,7 @@ void render_main_window(AppState& app) {
                      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
                      ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-    // A finished report job has nothing left to show once the batch modal is
-    // gone (its status lines live there); reclaim the thread.
-    if (!app.batch_job && app.report_job && app.report_job->finished()) {
-        app.library_ui.report_checked_at = -1.0;  // a new report: look at once
-        // You clicked Continue while the report was still building, so the
-        // modal never showed how it ended. Say so here instead. A cancelled
-        // job says nothing -- you asked for it to stop.
-        if (!app.report_outcome_shown && !app.report_job->is_cancelled()) {
-            if (app.report_job->ok()) app.set_status("Path report ready.");
-            else app.set_status("Path report failed: " + app.report_job->error());
-        }
-        app.report_job.reset();
-    }
+    // A finished report job is reaped by AppState::update_background_jobs.
 
     // Reap dmleaderboards jobs once the picker is closed: a finished report
     // job (or a fetch left running when the modal was dismissed) has nothing
@@ -118,13 +104,15 @@ void render_main_window(AppState& app) {
     }
 
     detail::render_actions_row(app);
-    // T13: batch strips (the Batch mockup puts them between the toolbar and
-    // the settings bar)
+    // The batch strips sit between the toolbar and the settings bar (the
+    // Batch mockup).
+    detail::render_batch_strip(app);
+    detail::render_batch_done(app);
     detail::render_settings_bar(app);
     render_library_and_panel(app);
 
     if (app.scan_job) detail::render_scan_modal(app);
-    if (app.batch_job || app.batch_confirm_pending) detail::render_batch_modal(app);
+    detail::render_batch_confirm(app);
     if (app.dm_picker_open) detail::render_dm_picker_modal(app);
 
     ImGui::End();

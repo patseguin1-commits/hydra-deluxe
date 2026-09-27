@@ -221,6 +221,9 @@ void run_frame(AppState& app, FrameText* capture) {
     // State first, once per frame: the panel's closing edge, storing and
     // reaping the analyze job, a finished Dynamics count.
     app.tick(ImGui::GetTime());
+    // Batch ends, report starts and reaps, parked leaderboard jobs: state
+    // work, done here once a frame rather than inside a view.
+    app.update_background_jobs();
     render_main_window(app);
     // The number boxes apply edits live but leave the INI until the edit
     // ends (AppState::edit_settings). An edit has ended once no widget is

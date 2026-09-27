@@ -55,13 +55,8 @@ public:
 
     void start();
 
-    // Headline join counts for the finished modal; valid once ok().
-    int total() const { return total_; }
-    int matched() const { return matched_; }
-    int above() const { return above_; }
-    int unmatched() const { return unmatched_; }
-    // Every count the comparison produced, whatever app/dm_report.h names
-    // them (T3 splits "not in your library" in two). Valid once ok().
+    // Every count the comparison produced, for the finished modal. Valid
+    // once ok().
     const app::dm_report::DmReportStats& stats() const { return stats_; }
 
     // Valid once finished() && ok(): where the page was written, whether the
@@ -78,7 +73,6 @@ private:
     std::string chartmode_;
     store::Lens lens_;
     bool open_when_done_;
-    int total_ = 0, matched_ = 0, above_ = 0, unmatched_ = 0;
     app::dm_report::DmReportStats stats_;
     ReportOutcome outcome_;
 };

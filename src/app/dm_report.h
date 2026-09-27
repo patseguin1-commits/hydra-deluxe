@@ -66,11 +66,6 @@ struct DmReportStats {
     int above_optimal = 0;
     int not_analyzed = 0;    // in the library, no current result
     int not_in_library = 0;
-    // The old names, still filled so ui/dm_jobs.cpp compiles unchanged:
-    // above == above_optimal, unmatched == not_analyzed + not_in_library.
-    // Remove them once the job reads the four counts above.
-    int above = 0;
-    int unmatched = 0;
 };
 DmReportStats tally_dm_rows(const std::vector<DmReportRow>& rows);
 

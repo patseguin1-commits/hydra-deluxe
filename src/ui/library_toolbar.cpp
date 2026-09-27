@@ -1,6 +1,7 @@
 #include "ui/library_parts.h"
 
 #include "app/report_files.h"
+#include "core/model.h"
 #include "imgui.h"
 #include "ui/fonts.h"
 #include "ui/generation.h"
@@ -13,27 +14,43 @@
 
 namespace hydra::ui::detail {
 
-// Transient feedback for actions that used to fail silently (duplicate
-// folder, unwritable INI, folder picker not opening). Fades out a few
-// seconds after the message changes. same_line appends it to the current
-// row (the main action bar); the folder manager renders it on its own line.
-void render_status_line(AppState& app, bool same_line) {
-    // Lives on the AppState (LibraryViewState); the watcher starts at "seen"
-    // for this app's counter, so startup does not start a fade.
+// The status line, on its own wrapping line under the toolbar. News is
+// neutral and fades after a few seconds; a problem is orange and stays until
+// its X is clicked.
+void render_status_line(AppState& app) {
+    // The watcher starts at "seen" for this app's counter, so startup does
+    // not start a fade.
     GenerationWatcher& generation = app.library_ui.status_watcher;
     double& shown_at = app.library_ui.status_shown_at;
     if (generation.changed(app.status_generation)) shown_at = ImGui::GetTime();
     if (shown_at < 0.0 || app.status_message.empty()) return;
-    if (ImGui::GetTime() - shown_at > 6.0) return;
-    if (same_line) ImGui::SameLine();
-    ImGui::TextColored(kWarningColor, "%s", app.status_message.c_str());
+    if (!app.status_is_problem && ImGui::GetTime() - shown_at > 6.0) return;
+    if (app.status_is_problem) {
+        if (ImGui::SmallButton("X##dismissstatus")) {
+            app.dismiss_status();
+            return;
+        }
+        hint("Dismiss");
+        ImGui::SameLine();
+    }
+    ImGui::PushStyleColor(ImGuiCol_Text, app.status_is_problem ? kWarningColor : kDefaultTextColor);
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextUnformatted(app.status_message.c_str());
+    ImGui::PopTextWrapPos();
+    ImGui::PopStyleColor();
 }
 
-// The single row of library-wide actions at the top of the main screen.
+// The toolbar: library-wide actions on the left, the last report on the right.
 void render_actions_row(AppState& app) {
-    // The buttons here carry live counts and swap labels, so each takes the
-    // width of its widest label (widgets.h): the row must not reflow under
-    // the mouse when a count changes.
+    const bool batch_busy = app.batch_job && !app.batch_job->snapshot().finished;
+    auto busy_tooltip = [&] {
+        if (batch_busy && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal |
+                                               ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Busy: a batch is running.");
+    };
+
+    // Buttons with live counts take the width of their widest label, so the
+    // row doesn't reflow under the mouse when a count changes.
     int folder_count = (int)app.settings.chartfolders.size();
     char manage_label[64];
     std::snprintf(manage_label, sizeof(manage_label), "Manage folders... (%d)", folder_count);
@@ -44,87 +61,83 @@ void render_actions_row(AppState& app) {
     hint("Add or remove the folders Hydra scans for charts");
     ImGui::SameLine();
 
-    bool can_scan = !app.settings.chartfolders.empty();
+    const bool can_scan = !app.settings.chartfolders.empty() && !batch_busy && !app.scan_job;
     begin_disabled_button(!can_scan);
     if (ImGui::Button("Scan library")) {
         app.start_scan();
         ImGui::OpenPopup("Scanning charts");
     }
     end_disabled_button(!can_scan);
+    busy_tooltip();
     ImGui::SameLine();
 
-    bool searching = !app.search.empty();
-    char label[96];
-    if (searching)
-        std::snprintf(label, sizeof(label), "Analyze search (%lld)",
-                      (long long)static_cast<int64_t>(app.library_match_count()));
-    else
-        std::snprintf(label, sizeof(label), "Analyze library");
-    // Nothing to analyze -> disabled, like "Scan library" with no folders
-    // (running a batch over 0 charts just failed the report afterwards).
-    int64_t analyzable =
-        searching ? static_cast<int64_t>(app.library_match_count()) : app.library_total;
-    // A search count can never exceed the library, so this slot fits both labels.
-    std::string analyze_widest =
-        "Analyze search (" + widest_digits(digit_count(app.library_total)) + ")";
-    const float analyze_w =
-        std::max(button_slot_width("Analyze library"), button_slot_width(analyze_widest.c_str()));
-    // Also off while hydra_rules.ini is bad: no analysis on rules the user
-    // did not choose.
-    const bool analyze_off = analyzable == 0 || app.analysis_blocked();
+    const bool searching = !app.search.empty();
+    const int64_t analyzable = searching ? static_cast<int64_t>(app.library_match_count()) : app.library_total;
+    const std::string label = searching
+                                  ? "Analyze search (" + group_thousands(analyzable) + ")..."
+                                  : std::string("Analyze library...");
+    // The slot fits the widest count this library can show, commas included.
+    std::string sample = group_thousands(app.library_total);
+    const char widest = widest_digits(1)[0];
+    for (char& c : sample)
+        if (c >= '0' && c <= '9') c = widest;
+    const float analyze_w = std::max(button_slot_width("Analyze library..."),
+                                     button_slot_width(("Analyze search (" + sample + ")...").c_str()));
+    // Off with nothing to analyze, under a bad hydra_rules.ini, or mid-batch.
+    const bool analyze_off = analyzable == 0 || app.analysis_blocked() || batch_busy;
     begin_disabled_button(analyze_off);
-    if (button_in_slot(label, analyze_w)) {
-        // Confirm before starting: a library batch can be hours of all-core
-        // CPU, which shouldn't fire irrevocably from one click.
-        app.batch_confirm_pending = true;
-        ImGui::OpenPopup("Analyzing");
-    }
+    if (button_in_slot(label.c_str(), analyze_w)) app.open_batch_confirm();
     end_disabled_button(analyze_off);
+    busy_tooltip();
     ImGui::SameLine();
-    ImGui::Checkbox("redo existing", &app.batch_redo);
-    hint("Also re-analyze charts that already have a stored result");
 
-    ImGui::SameLine();
-    if (ImGui::Button("Compare dmleaderboards user...")) {
-        // The leaderboard plays by Clone Hero's rules, so the comparison only
-        // means anything against 4-bar records.
-        if (app.settings.sp_cap != kCloneHeroSpCap) {
-            app.set_status("Leaderboard comparison needs SP cap 4 (Clone Hero's rule). "
-                           "Set it in a song's details.");
-        } else if (app.settings.difficulty() != Difficulty::Expert) {
-            // The ladder only carries Expert scores, so a Hard/Medium/Easy
-            // library has nothing to compare against.
-            app.set_status("Leaderboard comparison needs Expert difficulty. "
-                           "Switch the View difficulty back to Expert.");
-        } else {
-            // Fresh picker: drop any finished report from a previous run, and
-            // only refetch the ladder if we don't already have it this session
-            // (the render.com backend cold-starts, so a cached list saves a
-            // long wait).
-            app.dm_report_job.reset();
-            app.dm_picker_open = true;
-            if (app.dm_users.empty()) app.start_dm_fetch();
-            ImGui::OpenPopup("Compare dmleaderboards user");
+    // The leaderboard plays by Clone Hero's rules at Expert, so the comparison
+    // only means anything there. Disabled elsewhere, with the reason on hover.
+    const bool expert = app.settings.difficulty() == Difficulty::Expert;
+    const bool ch_cap = app.settings.sp_cap == kCloneHeroSpCap;
+    const bool compare_off = !expert || !ch_cap;
+    begin_disabled_button(compare_off);
+    if (ImGui::Button("Compare with dmleaderboards...")) {
+        // Fresh picker: drop a finished report (a running one is parked, not
+        // joined), and refetch the ladder only when this session has none.
+        app.cancel_dm_report();
+        app.dm_picker_open = true;
+        if (app.dm_users.empty()) app.start_dm_fetch();
+        ImGui::OpenPopup("Compare dmleaderboards user");
+    }
+    end_disabled_button(compare_off);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled)) {
+        if (!expert)
+            ImGui::SetTooltip("Needs Expert: the leaderboard only has Expert scores.");
+        else if (!ch_cap)
+            ImGui::SetTooltip("Needs SP cap %d, Clone Hero's rule: the leaderboard's scores "
+                              "were played under it.",
+                              kCloneHeroSpCap);
+        else
+            ImGui::SetTooltip("Compare a dmleaderboards.com player's scores against your library");
+    }
+
+    // The last report, at the right. While one builds, a greyed button says so.
+    const bool building = app.report_job && !app.report_job->finished();
+    if (building || app.report_file_shown(ImGui::GetTime())) {
+        const float report_w = std::max(button_slot_width("Open path report"),
+                                        button_slot_width("Building path report..."));
+        ImGui::SameLine();
+        const float right = ImGui::GetContentRegionMax().x - report_w;
+        if (right > ImGui::GetCursorPosX()) ImGui::SetCursorPosX(right);
+        if (building) {
+            begin_disabled_button(true);
+            ImGui::Button("Building path report...", ImVec2(report_w, 0.0f));
+            end_disabled_button(true);
+        } else if (ImGui::Button("Open path report", ImVec2(report_w, 0.0f)) &&
+                   !app::open_report_in_browser()) {
+            app.set_problem("Windows couldn't open the path report in your browser.");
         }
     }
-    hint("Compare a dmleaderboards.com player's scores against your library");
 
-    // A way back into the last batch's HTML report. While a report job is
-    // still building, the slot shows a greyed "Building path report..." button.
-    if (app.report_job && !app.report_job->finished()) {
-        ImGui::SameLine();
-        begin_disabled_button(true);
-        ImGui::Button("Building path report...");
-        end_disabled_button(true);
-    } else if (app.report_file_shown(ImGui::GetTime())) {
-        ImGui::SameLine();
-        if (ImGui::Button("Open path report") && !app::open_report_in_browser())
-            app.set_status("The path report could not be opened.");
-    }
-
-    render_status_line(app, /*same_line=*/true);
-    // A bad rules file is not a passing message: it stays on screen, under
-    // the action row, for as long as analysis is off.
+    render_status_line(app);
+    // A bad rules file is not a passing message: it stays under the toolbar
+    // for as long as analysis is off.
     if (app.analysis_blocked()) {
         ImGui::PushTextWrapPos(0.0f);
         ImGui::TextColored(kWarningColor,

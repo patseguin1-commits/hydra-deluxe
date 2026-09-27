@@ -430,7 +430,4 @@ TEST_CASE("collect_dm_rows tells not analyzed from not in library") {
     CHECK(stats.above_optimal == 0);
     CHECK(stats.not_analyzed == 1);
     CHECK(stats.not_in_library == 1);
-    // The old names, kept filled until ui/dm_jobs.cpp reads the new ones.
-    CHECK(stats.above == 0);
-    CHECK(stats.unmatched == 2);
 }

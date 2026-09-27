@@ -107,7 +107,7 @@ void test_rules_error(ImGuiTestContext* ctx) {
         return visible_text(h).find("analysis is off") != std::string::npos;
     }, 5));
     IM_CHECK(visible_text(h).find("max_tied_paths") != std::string::npos);
-    IM_CHECK((ctx->ItemInfo("Analyze library").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+    IM_CHECK((ctx->ItemInfo("Analyze library...").ItemFlags & ImGuiItemFlags_Disabled) != 0);
 
     open_details(ctx, 0);
     if (ctx->IsError()) return;
@@ -129,7 +129,7 @@ void test_library_state_per_app(ImGuiTestContext* ctx) {
     ctx->SetRef("//Hydra");
     ctx->ItemInputValue("**/##search", "zzqx");
     IM_CHECK(wait_until(ctx, [&] { return h.app->search == "zzqx"; }, 5));
-    ctx->ItemClick("Compare dmleaderboards user...");
+    ctx->ItemClick("Compare with dmleaderboards...");
     IM_CHECK(wait_until(ctx, [&] { return !h.app->dm_users.empty(); }, 10));
     ctx->SetRef("//Compare dmleaderboards user");
     ctx->ItemInputValue("##dmfilter", "zzqx");
@@ -146,7 +146,7 @@ void test_library_state_per_app(ImGuiTestContext* ctx) {
     IM_CHECK(h.app->search.empty());
     IM_CHECK(visible_text(h).find("zzqx") == std::string::npos);
     ctx->SetRef("//Hydra");
-    ctx->ItemClick("Compare dmleaderboards user...");
+    ctx->ItemClick("Compare with dmleaderboards...");
     IM_CHECK(wait_until(ctx, [&] { return !h.app->dm_users.empty(); }, 10));
     IM_CHECK(wait_until(ctx, [&] {
         return visible_text(h).find("alice") != std::string::npos;
@@ -158,7 +158,7 @@ void test_library_state_per_app(ImGuiTestContext* ctx) {
 }
 
 // The View row and the library's own controls: Pro Drums, backing out of
-// "Analyze library", and removing a song folder.
+// "Analyze library...", and removing a song folder.
 void test_view_settings(ImGuiTestContext* ctx) {
     Harness& h = harness(ctx);
     reset_app(h);
@@ -175,10 +175,10 @@ void test_view_settings(ImGuiTestContext* ctx) {
     ctx->ItemClick("**/Pro Drums");
     IM_CHECK(h.app->settings.view_prodrums);
 
-    // "Analyze library" asks first; Cancel starts nothing.
-    ctx->ItemClick("Analyze library");
-    ctx->SetRef("//Analyzing");
-    IM_CHECK(visible_text(h).find("will be skipped") != std::string::npos);
+    // "Analyze library..." asks first; Cancel starts nothing.
+    ctx->ItemClick("Analyze library...");
+    ctx->SetRef("//Analyze library");
+    IM_CHECK(visible_text(h).find("no result yet") != std::string::npos);
     ctx->ItemClick("Cancel");
     ctx->Yield(2);
     IM_CHECK(h.app->batch_job == nullptr);

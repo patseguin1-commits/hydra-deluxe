@@ -260,8 +260,6 @@ DmReportStats tally_dm_rows(const std::vector<DmReportRow>& rows) {
         else if (r.status == "not analyzed") ++stats.not_analyzed;
         else ++stats.not_in_library;
     }
-    stats.above = stats.above_optimal;
-    stats.unmatched = stats.not_analyzed + stats.not_in_library;
     return stats;
 }
 

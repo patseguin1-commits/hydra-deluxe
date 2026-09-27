@@ -1,6 +1,7 @@
 #include "ui/app_state.h"
 
 #include <algorithm>
+#include <unordered_set>
 
 #include "app/config.h"
 #include "app/rules_file.h"
@@ -285,7 +286,7 @@ void AppState::update_analyze_job(double now) {
         if (!shown) {
             // message() is T4's plain sentence; the raw error() stays in the
             // panel's detail line for a song that is showing.
-            set_status("Could not analyze " + title + ". " + job->message());
+            set_problem("Could not analyze " + title + ". " + job->message());
             analyze_job.reset();
         }
         return;
@@ -297,7 +298,7 @@ void AppState::update_analyze_job(double now) {
     }
     if (!d.store_error.empty()) {
         if (!shown) {
-            set_status(d.store_error);
+            set_problem(d.store_error);
             analyze_job.reset();
         }
         return;
@@ -383,19 +384,89 @@ void AppState::start_scan() {
     scan_job->start();
 }
 
+void AppState::open_batch_confirm() {
+    // Exactly the charts the library's search matches, and how many of them
+    // already have a current result (the Analyzed chip's count).
+    batch_scope = library_matches();
+    batch_scope_with_result = static_cast<int64_t>(library.counts().analyzed);
+    batch_confirm_pending = true;
+}
+
 void AppState::start_batch(bool redo) {
     if (analysis_blocked()) return;
     if (batch_job && !batch_job->snapshot().finished) return;
-
-    // The job loads the (possibly search-filtered) item list on its own
-    // thread; doing the unbounded SELECT here froze a frame on big libraries.
-    std::optional<std::string> search_opt = search.empty() ? std::nullopt : std::optional(search);
-    batch_job = std::make_unique<BatchJob>(search_opt, settings.batch_run(), *store, redo);
+    // A direct call (a test) has no confirm open: load the list here.
+    if (!batch_confirm_pending) open_batch_confirm();
+    batch_confirm_pending = false;
+    // Exactly the charts the confirm counted -- not a search string that SQL
+    // would match differently from the library's own search.
+    batch_job = std::make_unique<BatchJob>(std::move(batch_scope), settings.batch_run(), *store,
+                                           redo);
+    batch_scope.clear();
+    batch_scope_with_result = 0;
     report_started = false;
     report_outcome_shown = false;
     batch_seen_completed_ = 0;
     batch_refreshed_at_ = -1.0;
+    batch_finish_seen_ = false;
     batch_job->start();
+}
+
+void AppState::update_background_jobs() {
+    if (batch_job && !batch_finish_seen_ && batch_job->snapshot().finished) {
+        batch_finish_seen_ = true;
+        // tick_library re-reads the summaries once the batch ends.
+        // One path report per finished run. A stopped run keeps its results
+        // but builds no report: a report of part of the library would read
+        // as the whole of it.
+        if (!batch_job->is_cancelled() && !report_started) {
+            report_started = true;
+            report_job = std::make_unique<ReportJob>(*store, settings.cap_query(), settings.lens(),
+                                                     settings.auto_open_report,
+                                                     settings.hit_window_ms);
+            report_job->start();
+        }
+    }
+
+    // The finished strip shows the report's outcome. Dismissed before the
+    // report landed, the outcome goes to the status line instead.
+    if (!batch_job && report_job && report_job->finished()) {
+        library_ui.report_checked_at = -1.0;  // a new report: look at once
+        if (!report_outcome_shown && !report_job->is_cancelled()) {
+            const std::string where = report_job->saved_path().u8string();
+            if (!report_job->ok())
+                set_problem("The path report could not be built. " + report_job->message());
+            else if (!report_job->open_problem().empty())
+                set_problem("Path report saved to " + where + ". " + report_job->open_problem());
+            else
+                set_status("Path report saved to " + where + ".");
+        }
+        report_job.reset();
+    }
+
+    // Let go of cancelled leaderboard jobs once their request has returned.
+    parked_dm_fetches.erase(
+        std::remove_if(parked_dm_fetches.begin(), parked_dm_fetches.end(),
+                       [](const std::unique_ptr<DmFetchUsersJob>& job) { return job->finished(); }),
+        parked_dm_fetches.end());
+    parked_dm_reports.erase(
+        std::remove_if(parked_dm_reports.begin(), parked_dm_reports.end(),
+                       [](const std::unique_ptr<DmReportJob>& job) { return job->finished(); }),
+        parked_dm_reports.end());
+}
+
+void AppState::cancel_dm_fetch() {
+    if (!dm_fetch_job) return;
+    dm_fetch_job->cancel();
+    if (!dm_fetch_job->finished()) parked_dm_fetches.push_back(std::move(dm_fetch_job));
+    dm_fetch_job.reset();
+}
+
+void AppState::cancel_dm_report() {
+    if (!dm_report_job) return;
+    dm_report_job->cancel();
+    if (!dm_report_job->finished()) parked_dm_reports.push_back(std::move(dm_report_job));
+    dm_report_job.reset();
 }
 
 void AppState::start_analyze() {
@@ -450,11 +521,25 @@ void AppState::start_dm_report(const std::string& discord_id, const std::string&
     // Remember the choice so the picker can pre-select it next time.
     settings.dm_last_user = discord_id;
     commit_settings();
+    library_ui.dm_opened_by_click = false;
     dm_report_job->start();
 }
 
 void AppState::set_status(std::string message) {
     status_message = std::move(message);
+    status_is_problem = false;
+    status_generation.bump();
+}
+
+void AppState::set_problem(std::string message) {
+    status_message = std::move(message);
+    status_is_problem = true;
+    status_generation.bump();
+}
+
+void AppState::dismiss_status() {
+    status_message.clear();
+    status_is_problem = false;
     status_generation.bump();
 }
 
@@ -475,7 +560,7 @@ void AppState::flush_settings() {
 void AppState::save_settings() {
     settings_unsaved_ = false;
     if (!settings.save())
-        set_status("Settings could not be saved — " + app::ini_path() +
+        set_problem("Settings could not be saved — " + app::ini_path() +
                    " is not writable.");
 }
 
