@@ -613,7 +613,7 @@ std::string sp_meter_readout(const SpMeterCurve& curve, double now_ms) {
 std::string preview_path_label(const PathButtonView& button) {
     switch (button.group) {
         case PathButtonView::Group::Optimal: return button.notation + "  (optimal)";
-        case PathButtonView::Group::AllZero: return button.notation + "  (0 ms limit)";
+        case PathButtonView::Group::AllZero: return button.notation + "  (best all-0)";
         case PathButtonView::Group::Within:  break;
     }
     return button.notation;

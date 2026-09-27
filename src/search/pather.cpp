@@ -63,8 +63,9 @@ std::vector<Path> search_allzero(const ScoreGraph& graph,
                                  const std::function<void(float)>& on_progress) {
     // depth_value 0 keeps only the top score; its tied peers still merge into
     // variants (up to Rules::max_tied_paths), which is where the E / + / - variations
-    // of one all-0 path come from. The 0 ms limit is the point of the feature,
-    // so it is fixed here and ignores the user's "Path limit" setting --
+    // of one all-0 path come from. The 0 ms limit keeps the path free of
+    // squeeze timing, so it is fixed here and ignores the user's "Path limit"
+    // setting --
     // and it is applied hard. The default soft filter only prefers paths inside
     // the limit and still reports an over-limit one while nothing outscores it,
     // which in a no-skips search (a tiny candidate set, usually one path per

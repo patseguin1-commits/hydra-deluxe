@@ -318,7 +318,7 @@ PreviewNextActBox build_next_act_box(const PreviewScene& scene, double now_ms);
 std::string sp_meter_readout(const SpMeterCurve& curve, double now_ms);
 
 // One entry of the Preview's "Showing" list: the path's notation, with
-// "  (optimal)" on an Optimal path and "  (0 ms limit)" on the all-0 path.
+// "  (optimal)" on an Optimal path and "  (best all-0)" on the all-0 path.
 std::string preview_path_label(const PathButtonView& button);
 
 // Bars banked at `ms`: 0 before the curve begins, its final value after the

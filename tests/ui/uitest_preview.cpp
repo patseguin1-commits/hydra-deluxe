@@ -530,7 +530,7 @@ void test_preview_path_picker(ImGuiTestContext* ctx) {
 
     ctx->ItemClick(preview_path_combo(ctx));
     ctx->Yield(1);
-    IM_CHECK(visible_text(h).find("0 0 0 0  (0 ms limit)") != std::string::npos);
+    IM_CHECK(visible_text(h).find("0 0 0 0  (best all-0)") != std::string::npos);
     // Close the list on the path already shown. (PopupCloseAll would also
     // close the Song Details modal the tab sits in.)
     ctx->ItemClick("//$FOCUSED/3- 1 2  (optimal)##0");

@@ -74,7 +74,8 @@ void test_paths_list(ImGuiTestContext* ctx) {
     const std::string dot = " \xC2\xB7 ";
     IM_CHECK(on_screen(h, "Optimal"));
     IM_CHECK(on_screen(h, "Within 2 scores"));
-    IM_CHECK(on_screen(h, "Best at 0 ms limit"));
+    IM_CHECK(on_screen(h, "Best all-0 path"));
+    IM_CHECK(!on_screen(h, "0 ms limit"));
     IM_CHECK(on_screen(h, "378,315" + dot + "3- 1 2"));
     IM_CHECK(on_screen(h, "hardest squeeze 163.0 ms"));
     IM_CHECK(on_screen(h, "378,175" + dot + "0 4 1"));

@@ -88,7 +88,7 @@ bool path_button(size_t i, const app::PathButtonView& b, bool selected) {
 }
 
 // The buttons under their headings: Optimal, the "Within N" group, and
-// "Best at 0 ms limit". A heading is drawn where the group changes.
+// "Best all-0 path". A heading is drawn where the group changes.
 void render_path_list(const app::PathButtonsView& list, const Path*& selected_path) {
     using Group = app::PathButtonView::Group;
     for (size_t i = 0; i < list.buttons.size(); ++i) {
@@ -97,8 +97,11 @@ void render_path_list(const app::PathButtonsView& list, const Path*& selected_pa
             if (i > 0) ImGui::Spacing();
             const char* heading = b.group == Group::Optimal  ? "Optimal"
                                   : b.group == Group::Within ? list.within_label.c_str()
-                                                             : "Best at 0 ms limit";
+                                                             : "Best all-0 path";
             ImGui::TextDisabled("%s", heading);
+            if (b.group == Group::AllZero)
+                hint("The best path that activates at the first chance every time "
+                     "(no skips). It needs no squeeze timing.");
         }
         if (path_button(i, b, b.path == selected_path)) selected_path = b.path;
     }

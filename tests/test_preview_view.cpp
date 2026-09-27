@@ -1310,5 +1310,5 @@ TEST_CASE("preview path label: the notation and which list it came from") {
     CHECK(preview_path_label(b) == "0 4 1");
     b.notation = "0 0 0 0";
     b.group = PathButtonView::Group::AllZero;
-    CHECK(preview_path_label(b) == "0 0 0 0  (0 ms limit)");
+    CHECK(preview_path_label(b) == "0 0 0 0  (best all-0)");
 }

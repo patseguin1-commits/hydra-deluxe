@@ -97,7 +97,7 @@ The panel has four tabs: **Paths**, **Preview**, **Dynamics** and **Stars**.
 
 ## Paths tab
 
-The left side lists the paths the analysis kept, grouped by score. **Optimal** comes first. Then come the extra paths under a heading like **Within 2 scores**. Last is **Best at 0 ms limit**: the best path found under a 0 ms path limit, with how far it falls below optimal. Click a path to show it on the right.
+The left side lists the paths the analysis kept, grouped by score. **Optimal** comes first. Then come the extra paths under a heading like **Within 2 scores**. Last is **Best all-0 path**: the best path that activates at the first chance every time, with no skips and no squeeze timing, and how far it falls below optimal. Click a path to show it on the right.
 
 The right side starts with a summary, like `Activations 3 · 3 bars each · no SP left over`. Under it, a timeline runs from the first measure to the last, with a mark for each activation. Results saved before this version show no timeline until the song is analyzed again.
 
@@ -130,7 +130,7 @@ One more setting feeds these displays: `hit_window_ms` in `hydra_settings.ini` (
 
 The Preview plays the chart as a 3D note highway, in time with the song's audio. It draws the chosen path on the highway: the Star Power windows as a tinted floor, and the fills a player following the path would see.
 
-**`Showing`** picks which path to draw. It lists the same paths as the Paths tab, in the same order. The 0 ms-limit path reads like `0 0 0 0  (0 ms limit)`.
+**`Showing`** picks which path to draw. It lists the same paths as the Paths tab, in the same order. The all-0 path reads like `0 0 0 0  (best all-0)`.
 
 **`< Act`** and **`Act >`** jump to the previous and next activation. The `[` and `]` keys do the same. `Show in Preview >` on the Paths tab lands here too.
 
