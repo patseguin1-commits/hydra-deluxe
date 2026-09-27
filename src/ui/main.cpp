@@ -40,12 +40,52 @@ static IDXGISwapChain*          g_pSwapChain = nullptr;
 static bool                     g_SwapChainOccluded = false;
 static UINT                     g_ResizeWidth = 0, g_ResizeHeight = 0;
 static ID3D11RenderTargetView*  g_mainRenderTargetView = nullptr;
+// Set by WM_DPICHANGED, applied by the frame loop before the next frame.
+static float                    g_PendingUiScale = 0.0f;
 
 bool CreateDeviceD3D(HWND hWnd);
 void CleanupDeviceD3D();
 void CreateRenderTarget();
 void CleanupRenderTarget();
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+// Adds one monitor's work area (the screen minus the taskbar) to the list.
+static BOOL CALLBACK add_work_area(HMONITOR monitor, HDC, LPRECT, LPARAM data)
+{
+    MONITORINFO info{};
+    info.cbSize = sizeof(info);
+    if (::GetMonitorInfoW(monitor, &info))
+        reinterpret_cast<std::vector<hydra::ui::ScreenRect>*>(data)->push_back(
+            { info.rcWork.left, info.rcWork.top, info.rcWork.right, info.rcWork.bottom });
+    return TRUE;
+}
+
+// Every monitor's work area, in virtual-screen pixels.
+static std::vector<hydra::ui::ScreenRect> monitor_work_areas()
+{
+    std::vector<hydra::ui::ScreenRect> areas;
+    ::EnumDisplayMonitors(nullptr, nullptr, add_work_area, reinterpret_cast<LPARAM>(&areas));
+    return areas;
+}
+
+// Keeps the remembered placement current as the user moves, resizes,
+// maximizes and restores the window. The un-maximized rectangle is read only
+// while the window is neither maximized nor minimized, so a Hydra closed
+// while maximized still restores to the size it had before.
+static void note_window_placement(HWND hWnd)
+{
+    if (::IsIconic(hWnd))
+        return;
+    hydra::ui::WindowPlacement p = hydra::ui::window_placement();
+    p.maximized = ::IsZoomed(hWnd) != FALSE;
+    RECT r;
+    if (!p.maximized && ::GetWindowRect(hWnd, &r))
+    {
+        p.normal = { r.left, r.top, r.right, r.bottom };
+        p.valid = true;
+    }
+    hydra::ui::remember_window_placement(p);
+}
 
 int main()
 {
@@ -85,16 +125,35 @@ int main()
                        hInstance, hIconLarge, nullptr, nullptr,
                        nullptr, L"Hydra", hIconSmall };
     ::RegisterClassExW(&wc);
+
+    // Set up Dear ImGui before the window exists: setup_imgui reads
+    // hydra_ui.ini, which remembers where the window was when Hydra last
+    // closed. (Context, theme, DPI and fonts live in app_shell.cpp, shared
+    // with the headless GUI test runner.)
+    hydra::ui::ImGuiSetupOptions imgui_options;
+    imgui_options.dpi_scale = main_scale;
+    hydra::ui::setup_imgui(imgui_options);
+
+    // Reopen where the user left it, unless that spot is on no monitor now
+    // (a monitor was unplugged or rearranged). Otherwise the old default.
+    const hydra::ui::WindowPlacement saved = hydra::ui::window_placement();
+    const bool use_saved =
+        saved.valid && hydra::ui::placement_on_screen(saved.normal, monitor_work_areas());
+    const hydra::ui::ScreenRect rect =
+        use_saved ? saved.normal
+                  : hydra::ui::ScreenRect{ 100, 100, 100 + (int)(1280 * main_scale),
+                                           100 + (int)(720 * main_scale) };
+
     // hymisc.HYDRA_VERSION as of this port; matches the "{EDITION_NAME} v..."
     // title dpg.create_viewport builds. Bump alongside HYDRA_VERSION.
     HWND hwnd = ::CreateWindowW(
-        wc.lpszClassName, hydra::kWindowTitleW, WS_OVERLAPPEDWINDOW, 100, 100,
-        (int)(1280 * main_scale), (int)(720 * main_scale),
-        nullptr, nullptr, wc.hInstance, nullptr);
+        wc.lpszClassName, hydra::kWindowTitleW, WS_OVERLAPPEDWINDOW, rect.left, rect.top,
+        rect.width(), rect.height(), nullptr, nullptr, wc.hInstance, nullptr);
 
     if (!CreateDeviceD3D(hwnd))
     {
         CleanupDeviceD3D();
+        hydra::ui::shutdown_imgui();
         ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
         return 1;
     }
@@ -108,14 +167,14 @@ int main()
     if (hIconSmall) ::SendMessageW(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hIconSmall);
     if (hIconLarge) ::SendMessageW(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hIconLarge);
 
-    ::ShowWindow(hwnd, SW_SHOWDEFAULT);
+    ::ShowWindow(hwnd, use_saved && saved.maximized ? SW_SHOWMAXIMIZED : SW_SHOWDEFAULT);
     ::UpdateWindow(hwnd);
 
-    // Set up the Dear ImGui context (context, theme, DPI, fonts live in
-    // app_shell.cpp, shared with the headless GUI test runner).
-    hydra::ui::ImGuiSetupOptions imgui_options;
-    imgui_options.dpi_scale = main_scale;
-    hydra::ui::setup_imgui(imgui_options);
+    // setup_imgui assumed the primary monitor's scale. A window reopened on
+    // another monitor may need a different one.
+    const float window_scale = ImGui_ImplWin32_GetDpiScaleForHwnd(hwnd);
+    if (window_scale > 0.0f && window_scale != main_scale)
+        hydra::ui::set_ui_scale(window_scale);
 
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
@@ -192,6 +251,15 @@ int main()
                                         DXGI_FORMAT_UNKNOWN, 0);
             g_ResizeWidth = g_ResizeHeight = 0;
             CreateRenderTarget();
+        }
+
+        // The window moved to a monitor with another scale (WM_DPICHANGED).
+        // Restyle here, between frames: ImGui's style must not change inside
+        // one.
+        if (g_PendingUiScale > 0.0f)
+        {
+            hydra::ui::set_ui_scale(g_PendingUiScale);
+            g_PendingUiScale = 0.0f;
         }
 
         // Begin the frame.
@@ -340,7 +408,24 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             return 0;
         g_ResizeWidth = (UINT)LOWORD(lParam);
         g_ResizeHeight = (UINT)HIWORD(lParam);
+        note_window_placement(hWnd);
         return 0;
+    case WM_MOVE:
+        note_window_placement(hWnd);
+        return 0;
+    case WM_DPICHANGED:
+    {
+        // Windows moved us to a monitor with another scale. Take the
+        // rectangle it suggests (the same physical size there), and rescale
+        // the UI before the next frame. HIWORD and LOWORD of wParam carry the
+        // same DPI.
+        const RECT* suggested = reinterpret_cast<const RECT*>(lParam);
+        ::SetWindowPos(hWnd, nullptr, suggested->left, suggested->top,
+                       suggested->right - suggested->left, suggested->bottom - suggested->top,
+                       SWP_NOZORDER | SWP_NOACTIVATE);
+        g_PendingUiScale = hydra::ui::ui_scale_for_dpi(HIWORD(wParam));
+        return 0;
+    }
     case WM_SYSCOMMAND:
         if ((wParam & 0xfff0) == SC_KEYMENU)  // Disable the ALT app menu.
             return 0;
