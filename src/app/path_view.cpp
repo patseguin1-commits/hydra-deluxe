@@ -168,7 +168,9 @@ const char* const kOverfillHint =
     "moves the end. The ms figures here are still measured at\n"
     "the SP end; only the note you move them with changes.";
 
-ActivationsView build_activations(const Path& path, const HydraRecord& record,
+// `record` fed the old footer's "SP meter" line, gone with the old Paths tab;
+// the parameter stays so the callers keep their shape.
+ActivationsView build_activations(const Path& path, const HydraRecord& /*record*/,
                                   const SongTiming* timing,
                                   double hit_window_ms,
                                   std::optional<double> backend_limit_ms,
@@ -179,25 +181,10 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
 
     const ActivationWalk acts = path.walk_activations();
     for (const Activation& act : acts) {
-        ActivationDetailsView av;
+        ActivationRowView av;
 
-        // The row layout, including the literal tabs:
-        // f"{notationstr:6}({sp_meter} SP)\t{measurestr:>9}" and (when
-        // difficult) f"\t{ms:7.1f}ms". ImGui's '\t' is a fixed 4-space
-        // advance (IM_TABSIZE) shared with DearPyGui, so the columns line up
-        // identically to the Python app.
         std::string ntn = act.notationstr();
         std::string meas = format_measure(act.timecode);
-        char hbuf[128];
-        std::snprintf(hbuf, sizeof(hbuf), "%-6s(%d SP)\t%9s", ntn.c_str(),
-                      act.sp_meter, meas.c_str());
-        av.header = hbuf;
-        if (auto ms = act.difficulty()) {
-            // "%9s" of "12.3ms" is byte-identical to the old "%7.1fms".
-            char buf[48];
-            std::snprintf(buf, sizeof(buf), "\t%9s", format_ms(*ms).c_str());
-            av.header += buf;
-        }
         av.difficult = act.is_difficult();
         av.number = static_cast<int>(view.acts.size()) + 1;
         av.notation = ntn;
@@ -212,15 +199,12 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
         }
 
         if (act.is_e_critical()) {
-            // Positive = hit early, the same sign as the header and the report:
+            // Positive = hit early, the same sign as the report:
             // e_difficulty(true) is -e_offset for every E-critical activation.
             av.calibration = "Calibration fill: " +
                              format_ms(*act.e_difficulty(/*verbose=*/true)) +
                              (act.is_E0() ? " (required)" : " (optional)");
         }
-
-        av.frontend =
-            "Frontend: " + act.chord.rowstr();
 
         ActivationRating rate = rate_activation(act, W, rules.backend_leeway_ms);
 
@@ -314,8 +298,6 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
             }
         }
 
-        for (const SPSqueeze& sq : act.sqinouts)
-            av.sqinouts.push_back({sq.description(), sq.is_difficult()});
         const BackendRating* squeezed_out = nullptr;
         for (const BackendRating& br : rate.backends)
             if (br.squeezed_out) squeezed_out = &br;
@@ -416,14 +398,6 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
             "m" + std::to_string((long long)timing->timecode(end_tick).measure_beats_ticks()[0] + 1);
     }
 
-    view.footer.push_back(
-        {"Leftover SP: " + std::to_string(path.leftover_sp) + ".", false});
-
-    // Which SP ceiling this result was found under.
-    if (record.sp_cap)
-        view.footer.push_back(
-            {"SP meter: " + std::to_string(*record.sp_cap) + " bars.", false});
-
     return view;
 }
 
@@ -449,17 +423,6 @@ std::vector<std::string> build_score_breakdown(const Path& path) {
     return lines;
 }
 
-PathRowView build_path_row(const Path& path) {
-    PathRowView row;
-    if (auto diff = path.difficulty()) {
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "%9.1f ms", *diff);
-        row.ms = buf;
-        row.warn = path.is_difficult();
-    }
-    return row;
-}
-
 PathListView build_path_list(const HydraRecord& record) {
     PathListView view;
     std::vector<const Path*> flat = record.all_paths();
@@ -474,11 +437,6 @@ PathListView build_path_list(const HydraRecord& record) {
         }
         view.groups.back().paths.push_back(p);
     }
-
-    view.more_label = "More Paths";
-    if (record.ms_limit)
-        view.more_label +=
-            " (Path limit: " + std::to_string((int)*record.ms_limit) + " ms)";
 
     // The all-0 section is only worth showing when the generated list does
     // not already contain that path: same score and same notation is the same
@@ -584,26 +542,6 @@ const RecordStatusView& PathsTabCache::status(const store::RecordLookup& lookup,
         ++status_builds_;
     }
     return status_;
-}
-
-const PathListView& PathsTabCache::list(const HydraRecord& record, int record_generation) {
-    if (record_generation != list_generation_) {
-        list_ = build_path_list(record);
-        rows_.clear();
-        auto add_row = [this](const Path* p) {
-            rows_[p] = Row{p->pathstring(), build_path_row(*p)};
-        };
-        for (const PathGroupView& g : list_.groups)
-            for (const Path* p : g.paths) add_row(p);
-        for (const Path* p : list_.allzero) add_row(p);
-        list_generation_ = record_generation;
-        ++list_builds_;
-    }
-    return list_;
-}
-
-const PathsTabCache::Row& PathsTabCache::row(const Path* path) const {
-    return rows_.at(path);
 }
 
 const PathsTabCache::Details& PathsTabCache::details(
