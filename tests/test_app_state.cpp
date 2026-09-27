@@ -1,7 +1,7 @@
 // Tests for ui/app_state's commit_settings: the one place that knows which
 // settings change a record's identity. A widget only mutates `settings` and
-// commits; whether the library page and the viewed record are re-read, and
-// whether the page resets, is decided here and nowhere else.
+// commits; whether the library's summaries and the viewed record are re-read
+// is decided here and nowhere else.
 
 #include "doctest.h"
 
@@ -44,8 +44,8 @@ namespace {
 const char kChartMode[] = "Expert Pro Drums, 2x Bass";
 const int kSeededCap = 4;
 
-// Enough charts that page 3 exists at the default 15 rows per page — the cap
-// case has to show that the page is NOT reset, which needs a page to stay on.
+// A library big enough to scroll; entry 0 ("Song hash000") sorts first by
+// title, so its row is library_row_at(0).
 const int kChartCount = 60;
 
 std::string temp_path(const char* tag, const char* ext) {
@@ -126,7 +126,9 @@ std::unique_ptr<RecordStore> seeded_store(const std::string& db) {
 // record loaded.
 std::unique_ptr<AppState> app_on(const ScratchPaths& paths) {
     auto app = std::make_unique<AppState>(Settings{}, seeded_store(paths.db));
-    REQUIRE(app->current_page.rows.size() == 15);
+    REQUIRE(app->library_shown_count() == static_cast<size_t>(kChartCount));
+    REQUIRE(app->library_row_at(0).entry.md5 == library_entry(0).md5);
+    REQUIRE(app->library_row_at(0).status == RecordStatus::Ready);
     app->selected = library_entry(0);
     app->refresh_viewed_record();
     REQUIRE(app->viewed.status == RecordStatus::Ready);
@@ -141,14 +143,14 @@ TEST_CASE("commit_settings refreshes the viewed record when the chart mode chang
 
     GenerationWatcher records;
     records.changed(app->record_generation);  // start from "already seen"
-    app->table_viewpage = 3;
 
     // Pro Drums off is a different chart mode, so the stored record no longer
     // answers the question being asked.
     app->settings.view_prodrums = false;
     app->commit_settings();
     CHECK(app->viewed.status == RecordStatus::NotAnalyzed);
-    CHECK(app->table_viewpage == 0);  // a new listing starts at page one
+    CHECK(app->library_row_at(0).status == RecordStatus::NotAnalyzed);  // the row follows
+    CHECK(app->library_shown_count() == static_cast<size_t>(kChartCount));
     CHECK(records.changed(app->record_generation));
 
     // The INI is written on the scratch path, not the user's.
@@ -157,28 +159,27 @@ TEST_CASE("commit_settings refreshes the viewed record when the chart mode chang
     app->settings.view_prodrums = true;
     app->commit_settings();
     CHECK(app->viewed.status == RecordStatus::Ready);
+    CHECK(app->library_row_at(0).status == RecordStatus::Ready);
 }
 
-TEST_CASE("commit_settings refreshes on an SP cap change without resetting the page") {
+TEST_CASE("commit_settings refreshes the record and the library row on an SP cap change") {
     ScratchPaths paths("appstate_cap");
     std::unique_ptr<AppState> app = app_on(paths);
 
     GenerationWatcher records;
     records.changed(app->record_generation);
-    app->table_viewpage = 3;
 
-    // The cap box lives in the details modal; changing it must re-read the
-    // record but leave the library where the user left it.
+    // Changing the cap re-reads the record and the row's summary.
     app->settings.sp_cap = 8;
     app->commit_settings();
     CHECK(app->viewed.status == RecordStatus::NotAnalyzed);
-    CHECK(app->table_viewpage == 3);
+    CHECK(app->library_row_at(0).status == RecordStatus::NotAnalyzed);
     CHECK(records.changed(app->record_generation));
 
     app->settings.sp_cap = kSeededCap;
     app->commit_settings();
     CHECK(app->viewed.status == RecordStatus::Ready);
-    CHECK(app->table_viewpage == 3);
+    CHECK(app->library_row_at(0).status == RecordStatus::Ready);
 }
 
 TEST_CASE("commit_settings refreshes when the ms limit or the score range changes") {
@@ -187,7 +188,6 @@ TEST_CASE("commit_settings refreshes when the ms limit or the score range change
 
     GenerationWatcher records;
     records.changed(app->record_generation);
-    app->table_viewpage = 3;
 
     // The stored result answered "best path under a 10 ms limit". Move the
     // limit and the question changes, so the answer no longer applies.
@@ -195,7 +195,7 @@ TEST_CASE("commit_settings refreshes when the ms limit or the score range change
     app->settings.mslimit_value = seeded_ms + 5;
     app->commit_settings();
     CHECK(app->viewed.status == RecordStatus::NotAnalyzed);
-    CHECK(app->table_viewpage == 3);  // the library stays where the user left it
+    CHECK(app->library_row_at(0).status == RecordStatus::NotAnalyzed);
     CHECK(records.changed(app->record_generation));
     CHECK(Settings::load_file(paths.ini).mslimit_value == seeded_ms + 5);
 
@@ -426,4 +426,39 @@ TEST_CASE("the report-file check is cached for two seconds") {
     CHECK_FALSE(app->report_file_shown(11.0));  // one second later: not asked
     CHECK(app->report_file_shown(12.5));        // two seconds on: asked, found
     std::filesystem::remove(report, ec);
+}
+
+// The search runs in memory over every chart; a word matches inside a title.
+TEST_CASE("set_search narrows the library and the match count") {
+    ScratchPaths paths("appstate_search");
+    std::unique_ptr<AppState> app = app_on(paths);
+    app->set_search("hash017");
+    CHECK(app->library_shown_count() == 1);
+    CHECK(app->library_match_count() == 1);
+    CHECK(app->library_row_at(0).entry.md5 == "hash017");
+    CHECK(app->library_matches().size() == 1);
+    app->set_search("");
+    CHECK(app->library_shown_count() == static_cast<size_t>(kChartCount));
+}
+
+// A result stored behind the view's back shows once its row is re-read, and
+// only that row is asked about.
+TEST_CASE("refresh_library_row picks up one chart's new result") {
+    ScratchPaths paths("appstate_row");
+    std::unique_ptr<AppState> app = app_on(paths);
+    const ChartLibraryEntry fifth = library_entry(5);
+    size_t at = app->library_shown_count();
+    for (size_t i = 0; i < app->library_shown_count(); ++i)
+        if (app->library_row_at(i).entry.md5 == fifth.md5) at = i;
+    REQUIRE(at < app->library_shown_count());
+    CHECK(app->library_row_at(at).status == RecordStatus::NotAnalyzed);
+
+    HydraRecord record;
+    record.sp_cap = kSeededCap;
+    record.ms_limit = Settings{}.mslimit_value;
+    app->store->add_record(
+        RecordKey{fifth.md5, kChartMode, CapQuery::at(kSeededCap), Settings{}.lens()}, record);
+    app->refresh_library_row(fifth.md5);
+    CHECK(app->library_row_at(at).status == RecordStatus::Ready);
+    CHECK(app->library.counts().analyzed == 2);
 }

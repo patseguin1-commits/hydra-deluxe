@@ -20,9 +20,10 @@ void render_status_line(AppState& app, bool same_line);
 void render_actions_row(AppState& app);
 void render_view_controls(AppState& app);
 
-// library_table.cpp
-void render_search_box(AppState& app);
-void render_library_table(AppState& app, int visible_rows);
+// library_table.cpp: the whole library pane (heading, search, chips, table).
+// Called every frame inside the "##library" child, even when the library is
+// empty: it also runs AppState::tick_library.
+void render_library(AppState& app);
 
 // library_dialogs.cpp
 void render_folder_manager(AppState& app);

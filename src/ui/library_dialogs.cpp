@@ -163,8 +163,6 @@ void render_scan_modal(AppState& app) {
             if (ImGui::Button("Continue")) {
                 app.settings.is_rescan = true;
                 app.commit_settings();
-                app.table_viewpage = 0;
-                app.refresh_page();
                 app.scan_job.reset();
                 ImGui::CloseCurrentPopup();
             }
@@ -191,7 +189,8 @@ void render_batch_modal(AppState& app) {
     // all-core CPU; say what's about to happen and let the user back out.
     if (!app.batch_job) {
         bool searching = !app.search.empty();
-        int64_t count = searching ? app.current_page.total_count : app.library_total;
+        int64_t count =
+            searching ? static_cast<int64_t>(app.library_match_count()) : app.library_total;
         ImGui::Text("Analyze %lld chart%s as \"%s\"?", (long long)count,
                     count == 1 ? "" : "s", app.settings.chartmode_key().c_str());
         ImGui::TextDisabled(app.batch_redo
@@ -268,7 +267,6 @@ void render_batch_modal(AppState& app) {
         }
         if (ImGui::Button("Continue")) {
             app.batch_job.reset();
-            app.refresh_page();
             ImGui::CloseCurrentPopup();
         }
     } else {

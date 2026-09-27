@@ -66,24 +66,17 @@ void render_main_window(AppState& app) {
 
     detail::render_actions_row(app);
 
-    // While searching, show the match count against the whole library; the
-    // full total alone above three search results read as a wrong count.
-    char libtitle[96];
-    if (!app.search.empty())
-        std::snprintf(libtitle, sizeof(libtitle), "Library (%lld of %lld chart%s)",
-                     (long long)app.current_page.total_count, (long long)app.library_total,
-                     app.library_total == 1 ? "" : "s");
-    else
-        std::snprintf(libtitle, sizeof(libtitle), "Library (%lld chart%s)",
-                     (long long)app.library_total, app.library_total == 1 ? "" : "s");
-    ImGui::SeparatorText(libtitle);
-    detail::render_view_controls(app);
-    detail::render_search_box(app);
+    // Interim (Task 12): the library pane's own heading ("Library  5 of 97
+    // charts") replaced the separator title that read the old paged count.
+    // The view controls and the report button stay on their own row until
+    // T9's layout replaces this block at merge.
+    ImGui::Separator();
 
     // A way back into the last batch's HTML report (it used to exist only as
     // an unrequested browser launch right after a batch). While a report job
     // is still building, this slot shows a greyed "Building path report..."
     // button instead, so the window says the report isn't ready yet.
+    detail::render_view_controls(app);
     if (app.report_job && !app.report_job->finished()) {
         ImGui::SameLine();
         begin_disabled_button(true);
@@ -94,31 +87,11 @@ void render_main_window(AppState& app) {
         if (ImGui::Button("Open path report") && !app::open_report_in_browser())
             app.set_status("The path report could not be opened.");
     }
-    ImGui::Spacing();
-
-    // Fill whatever vertical space is left (minus room for the pagination
-    // row) with as many library rows as fit, instead of a fixed row count
-    // that leaves blank space on a tall window or clips on a short one.
-    float footer_h = ImGui::GetFrameHeightWithSpacing();
-    float header_h = ImGui::GetFrameHeightWithSpacing();
-    float row_h = ImGui::GetTextLineHeightWithSpacing();
-    float avail = ImGui::GetContentRegionAvail().y - footer_h - header_h;
-    int visible_rows = std::clamp((int)(avail / row_h), 5, 200);
-    app.set_rows_per_page(visible_rows);
-
-    if (app.current_page.total_count > 0) {
-        detail::render_library_table(app, visible_rows);
-    } else if (app.library_total > 0) {
-        // The library has charts; the search just matched none of them —
-        // the "no songs scanned" onboarding text here was misleading.
-        ImGui::TextUnformatted("No charts match your search.");
-    } else {
-        // Copy names the actual controls -- it used to say "Set a folder",
-        // which doesn't exist.
+    detail::render_library(app);
+    if (app.library_total == 0)
         ImGui::TextUnformatted(
             "No songs scanned. Click \"Manage folders...\" to add your song folder, "
             "then \"Scan charts\" to get started!");
-    }
 
     if (app.scan_job) detail::render_scan_modal(app);
     if (app.batch_job || app.batch_confirm_pending) detail::render_batch_modal(app);
