@@ -96,7 +96,7 @@
     {
       "id": "9",
       "subject": "Task 9: The song panel beside the library, and one settings bar",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         "6",
         "7",
@@ -107,7 +107,7 @@
     {
       "id": "10",
       "subject": "Task 10: The Paths tab",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         "6",
         "7",
@@ -118,7 +118,7 @@
     {
       "id": "11",
       "subject": "Task 11: The Preview tab",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         "6",
         "7",
@@ -129,7 +129,7 @@
     {
       "id": "12",
       "subject": "Task 12: Library table and search",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         "6",
         "7",
@@ -140,7 +140,7 @@
     {
       "id": "13",
       "subject": "Task 13: Batch analysis in the background, and dialogs that answer the keyboard",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         "6",
         "7",
