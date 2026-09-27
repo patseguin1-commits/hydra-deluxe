@@ -10,6 +10,9 @@
 #include <windows.h>
 
 #include <atomic>
+#include <algorithm>
+#include <cmath>
+#include <map>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -19,6 +22,7 @@
 #include <vector>
 
 #include "app/analysis.h"
+#include "app/config.h"
 #include "app/dm_report.h"
 #include "app/fill_report.h"
 #include "app/html_page.h"
@@ -129,7 +133,7 @@ TEST_CASE("report lists only the wanted cap and names it") {
     // the 8-bar record the database also holds for the same chart.
     CHECK(four.records == 1);
     CHECK(four.songs == 1);
-    CHECK(four.html.find("1 records across 1 songs") != std::string::npos);
+    CHECK(four.html.find("1 record across 1 chart") != std::string::npos);
     int rank1 = 0;
     for (const report::ReportRow& row : report::collect_rows(store, 100, options.cap, options.lens))
         if (row.rank == 1) ++rank1;
@@ -260,9 +264,9 @@ TEST_CASE("generate_report: one seam frames the page for every entry point") {
 
     // The framing strings are part of the interface: the CLI and the GUI's
     // ReportJob both ship exactly this subtitle and footer.
-    std::string subtitle = group_thousands(result.records) +
-                           " records across " + group_thousands(result.songs) +
-                           " songs — top 5 paths per chart";
+    std::string subtitle = report::counted(result.records, "record", "records") +
+                           " across " + report::counted(result.songs, "chart", "charts") +
+                           " — top 5 paths per chart";
     CHECK(result.html.find(subtitle) != std::string::npos);
     CHECK(result.html.find("Generated from hydra.db. Timing tiers match") !=
           std::string::npos);
@@ -271,7 +275,8 @@ TEST_CASE("generate_report: one seam frames the page for every entry point") {
     // --all-paths wording.
     options.max_paths = report::kEveryPathSentinel;
     CHECK(report::generate_report(store, options)
-              .html.find("songs — every path") != std::string::npos);
+              .html.find(report::counted(result.songs, "chart", "charts") + " — every path") !=
+          std::string::npos);
 
     // An empty store yields counts but no page.
     store::RecordStore empty(":memory:");
@@ -465,7 +470,8 @@ TEST_CASE("report pages: write samples for the browser check" * doctest::skip())
     };
     add_dm("Song A", 120000, 123456, "matched", true, 3);
     add_dm("Song B", 251000, 250000, "above optimal", false, 1);
-    add_dm("Song C", 90000, std::nullopt, "unmatched", false, std::nullopt);
+    add_dm("Song C", 90000, std::nullopt, "not in library", false, std::nullopt);
+    add_dm("Song D", 80000, std::nullopt, "not analyzed", false, std::nullopt);
 
     std::vector<fill_report::FillCompareRow> fill;
     auto add_fill = [&](const char* song, std::optional<int64_t> old_score,
@@ -496,4 +502,249 @@ TEST_CASE("report pages: write samples for the browser check" * doctest::skip())
                       dm_report::build_dm_html(dm, "Sample subtitle", "Sample footer"));
     write_report_file(out / "fill.html",
                       fill_report::build_fill_html(fill, "Sample subtitle", "Sample footer"));
+}
+
+// ---- where reports are saved ------------------------------------------------
+
+namespace {
+
+namespace fs = std::filesystem;
+
+// One test's view of the Documents folder. It clears the database override
+// (a harness override keeps reports next to its database, which would hide
+// the Documents rule), and afterwards puts the overrides and the lookup back
+// and deletes its scratch folder.
+struct DocumentsSandbox {
+    PathOverrides previous = path_overrides();
+    fs::path root;
+
+    explicit DocumentsSandbox(const char* tag) {
+        PathOverrides cleared = previous;
+        cleared.db_path.clear();
+        set_path_overrides(cleared);
+        wchar_t tmp[MAX_PATH];
+        GetTempPathW(MAX_PATH, tmp);
+        root = fs::path(tmp) / ("hydra_test_docs_" + std::to_string(GetCurrentProcessId())) /
+               fs::u8path(tag);
+        std::error_code ec;
+        fs::remove_all(root, ec);
+        fs::create_directories(root);
+    }
+
+    ~DocumentsSandbox() {
+        set_documents_dir_lookup({});
+        set_path_overrides(previous);
+        std::error_code ec;
+        fs::remove_all(root, ec);
+    }
+};
+
+}  // namespace
+
+TEST_CASE("reports_dir is Documents\Hydra, made on first use") {
+    DocumentsSandbox box("made");
+    set_documents_dir_lookup([&box] { return std::optional<fs::path>(box.root); });
+
+    const fs::path dir = reports_dir();
+    CHECK(dir == box.root / "Hydra");
+    CHECK(fs::is_directory(dir));
+    // Every report path helper lives in it.
+    CHECK(fs::path(report_html_path()) == dir / "hydra_paths.html");
+    CHECK(fs::path(dm_report_html_path()) == dir / "hydra_dmcompare.html");
+}
+
+TEST_CASE("reports_dir falls back to the database folder without Documents") {
+    DocumentsSandbox box("fallback");
+    const fs::path db_folder = fs::u8path(db_path()).parent_path();
+
+    // No Documents folder at all.
+    set_documents_dir_lookup([] { return std::optional<fs::path>(); });
+    CHECK(reports_dir() == db_folder);
+
+    // A Documents folder where "Hydra" can't be made: a plain file is in the way.
+    { std::ofstream(box.root / "Hydra") << "not a folder"; }
+    set_documents_dir_lookup([&box] { return std::optional<fs::path>(box.root); });
+    CHECK(reports_dir() == db_folder);
+}
+
+TEST_CASE("reports_dir keeps a harness's reports next to its database") {
+    DocumentsSandbox box("override");
+    set_documents_dir_lookup([&box] { return std::optional<fs::path>(box.root); });
+    PathOverrides scratch = path_overrides();
+    scratch.db_path = (box.root / "scratch" / "hydra.db").u8string();
+    set_path_overrides(scratch);
+
+    CHECK(reports_dir() == box.root / "scratch");
+    CHECK_FALSE(fs::exists(box.root / "Hydra"));  // Documents was never touched
+}
+
+// ---- the page shell and the path report -------------------------------------
+
+namespace {
+
+// The one COLS line of a page's script that declares column `key`.
+std::string col_line(const std::string& page, const std::string& key) {
+    const size_t at = page.find("{k:'" + key + "',");
+    if (at == std::string::npos) return {};
+    return page.substr(at, page.find('\n', at) - at);
+}
+
+size_t occurrences(const std::string& text, const std::string& what) {
+    size_t n = 0;
+    for (size_t at = text.find(what); at != std::string::npos; at = text.find(what, at + 1)) ++n;
+    return n;
+}
+
+// WCAG 2.2 relative luminance of "#rrggbb".
+double luminance(const std::string& hex) {
+    auto channel = [&hex](size_t at) {
+        const double c = std::stoi(hex.substr(at, 2), nullptr, 16) / 255.0;
+        return c <= 0.03928 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
+}
+
+double contrast(const std::string& a, const std::string& b) {
+    const double la = luminance(a), lb = luminance(b);
+    return (std::max(la, lb) + 0.05) / (std::min(la, lb) + 0.05);
+}
+
+// The "--name: #rrggbb" tokens of the first ":root {" block at or after `from`.
+std::map<std::string, std::string> css_tokens(const std::string& css, size_t from) {
+    std::map<std::string, std::string> out;
+    const size_t open = css.find(":root {", from);
+    REQUIRE(open != std::string::npos);
+    const std::string block = css.substr(open, css.find('}', open) - open);
+    size_t at = 0;
+    while ((at = block.find("--", at)) != std::string::npos) {
+        const size_t colon = block.find(':', at);
+        const size_t semi = block.find(';', colon);
+        const size_t hash = block.find('#', colon);
+        if (hash != std::string::npos && hash < semi && semi - hash == 7)
+            out[block.substr(at + 2, colon - at - 2)] = block.substr(hash, 7);
+        if (semi == std::string::npos) break;
+        at = semi;
+    }
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("report pages are standards-mode documents") {
+    const std::string paths = report::build_html({}, "sub", "foot", 85.0);
+    const std::string dm = dm_report::build_dm_html({}, "sub", "foot");
+    const std::string fill = fill_report::build_fill_html({}, "sub", "foot");
+    for (const std::string* page : {&paths, &dm, &fill}) {
+        CHECK(page->rfind("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n", 0) == 0);
+        CHECK(page->find("</style>\n</head>\n<body>\n") != std::string::npos);
+        REQUIRE(page->size() > 16);
+        CHECK(page->substr(page->size() - 16) == "</body>\n</html>\n");
+        CHECK(occurrences(*page, "<title>") == 1);
+    }
+}
+
+TEST_CASE("report colours meet WCAG contrast in both themes") {
+    const std::string css = html::kReportCss;
+    const std::map<std::string, std::string> light = css_tokens(css, 0);
+    const std::map<std::string, std::string> dark =
+        css_tokens(css, css.find("prefers-color-scheme: dark"));
+    for (const auto* theme : {&light, &dark}) {
+        // Body text, dim text, header text and every chip colour, on the page,
+        // on a cell, and on a hovered row or the header band.
+        for (const char* text : {"ink", "muted", "t0", "t1", "t2", "t3", "t4", "t5", "tn"}) {
+            for (const char* ground : {"paper", "surface", "raised"}) {
+                INFO(text << " on " << ground);
+                CHECK(contrast(theme->at(text), theme->at(ground)) >= 4.5);
+            }
+        }
+        // The accent is the large bold heading word and the focus ring: 3:1.
+        CHECK(contrast(theme->at("sp"), theme->at("surface")) >= 3.0);
+        CHECK(contrast(theme->at("sp"), theme->at("raised")) >= 3.0);
+    }
+}
+
+TEST_CASE("report table header sticks and the page prints") {
+    const std::string css = html::kReportCss;
+    const size_t at = css.find(".tablewrap {");
+    REQUIRE(at != std::string::npos);
+    const std::string rule = css.substr(at, css.find('}', at) - at);
+    // Scrolling both ways makes the wrapper the header's sticky container.
+    CHECK(rule.find("overflow: auto;") != std::string::npos);
+    CHECK(rule.find("max-height:") != std::string::npos);
+    CHECK(rule.find("overflow-x") == std::string::npos);
+
+    CHECK(css.find("@media print {") != std::string::npos);
+    CHECK(css.find("thead { display: table-header-group; }") != std::string::npos);
+    CHECK(css.find(".controls { display: none; }") != std::string::npos);
+}
+
+TEST_CASE("report pages number their rows in a # column") {
+    // The shared script adds the column, so all three pages get it.
+    const std::string js = html::kReportJs;
+    CHECK(js.find("th.textContent = '#';") != std::string::npos);
+    CHECK(js.find("idx.textContent = (++n).toLocaleString();") != std::string::npos);
+    // The sort control and the arrows walk the real columns, not the # one.
+    CHECK(js.find("document.querySelectorAll('#head th.sortable')") != std::string::npos);
+    CHECK(std::string(html::kReportCss).find("th.idx, td.idx {") != std::string::npos);
+}
+
+TEST_CASE("path report explains and renames its columns") {
+    const std::string html = report::build_html({}, "sub", "foot", 85.0);
+    CHECK(html.find("t:'Cal fill (ms)'") != std::string::npos);
+    CHECK(html.find("t:'Avg multiplier'") != std::string::npos);
+    CHECK(html.find("t:'Cal fill',") == std::string::npos);
+    CHECK(html.find("t:'Avg mult',") == std::string::npos);
+    for (const char* key : {"mode", "path", "score", "acts", "skip", "ms", "tier", "efill",
+                            "mult", "sqin", "sqout", "notes"}) {
+        INFO(key);
+        CHECK(col_line(html, key).find("d:'") != std::string::npos);
+    }
+    // Hover text and the footer legend both read the definitions.
+    CHECK(html.find("<dl class=\"legend\" id=\"legend\"></dl>") != std::string::npos);
+    CHECK(html.find("const legend = document.getElementById('legend');") != std::string::npos);
+    // One name per tier for the dropdown and the chip ("No squeezes" in both).
+    CHECK(html.find("function tierLabel(name)") != std::string::npos);
+    CHECK(html.find("o.textContent = tierLabel(t.name);") != std::string::npos);
+    CHECK(html.find("['chip ' + r.tok, tierLabel(r.tier), 'chip']") != std::string::npos);
+    // The search box and the tier dropdown have names a screen reader reads.
+    CHECK(html.find("id=\"q\" aria-label=\"Search paths\"") != std::string::npos);
+    CHECK(html.find("id=\"tier\" aria-label=\"Timing tier\"") != std::string::npos);
+}
+
+TEST_CASE("path report counts charts by hash in the tile and the subtitle") {
+    report::ReportRow a;
+    a.song = "Same";
+    a.artist = "Name";
+    a.path = "1";
+    a.tier = "None";
+    a.tok = "tn";
+    a.hyhash = "h1";
+    report::ReportRow a2 = a;
+    a2.rank = 2;
+    report::ReportRow b = a;  // another chart with the same title and artist
+    b.hyhash = "h2";
+    const std::string html = report::build_html({a, a2, b}, "sub", "foot", 85.0);
+
+    // Each chart gets a small id in order of first appearance.
+    CHECK(occurrences(html, "\"c\":0") == 2);
+    CHECK(occurrences(html, "\"c\":1") == 1);
+    CHECK(html.find("['Charts', new Set(rows.map(r => r.c)).size.toLocaleString()]") !=
+          std::string::npos);
+    CHECK(html.find("r.song + r.artist))") == std::string::npos);
+}
+
+TEST_CASE("comparison page explains its columns and splits the missing scores") {
+    const std::string html = dm_report::build_dm_html({}, "sub", "foot");
+    for (const char* key : {"actual", "optimal", "delta", "pct", "fc", "speed", "rank",
+                            "posted", "status"}) {
+        INFO(key);
+        CHECK(col_line(html, key).find("d:'") != std::string::npos);
+    }
+    CHECK(html.find("<option value=\"not analyzed\">") != std::string::npos);
+    CHECK(html.find("<option value=\"not in library\">") != std::string::npos);
+    CHECK(html.find("value=\"unmatched\"") == std::string::npos);
+    CHECK(html.find("'not analyzed':'s-notanalyzed'") != std::string::npos);
+    CHECK(html.find("id=\"q\" aria-label=\"Search scores\"") != std::string::npos);
+    CHECK(html.find("id=\"status\" aria-label=\"Status\"") != std::string::npos);
+    CHECK(html.find("<dl class=\"legend\" id=\"legend\"></dl>") != std::string::npos);
 }

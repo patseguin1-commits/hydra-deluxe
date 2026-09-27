@@ -37,8 +37,11 @@ extern const char* const kReportCss;     // every rule the three pages use
 extern const char* const kReportJsHead;  // the data tag, DATA, DASH, fmt, fmtMs
 extern const char* const kReportJs;      // sorting, filtering, drawing, first render
 
-// One page's template: the shared head, stylesheet and script around the
+// One page's template: a whole standards-mode document (doctype, <html
+// lang="en">, head, body) with the shared stylesheet and script around the
 // page's <title> text, its body markup and its `const PAGE = {...};` script.
+// A column in PAGE.cols may carry `d:'...'`, its definition: the header's
+// hover text and the footer legend (#legend, when the body has one) show it.
 // The result still carries __SUBTITLE__, __FOOTER__ and __DATA__ for
 // render_page to fill.
 std::string page_template(const char* title, const char* body, const char* page_js);

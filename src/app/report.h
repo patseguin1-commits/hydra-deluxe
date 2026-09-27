@@ -18,8 +18,9 @@
 
 namespace hydra::app::report {
 
-// One table row. Field order is the JSON key order the page's script reads,
-// except `hyhash`, which the page never sees.
+// One table row. Field order is the JSON key order the page's script reads.
+// `hyhash` goes out as "c", a small per-chart number in order of first
+// appearance, which the Charts tile counts.
 struct ReportRow {
     std::string song;
     std::string artist;
@@ -43,14 +44,18 @@ struct ReportRow {
     int sqin = 0;
     int sqout = 0;
     int notes = 0;
-    // The chart this row belongs to. Not written to the page: generate_report
-    // counts the distinct charts on the page with it.
+    // The chart this row belongs to. generate_report counts the distinct
+    // charts with it, and build_html turns it into the page's "c" number.
     std::string hyhash;
 };
 
 // Strips Clone Hero's <color=...> markup from a charter credit / title and
 // trims whitespace. Mirrors hydra_report.plain.
 std::string plain(const std::string& text);
+
+// "1 record" / "12,345 records": the count with thousands grouped, then the
+// singular or plural noun. The report subtitles use it.
+std::string counted(int64_t n, const char* one, const char* many);
 
 // (label, token) for a hardest-squeeze value (raw ms), e.g. (Extreme, t2).
 // nullopt -> (None, tn). Bands derive from the two-hit budget 2*W: <2 Normal
@@ -116,7 +121,7 @@ struct ReportOptions {
 
 struct GeneratedReport {
     std::string html;  // empty when the store held no reportable rows
-    int64_t songs = 0;    // distinct charts with rows on the page
+    int64_t songs = 0;    // distinct charts (by chart hash) with rows on the page
     int64_t records = 0;  // records with rows on the page (one rank-1 row each)
     int64_t rows = 0;
 };

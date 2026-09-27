@@ -28,7 +28,7 @@ struct DmReportRow {
     std::string charter;
     std::string identifier;             // chart-file MD5 (the join key)
     int64_t actual = 0;                 // score the player posted
-    std::optional<int64_t> optimal;     // Hydra best-path score; unset if unmatched
+    std::optional<int64_t> optimal;     // Hydra best-path score; unset with no current result
     std::optional<int64_t> delta;       // optimal - actual (points left); <0 == above optimal
     std::optional<double> pct;          // actual/optimal*100, only when speed==100
     bool is_fc = false;
@@ -36,7 +36,10 @@ struct DmReportRow {
     int speed = 100;
     std::optional<int> rank;
     std::string posted;                 // ISO-8601 timestamp
-    std::string status;                 // "matched" | "above optimal" | "unmatched"
+    // "matched" | "above optimal" | "not analyzed" (the last scan found the
+    // chart, but it has no current result at SP cap 4 for this mode) |
+    // "not in library" (the last scan never found it).
+    std::string status;
 };
 
 // Joins every fetched score against the store's records for `chartmode`,
@@ -60,8 +63,14 @@ std::string build_dm_html(const std::vector<DmReportRow>& rows, const std::strin
 struct DmReportStats {
     int total = 0;
     int matched = 0;
-    int above = 0;      // "above optimal"
-    int unmatched = 0;  // not in the library
+    int above_optimal = 0;
+    int not_analyzed = 0;    // in the library, no current result
+    int not_in_library = 0;
+    // The old names, still filled so ui/dm_jobs.cpp compiles unchanged:
+    // above == above_optimal, unmatched == not_analyzed + not_in_library.
+    // Remove them once the job reads the four counts above.
+    int above = 0;
+    int unmatched = 0;
 };
 DmReportStats tally_dm_rows(const std::vector<DmReportRow>& rows);
 

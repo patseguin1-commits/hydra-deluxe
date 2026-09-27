@@ -191,9 +191,11 @@ target_compile_definitions(hydra_core PUBLIC HYDRA_VERSION="${PROJECT_VERSION}")
 # shell32: report_files.cpp hands finished report pages to the browser with
 # ShellExecuteW, for both the GUI's report jobs and the hydra_report CLI, and
 # winstr.cpp splits every entry point's Unicode command line with
-# CommandLineToArgvW.
+# CommandLineToArgvW. shell32 + ole32 + uuid: reports_dir() finds Documents
+# with SHGetKnownFolderPath(FOLDERID_Documents) and frees the answer with
+# CoTaskMemFree.
 target_link_libraries(hydra_core PUBLIC sqlite3 miniz)
-target_link_libraries(hydra_core PRIVATE bcrypt shell32 hydra_warnings)
+target_link_libraries(hydra_core PRIVATE bcrypt shell32 ole32 uuid hydra_warnings)
 
 # ---- hydra_audio: the Preview audio engine (decode + mix + player) -------
 # Decodes chart stems to float PCM, mixes them, and (GUI-side) drives the
