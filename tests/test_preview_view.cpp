@@ -110,13 +110,16 @@ Activation act_at(const Song& song, int64_t tick, int skips) {
 // measure is 1920 ticks = 2000 ms, so one SP bar (two measures) burns 4000 ms
 // at this tempo. `extra_bpm` adds tempo changes before the timing is built.
 // A phrase can only end on a note, so `step` is there for a fixture that needs
-// a phrase off the quarter-note grid.
+// a phrase off the quarter-note grid. `extra_tpm` adds meter changes (ticks per
+// measure) the same way.
 Song make_sp_song(const std::vector<int64_t>& phrase_ends, int64_t last_tick,
                   const std::map<int64_t, double>& extra_bpm = {},
-                  int64_t step = 480) {
+                  int64_t step = 480,
+                  const std::map<int64_t, int64_t>& extra_tpm = {}) {
     Song song(480);
     song.bpm_changes[0] = 120.0;
     for (const auto& kv : extra_bpm) song.bpm_changes[kv.first] = kv.second;
+    for (const auto& kv : extra_tpm) song.tpm_changes[kv.first] = kv.second;
     song.build_timing();
 
     for (int64_t t = 0; t <= last_tick; t += step) {
@@ -1087,4 +1090,111 @@ TEST_CASE("score box: the analyzed chart ends on the path's total") {
     }
     PreviewScoreBox end = build_score_box(scene, scene.song_length_ms);
     CHECK(end.score == group_thousands(best.totalscore()));
+}
+
+// ---- SP drain box -------------------------------------------------------
+
+TEST_CASE("drain box: hidden without an SP gauge") {
+    CHECK_FALSE(build_drain_box(PreviewScene{}, 1000.0).shown);
+    // Notes but no SP phrase and no path: no gauge, so no box.
+    Song song = make_sp_song({}, /*last_tick=*/3840);
+    PreviewScene scene = build_preview_scene(song, nullptr);
+    REQUIRE(scene.sp_meter.segments.empty());
+    CHECK_FALSE(build_drain_box(scene, 1000.0).shown);
+}
+
+TEST_CASE("drain box: idle at a steady tempo reads the rate and a full meter") {
+    Song song = make_sp_song({960}, /*last_tick=*/13440);
+    PreviewScene scene = build_preview_scene(song, nullptr);
+
+    PreviewDrainBox box = build_drain_box(scene, 2000.0);
+    CHECK(box.shown);
+    CHECK_FALSE(box.active);
+    CHECK(box.header == "SP drain (if activated)");
+    CHECK(box.rate == "1 bar / 4.0 s");
+    // Cap 4: eight measures, 16000 ms.
+    CHECK(box.detail == "full meter 16.0 s");
+}
+
+TEST_CASE("drain box: the rate switches exactly at a tempo change") {
+    // 120 BPM until tick 5760 (6000 ms), then 60 BPM: a bar goes 4 s -> 8 s.
+    Song song = make_sp_song({960}, /*last_tick=*/13440, {{5760, 60.0}});
+    PreviewScene scene = build_preview_scene(song, nullptr);
+
+    CHECK(build_drain_box(scene, 5990.0).rate == "1 bar / 4.0 s");
+    CHECK(build_drain_box(scene, 6000.0).rate == "1 bar / 8.0 s");
+
+    // A full meter from tick 1920 (2000 ms): two measures at 120 BPM reach
+    // the change at 6000 ms, then six measures at 4000 ms each end at 30000.
+    PreviewDrainBox box = build_drain_box(scene, 2000.0);
+    CHECK(box.detail == "full meter 28.0 s");
+    // ...which is exactly the engine's own SP-end call.
+    const SongTiming& t = song.timing();
+    const Timecode start = t.timecode(1920);
+    const Timecode end = t.plusmeasure(start, sp_bars_to_measures(4));
+    CHECK(end.ms() - start.ms() == doctest::Approx(28000.0));
+}
+
+TEST_CASE("drain box: a 7/8 section drains faster at the same BPM") {
+    // 7/8 from tick 3840 (4000 ms, a barline): 1680 ticks = 1750 ms a
+    // measure, so a bar lasts 3500 ms instead of 4000.
+    Song song = make_sp_song({960}, /*last_tick=*/13440, {}, 480, {{3840, 1680}});
+    PreviewScene scene = build_preview_scene(song, nullptr);
+
+    CHECK(build_drain_box(scene, 2000.0).rate == "1 bar / 4.0 s");
+    CHECK(build_drain_box(scene, 4000.0).rate == "1 bar / 3.5 s");
+}
+
+TEST_CASE("drain box: active inside the stored SP window, idle outside it") {
+    // Two bars at tick 3840 (4000 ms): the stored end is tick 11520 (12000 ms).
+    Song song = make_sp_song({960}, /*last_tick=*/13440);
+    Path path;
+    path.activations = {sp_act_at(song, 3840, /*sp_meter=*/2)};
+    PreviewScene scene = build_preview_scene(song, &path);
+
+    PreviewDrainBox before = build_drain_box(scene, 3999.0);
+    CHECK_FALSE(before.active);
+    CHECK(before.header == "SP drain (if activated)");
+
+    PreviewDrainBox at = build_drain_box(scene, 4000.0);
+    CHECK(at.active);
+    CHECK(at.header == "SP drain");
+    CHECK(at.rate == "1 bar / 4.0 s");
+    CHECK(at.detail == "empties in 8.0 s");
+    CHECK(build_drain_box(scene, 9000.0).detail == "empties in 3.0 s");
+
+    // At the stored end SP is over, as the gauge reads that boundary too.
+    PreviewDrainBox after = build_drain_box(scene, 12000.0);
+    CHECK_FALSE(after.active);
+    CHECK(after.detail.rfind("full meter ", 0) == 0);
+}
+
+TEST_CASE("drain box: empties in reads the stored end, not a recount") {
+    // A phrase collected mid-SP pushes the stored end two measures past the
+    // plain act + 4 measures: 16000 ms, not 12000. Only the record knows.
+    Song song = make_sp_song({960, 5760}, /*last_tick=*/17280);
+    Path path;
+    Activation act = sp_act_at(song, 3840, /*sp_meter=*/2);
+    act.deact_tick = 3840 + 6 * 1920;
+    act.collected_phrase_ticks = {5760};
+    path.activations = {act};
+    PreviewScene scene = build_preview_scene(song, &path);
+
+    PreviewDrainBox box = build_drain_box(scene, 12000.0);
+    CHECK(box.active);
+    CHECK(box.detail == "empties in 4.0 s");
+}
+
+TEST_CASE("drain box: an activation with no stored end stays idle") {
+    // A pre-v4 record: no deact node, so nothing says SP is running.
+    Song song = make_sp_song({960, 1920}, /*last_tick=*/9600);
+    Path path;
+    path.activations = {act_at(song, 3840, /*skips=*/0)};
+    PreviewScene scene = build_preview_scene(song, &path);
+    REQUIRE_FALSE(scene.activations[0].has_sp_end);
+
+    PreviewDrainBox box = build_drain_box(scene, 5000.0);
+    CHECK(box.shown);
+    CHECK_FALSE(box.active);
+    CHECK(box.detail.rfind("full meter ", 0) == 0);
 }

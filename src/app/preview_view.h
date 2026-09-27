@@ -246,6 +246,27 @@ struct PreviewScoreBox {
 
 PreviewScoreBox build_score_box(const PreviewScene& scene, double now_ms);
 
+// The Star Power drain box the Preview draws beside the SP gauge, at `now_ms`.
+// `rate` is how long one bar of SP lasts at the playhead ("1 bar / 4.0 s"):
+// kMeasuresPerSpBar measures at the local measure length the song's timing
+// gives (SongTiming::ms_per_measure_at). The box is `active` when the path has
+// SP running at the playhead: an activation at or before it whose stored deact
+// node is after it. Then `detail` is "empties in X s", that stored end minus
+// the playhead. Otherwise `detail` is "full meter X s": how long the meter's
+// cap would last if activated at the playhead's tick, from the engine's own
+// SongTiming::plusmeasure. Hidden (`shown` false) when the scene has no SP
+// gauge or no timing. Nothing here re-derives Star Power: it reads the record
+// and the timing calls the engine itself makes.
+struct PreviewDrainBox {
+    bool shown = false;
+    bool active = false;
+    std::string header;  // "SP drain" or "SP drain (if activated)"
+    std::string rate;    // "1 bar / 4.0 s"
+    std::string detail;  // "empties in 7.3 s" or "full meter 16.0 s"
+};
+
+PreviewDrainBox build_drain_box(const PreviewScene& scene, double now_ms);
+
 // The playhead `delta_ticks` chart ticks from `now_ms`, for the Preview's
 // tick-step buttons. It starts from the tick build_time_box shows for the
 // same `now_ms` and `length_ms` (one shared helper computes that moment), so
