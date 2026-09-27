@@ -61,6 +61,10 @@ struct PathSummary {
     std::optional<int> sqin_count;
     std::optional<int> sqout_count;
     std::optional<int> pathcount;
+    // The best path's star count by core/stars' path_stars (solo bonus left
+    // out, as Clone Hero counts it). Unset on a row written before the column
+    // existed until the store fills it (fill_missing_stars).
+    std::optional<int> stars;
 };
 
 PathSummary summarize_path(const Path& path);
@@ -170,12 +174,19 @@ struct RecordLookup {
     bool stale_rules = false;  // this path layout, analyzed under other rules
     std::optional<HydraRecord> record;  // set only when Ready
     std::optional<SongTiming> timing;   // set when Ready and the song is registered
+    // The last note's onset, in ms. Empty when the song was saved before
+    // Hydra stored lengths; it fills on the chart's next analysis.
+    std::optional<double> song_length_ms;
 };
 
 // The answer to get_summary: the same status, without touching the blob.
 struct SummaryLookup {
     RecordStatus status = RecordStatus::NotAnalyzed;
     std::string bestpath;  // meaningful only when status == Ready
+    // The row's summary columns; filled only when status == Ready. A Stale
+    // row's numbers came from bytes this build doesn't trust, so they're not
+    // handed out.
+    PathSummary summary;
 };
 
 // One row of list_records()/library browsing.
@@ -289,9 +300,10 @@ public:
     // Always returns a value; bestpath is set only when status is Ready.
     SummaryLookup get_summary(const RecordKey& key);
 
-    // get_summary for many charts at once, in one query: one answer per
-    // entry of `hyhashes`, in the same order (a repeated hash gets the same
-    // answer twice). What a library page asks for.
+    // get_summary for many charts at once: one answer per entry of
+    // `hyhashes`, in the same order (a repeated hash gets the same answer
+    // twice). The library asks it about every chart, so the hashes are sent
+    // in chunks under SQLite's bound-value limit.
     std::vector<SummaryLookup> get_summaries(const std::vector<std::string>& hyhashes,
                                              const std::string& chartmode,
                                              const CapQuery& cap, const Lens& lens);
@@ -420,14 +432,24 @@ private:
     void exec(const char* sql);
     bool has_column(const char* table, const char* column);
     void create_result_tables();
-    // The song's raw tempomap blob, read under the lock; the caller decodes it
-    // with no lock held. nullopt if the song isn't registered.
-    std::optional<std::vector<uint8_t>> read_tempomap(const std::string& hyhash);
+    // Fills the stars column of every Ready row that lacks it (rows written
+    // before the column existed). Runs on every open; with nothing to fill
+    // it reads only small columns. Returns rows filled.
+    int fill_missing_stars();
+    // The song's raw tempomap blob and its stored length, read under the
+    // lock; the caller decodes the tempomap with no lock held. nullopt if the
+    // song isn't registered.
+    struct SongMetaRead {
+        std::vector<uint8_t> tempomap;
+        std::optional<double> length_ms;
+    };
+    std::optional<SongMetaRead> read_tempomap(const std::string& hyhash);
     // The bodies of add_song, add_row and put_dynamics. The caller holds the
     // lock; write_row also needs an open transaction.
     void upsert_song(const std::string& hyhash, const std::string& ref_name,
                      const std::string& ref_artist, const std::string& ref_charter,
-                     const std::vector<uint8_t>& tempomap);
+                     const std::vector<uint8_t>& tempomap,
+                     std::optional<double> length_ms);
     void write_row(const PreparedRow& row);
     // Deletes this chart's path nodes that no result refers to any more:
     // write_row's last step, and the Auto cleanup's. The caller holds the lock

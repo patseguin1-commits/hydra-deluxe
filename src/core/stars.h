@@ -35,6 +35,15 @@ struct StarCutoffs {
 
 StarCutoffs star_cutoffs(const Path& path);
 
+// How many stars (0..kMaxStars) a score earns against these cutoffs. The score
+// must already leave out the solo bonus, as the game counts it: the game adds
+// the solo bonus only after counting stars.
+int stars_for_score(const StarCutoffs& cutoffs, int64_t score_without_solo);
+
+// The stars a path earns: its total score minus its solo bonus, against its
+// own cutoffs. The one place a star count is worked out.
+int path_stars(const Path& path);
+
 }  // namespace hydra
 
 #endif  // HYDRA_CORE_STARS_H

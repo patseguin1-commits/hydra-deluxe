@@ -20,4 +20,16 @@ StarCutoffs star_cutoffs(const Path& path) {
     return out;
 }
 
+int stars_for_score(const StarCutoffs& cutoffs, int64_t score_without_solo) {
+    // The game's loop: add a star while the score reaches the next cutoff,
+    // and stop at 7.
+    int stars = 0;
+    while (stars < kMaxStars && score_without_solo >= cutoffs.cutoffs[stars]) ++stars;
+    return stars;
+}
+
+int path_stars(const Path& path) {
+    return stars_for_score(star_cutoffs(path), path.totalscore() - path.score_solo);
+}
+
 }  // namespace hydra
