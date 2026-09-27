@@ -14,6 +14,7 @@
 #include "app/preview_view.h"
 #include "app/report_files.h"
 #include "core/model.h"
+#include "core/stars.h"
 #include "render/overlay_layout.h"
 #include "ui/app_state.h"
 #include "ui/dynamics_load_job.h"
@@ -907,6 +908,83 @@ void test_dynamics_stored(ImGuiTestContext* ctx) {
              text.find("Accents:") != std::string::npos);
 }
 
+// Narrow the library with `search`, then open the row titled `title`.
+void open_titled(ImGuiTestContext* ctx, const std::string& search, const std::string& title) {
+    Harness& h = harness(ctx);
+    h.app->search = search;
+    h.app->refresh_page();
+    ctx->Yield(2);
+    size_t idx = h.app->current_page.rows.size();
+    for (size_t i = 0; i < h.app->current_page.rows.size(); ++i)
+        if (h.app->current_page.rows[i].title == title) idx = i;
+    IM_CHECK(idx < h.app->current_page.rows.size());
+    open_details(ctx, idx);
+}
+
+// Analyze the open song from the Paths tab and wait for a Ready record.
+void analyze_open_song(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    ctx->ItemClick("##DetailsTabs/Paths");
+    ctx->ItemClick("**/Analyze paths!");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
+    IM_CHECK(h.app->viewed.status == hydra::store::RecordStatus::Ready);
+}
+
+// The Stars tab: a prompt before analysis, then the base score, the solo
+// bonus and the seven cutoffs from star_cutoffs(). "87" has a drum solo;
+// "I'm A Believer" has a solo only on guitar, so its drums show none.
+void test_stars(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+
+    // ---- A song with a drum solo ----
+    open_titled(ctx, "Polyphia", "87");
+    if (ctx->IsError()) return;
+    ctx->ItemClick("##DetailsTabs/Stars");
+    ctx->Yield(2);
+    IM_CHECK(visible_text(h).find("After analyzing this song, star cutoffs will show up here.") !=
+             std::string::npos);
+
+    analyze_open_song(ctx);
+    if (ctx->IsError()) return;
+    ctx->ItemClick("##DetailsTabs/Stars");
+    ctx->Yield(3);
+
+    hydra::StarCutoffs sc = hydra::star_cutoffs(h.app->viewed.record->best_path());
+    IM_CHECK(sc.solo_bonus > 0);
+    std::string text = visible_text(h);
+    IM_CHECK(text.find("Base score: " + hydra::group_thousands(sc.base)) != std::string::npos);
+    IM_CHECK(text.find("Solo bonus: " + hydra::group_thousands(sc.solo_bonus) +
+                       " (not counted toward stars)") != std::string::npos);
+    IM_CHECK(text.find("With full solo bonus") != std::string::npos);
+    for (int64_t cutoff : sc.cutoffs) {
+        IM_CHECK(text.find(hydra::group_thousands(cutoff)) != std::string::npos);
+        IM_CHECK(text.find(hydra::group_thousands(cutoff + sc.solo_bonus)) != std::string::npos);
+    }
+    IM_CHECK(text.find("4.4") != std::string::npos);
+
+    // ---- A song with no drum solo ----
+    h.app->show_details = false;
+    ctx->Yield(3);
+    open_titled(ctx, "Believer", "I'm A Believer (The Monkees cover)");
+    if (ctx->IsError()) return;
+    analyze_open_song(ctx);
+    if (ctx->IsError()) return;
+    ctx->ItemClick("##DetailsTabs/Stars");
+    ctx->Yield(3);
+
+    sc = hydra::star_cutoffs(h.app->viewed.record->best_path());
+    IM_CHECK(sc.solo_bonus == 0);
+    text = visible_text(h);
+    IM_CHECK(text.find("Base score: " + hydra::group_thousands(sc.base)) != std::string::npos);
+    IM_CHECK(text.find(hydra::group_thousands(sc.cutoffs[hydra::kMaxStars - 1])) !=
+             std::string::npos);
+    IM_CHECK(text.find("Solo bonus") == std::string::npos);
+    IM_CHECK(text.find("With full solo bonus") == std::string::npos);
+}
+
 // A bad hydra_rules.ini: the app still opens and scans, the error naming the
 // key stays on screen, and both Analyze buttons are disabled.
 void test_rules_error(ImGuiTestContext* ctx) {
@@ -1255,6 +1333,7 @@ void register_tests(Harness& h) {
         {"backend-limit", test_backend_limit},
         {"dynamics", test_dynamics},
         {"dynamics-stored", test_dynamics_stored},
+        {"stars", test_stars},
         {"rules-error", test_rules_error},
         {"squeezed_out_uncounted", test_squeezed_out_uncounted},
         {"details-close-teardown", test_details_close_teardown},

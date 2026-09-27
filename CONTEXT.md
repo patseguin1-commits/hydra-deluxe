@@ -84,6 +84,11 @@ window, written as the `+`/`-` symbols in path notation.
 Ordering the hits of a multi-note chord on a combo-multiplier boundary so the
 more valuable notes score on the higher multiplier.
 
+**Star cutoff**:
+The score a chart needs for 1 to 7 stars: its base score (every note at 1x,
+no Star Power) times 0.1, 0.5, 1.0, 2.0, 2.8, 3.6 or 4.4, rounded up. Clone
+Hero compares it against your score without the solo bonus.
+
 **Calibration fill (E)**:
 An activation timing (the `E` notation) where the fill must be summoned by
 hitting early; its window is fixed, not the hit-window setting.
