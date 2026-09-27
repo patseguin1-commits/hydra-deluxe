@@ -162,6 +162,10 @@ void test_preview_path_overlay(ImGuiTestContext* ctx) {
     IM_CHECK_STR_EQ(h.app->preview->error().c_str(), "");
     // The overlay key carries the SP cap after the path's own key, so match the
     // prefix and then compare whole keys against this first one.
+    // The path's overlay can land a frame or two after the load itself.
+    IM_CHECK(wait_until(ctx, [&] {
+        return h.app->preview->overlay_path_key().rfind(first_key, 0) == 0;
+    }, 10));
     const std::string first_overlay = h.app->preview->overlay_path_key();
     IM_CHECK_EQ(first_overlay.rfind(first_key, 0), (size_t)0);
 
