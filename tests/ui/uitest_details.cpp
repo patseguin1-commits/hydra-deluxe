@@ -28,7 +28,7 @@ void test_analyze(ImGuiTestContext* ctx) {
     std::string best = h.app->viewed.record->best_path().pathstring();
     IM_CHECK(wait_until(ctx, [&] { return visible_text(h).find(best) != std::string::npos; }, 5));
     // The library row's Best Path cell now shows it too.
-    IM_CHECK(h.app->current_page.summaries[0].state ==
+    IM_CHECK(h.app->library_row_at(0).status ==
              hydra::store::RecordStatus::Ready);
 
     // Records are kept per SP cap: switching the cap away from 4 shows the
@@ -36,14 +36,14 @@ void test_analyze(ImGuiTestContext* ctx) {
     // 4-bar record again, and the INI follows every change.
     ctx->ItemInputValue("**/##spcapvalue", 8);
     IM_CHECK(wait_until(ctx, [&] { return h.app->settings.sp_cap == 8; }, 5));
-    IM_CHECK(h.app->current_page.summaries[0].state == hydra::store::RecordStatus::NotAnalyzed);
+    IM_CHECK(h.app->library_row_at(0).status == hydra::store::RecordStatus::NotAnalyzed);
     IM_CHECK(!h.app->viewed.record.has_value());
     IM_CHECK(wait_until(ctx, [&] {
         return hydra::app::Settings::load_file(h.ini_path).sp_cap == 8;
     }, 5));
     ctx->ItemInputValue("**/##spcapvalue", 4);
     IM_CHECK(wait_until(ctx, [&] { return h.app->settings.sp_cap == 4; }, 5));
-    IM_CHECK(h.app->current_page.summaries[0].state == hydra::store::RecordStatus::Ready);
+    IM_CHECK(h.app->library_row_at(0).status == hydra::store::RecordStatus::Ready);
     IM_CHECK(h.app->viewed.record.has_value());
     IM_CHECK(wait_until(ctx, [&] { return visible_text(h).find("SP cap:  4 bars") != std::string::npos; }, 5));
     // Auto is gone (2026-09-27): the SP cap row is a number and nothing else.
@@ -126,7 +126,7 @@ void test_backend_limit(ImGuiTestContext* ctx) {
 
     // Display-only: the record the modal shows is still the analyzed one.
     IM_CHECK(h.app->viewed.record.has_value());
-    IM_CHECK(h.app->current_page.summaries[0].state ==
+    IM_CHECK(h.app->library_row_at(0).status ==
              hydra::store::RecordStatus::Ready);
 
     // Unticking turns the filter off again, and that persists too.
@@ -144,11 +144,11 @@ void test_dynamics(ImGuiTestContext* ctx) {
 
     // Search for the chart that the doctest pins dynamics on.
     ctx->SetRef("//Hydra");
-    ctx->ItemInputValue("##search", "Acid Romance");
+    ctx->ItemInputValue("**/##search", "Acid Romance");
     IM_CHECK(wait_until(ctx, [&] { return h.app->search == "Acid Romance"; }, 5));
     IM_CHECK(wait_until(ctx, [&] {
-        return !h.app->current_page.rows.empty() &&
-               h.app->current_page.rows[0].title == "Acid Romance";
+        return h.app->library_shown_count() > 0 &&
+               h.app->library_row_at(0).title == "Acid Romance";
     }, 5));
     open_details(ctx, 0);
     if (ctx->IsError()) return;
@@ -193,11 +193,10 @@ void test_dynamics_stored(ImGuiTestContext* ctx) {
 
     // Open Acid Romance. Set the search via app state to avoid the ImGui
     // input-buffer residue from the previous dynamics test.
-    h.app->search = "Acid Romance";
-    h.app->refresh_page();
+    h.app->set_search("Acid Romance");
     ctx->Yield(2);
-    IM_CHECK(!h.app->current_page.rows.empty());
-    IM_CHECK(h.app->current_page.rows[0].title == "Acid Romance");
+    IM_CHECK(h.app->library_shown_count() > 0);
+    IM_CHECK(h.app->library_row_at(0).title == "Acid Romance");
     open_details(ctx, 0);
     if (ctx->IsError()) return;
 
@@ -208,26 +207,24 @@ void test_dynamics_stored(ImGuiTestContext* ctx) {
 
     // Select a different chart so the in-memory dynamics cache for Acid
     // Romance is dropped, then close the modal so the tab stops rendering.
-    h.app->search.clear();
-    h.app->refresh_page();
+    h.app->set_search("");
     size_t other_idx = 0;
-    for (size_t i = 0; i < h.app->current_page.rows.size(); ++i) {
-        if (h.app->current_page.rows[i].title != "Acid Romance") {
+    for (size_t i = 0; i < h.app->library_shown_count(); ++i) {
+        if (h.app->library_row_at(i).title != "Acid Romance") {
             other_idx = i;
             break;
         }
     }
-    h.app->select(h.app->current_page.rows[other_idx]);
+    h.app->select(h.app->library_row_at(other_idx).entry);
     h.app->show_details = false;
     ctx->Yield(3);
 
     // Reopen Acid Romance. The Dynamics tab loads its counts from the
     // store (put there by the first open's job), so no parse job starts.
-    h.app->search = "Acid Romance";
-    h.app->refresh_page();
+    h.app->set_search("Acid Romance");
     ctx->Yield(2);
-    IM_CHECK(!h.app->current_page.rows.empty());
-    IM_CHECK(h.app->current_page.rows[0].title == "Acid Romance");
+    IM_CHECK(h.app->library_shown_count() > 0);
+    IM_CHECK(h.app->library_row_at(0).title == "Acid Romance");
     // Clear any leftover dynamics state from the other chart.
     h.app->dynamics_result.reset();
     h.app->dynamics_key.clear();
@@ -270,13 +267,12 @@ void test_dynamics_stored(ImGuiTestContext* ctx) {
 // Narrow the library with `search`, then open the row titled `title`.
 void open_titled(ImGuiTestContext* ctx, const std::string& search, const std::string& title) {
     Harness& h = harness(ctx);
-    h.app->search = search;
-    h.app->refresh_page();
+    h.app->set_search(search);
     ctx->Yield(2);
-    size_t idx = h.app->current_page.rows.size();
-    for (size_t i = 0; i < h.app->current_page.rows.size(); ++i)
-        if (h.app->current_page.rows[i].title == title) idx = i;
-    IM_CHECK(idx < h.app->current_page.rows.size());
+    size_t idx = h.app->library_shown_count();
+    for (size_t i = 0; i < h.app->library_shown_count(); ++i)
+        if (h.app->library_row_at(i).title == title) idx = i;
+    IM_CHECK(idx < h.app->library_shown_count());
     open_details(ctx, idx);
 }
 
@@ -356,9 +352,9 @@ void test_squeezed_out_uncounted(ImGuiTestContext* ctx) {
     scan_library(ctx);
     if (ctx->IsError()) return;
     ctx->SetRef("//Hydra");
-    ctx->ItemInputValue("##search", kTitle);
+    ctx->ItemInputValue("**/##search", kTitle);
     IM_CHECK(wait_until(ctx, [&] { return h.app->search == kTitle; }, 5));
-    IM_CHECK(wait_until(ctx, [&] { return !h.app->current_page.rows.empty(); }, 5));
+    IM_CHECK(wait_until(ctx, [&] { return h.app->library_shown_count() > 0; }, 5));
     open_details(ctx, 0);
     if (ctx->IsError()) return;
     ctx->ItemClick("**/Analyze paths!");

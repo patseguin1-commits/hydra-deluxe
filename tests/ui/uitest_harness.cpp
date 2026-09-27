@@ -253,8 +253,8 @@ void reset_app(Harness& h, const std::string& rules_text) {
         if (url.find("/all-users") != std::string::npos)
             return std::string(R"([{"id":"111","username":"alice","elo":1500,
                                      "stats":{"total_scores":1,"total_score":100000}}])");
-        std::string md5 = (h.app && !h.app->current_page.rows.empty())
-                              ? h.app->current_page.rows[0].md5
+        std::string md5 = (h.app && h.app->library_shown_count() > 0)
+                              ? h.app->library_row_at(0).entry.md5
                               : "00000000000000000000000000000000";
         return std::string(R"({"scores":[{"identifier":")") + md5 +
                R"(","song_name":"x","artist":"y","charter_refs":["z"],"score":100000,)"
@@ -363,20 +363,16 @@ void dump_widgets(ImGuiTestContext* ctx, const std::string& window_name) {
 void dump_state(Harness& h) {
     auto& a = *h.app;
     std::printf("state:\n");
-    std::printf("  library_total=%lld page_rows=%zu page_total=%lld page=%d search=\"%s\"\n",
-                (long long)a.library_total, a.current_page.rows.size(),
-                (long long)a.current_page.total_count, a.table_viewpage, a.search.c_str());
-    for (size_t i = 0; i < a.current_page.rows.size(); ++i) {
-        const auto& r = a.current_page.rows[i];
-        const char* st = "new";
-        if (i < a.current_page.summaries.size()) {
-            auto s = a.current_page.summaries[i].state;
-            st = s == hydra::store::RecordStatus::Ready   ? "current"
-                 : s == hydra::store::RecordStatus::Stale ? "stale"
-                                                          : "new";
-        }
-        std::printf("    row[%zu] \"%s\" - %s (%s) md5=%s bestpath=%s\n", i, r.title.c_str(),
-                    r.artist.c_str(), r.charter.c_str(), r.md5.c_str(), st);
+    std::printf("  library_total=%lld shown=%zu search=\"%s\"\n", (long long)a.library_total,
+                a.library_shown_count(), a.search.c_str());
+    for (size_t i = 0; i < a.library_shown_count() && i < 20; ++i) {
+        const auto& r = a.library_row_at(i);
+        auto s = r.status;
+        const char* st = s == hydra::store::RecordStatus::Ready   ? "current"
+                         : s == hydra::store::RecordStatus::Stale ? "stale"
+                                                                  : "new";
+        std::printf("    row[%zu] \"%s\" - %s (%s) md5=%s status=%s\n", i, r.title.c_str(),
+                    r.artist.c_str(), r.charter.c_str(), r.entry.md5.c_str(), st);
     }
     std::printf("  selected=%s show_details=%s viewed_record=%s paths=%zu\n",
                 a.selected ? a.selected->title.c_str() : "(none)", yes_no(a.show_details),
@@ -440,14 +436,14 @@ void scan_library(ImGuiTestContext* ctx) {
     ctx->SetRef("//Hydra");
     IM_CHECK(h.app->scan_job == nullptr);
     IM_CHECK(h.app->library_total > 0);
-    IM_CHECK(!h.app->current_page.rows.empty());
+    IM_CHECK(h.app->library_shown_count() > 0);
 }
 
 // Click library row `index` and wait for the Song Details modal.
 void open_details(ImGuiTestContext* ctx, size_t index) {
     Harness& h = harness(ctx);
-    IM_CHECK(index < h.app->current_page.rows.size());
-    std::string title = h.app->current_page.rows[index].title;
+    IM_CHECK(index < h.app->library_shown_count());
+    std::string title = h.app->library_row_at(index).title;
     ctx->SetRef("//Hydra");
     ctx->ItemClick(("**/" + escape_ref(title)).c_str());
     ctx->Yield(3);

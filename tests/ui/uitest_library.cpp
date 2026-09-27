@@ -1,9 +1,11 @@
+#include <cstring>
 #include <string>
 
 #include "uitest_harness.h"
 
 #include "app/config.h"
 #include "ui/app_state.h"
+#include "ui/library_model.h"
 #include "ui/preview_controller.h"
 
 namespace uitest {
@@ -17,7 +19,7 @@ void test_scan(ImGuiTestContext* ctx) {
     scan_library(ctx);
     if (ctx->IsError()) return;
     // The first row's title is drawn in the table.
-    const std::string& title = h.app->current_page.rows[0].title;
+    const std::string& title = h.app->library_row_at(0).title;
     IM_CHECK(visible_text(h).find(title) != std::string::npos);
     // The scan flipped the button to its rescan label and persisted that.
     IM_CHECK(h.app->settings.is_rescan);
@@ -63,9 +65,9 @@ void test_difficulty(ImGuiTestContext* ctx) {
 
     // Narrow to a chart that actually has a [HardDrums] section, so the
     // analysis below has notes to work with.
-    ctx->ItemInputValue("##search", "Pokemon Theme");
+    ctx->ItemInputValue("**/##search", "Pokemon Theme");
     IM_CHECK(wait_until(ctx, [&] { return h.app->search == "Pokemon Theme"; }, 5));
-    IM_CHECK(wait_until(ctx, [&] { return !h.app->current_page.rows.empty(); }, 5));
+    IM_CHECK(wait_until(ctx, [&] { return h.app->library_shown_count() > 0; }, 5));
     open_details(ctx, 0);
     if (ctx->IsError()) return;
     // The details title carries the chartmode, so it names the difficulty.
@@ -79,7 +81,7 @@ void test_difficulty(ImGuiTestContext* ctx) {
     IM_CHECK(wait_until(ctx, [&] { return visible_text(h).find(best) != std::string::npos; }, 5));
     // The Hard record is filed under the Hard chartmode, so the library row
     // now reads Ready under it.
-    IM_CHECK(h.app->current_page.summaries[0].state ==
+    IM_CHECK(h.app->library_row_at(0).status ==
              hydra::store::RecordStatus::Ready);
 
     // The Preview follows the selected difficulty: Hard's notes must load,
@@ -124,7 +126,7 @@ void test_library_state_per_app(ImGuiTestContext* ctx) {
     scan_library(ctx);
     if (ctx->IsError()) return;
     ctx->SetRef("//Hydra");
-    ctx->ItemInputValue("##search", "zzqx");
+    ctx->ItemInputValue("**/##search", "zzqx");
     IM_CHECK(wait_until(ctx, [&] { return h.app->search == "zzqx"; }, 5));
     ctx->ItemClick("Compare dmleaderboards user...");
     IM_CHECK(wait_until(ctx, [&] { return !h.app->dm_users.empty(); }, 10));
@@ -154,8 +156,8 @@ void test_library_state_per_app(ImGuiTestContext* ctx) {
     ctx->Yield(2);
 }
 
-// The View row and the library's own controls: Pro Drums, the page arrows,
-// backing out of "Analyze library", and removing a song folder.
+// The View row and the library's own controls: Pro Drums, backing out of
+// "Analyze library", and removing a song folder.
 void test_view_settings(ImGuiTestContext* ctx) {
     Harness& h = harness(ctx);
     reset_app(h);
@@ -163,24 +165,12 @@ void test_view_settings(ImGuiTestContext* ctx) {
     if (ctx->IsError()) return;
     ctx->SetRef("//Hydra");
 
-    // The page arrows move one page each way.
-    IM_CHECK(h.app->current_page.total_count > h.app->rows_per_page);  // 2+ pages
-    IM_CHECK_EQ(h.app->table_viewpage, 0);
-    ctx->ItemClick("##pageright");
-    IM_CHECK_EQ(h.app->table_viewpage, 1);
-    ctx->ItemClick("##pageleft");
-    IM_CHECK_EQ(h.app->table_viewpage, 0);
-
-    // Pro Drums off is a different chart mode: persisted at once, and the
-    // library starts over at page one.
-    ctx->ItemClick("##pageright");
-    IM_CHECK_EQ(h.app->table_viewpage, 1);
+    // Pro Drums off is a different chart mode: persisted at once.
     IM_CHECK(h.app->settings.view_prodrums);
     ctx->ItemClick("Pro Drums");
     IM_CHECK(!h.app->settings.view_prodrums);
     IM_CHECK(!hydra::app::Settings::load_file(h.ini_path).view_prodrums);
     IM_CHECK(h.app->settings.chartmode_key().find("Pro Drums") == std::string::npos);
-    IM_CHECK_EQ(h.app->table_viewpage, 0);
     ctx->ItemClick("Pro Drums");
     IM_CHECK(h.app->settings.view_prodrums);
 
@@ -219,6 +209,137 @@ void test_view_settings(ImGuiTestContext* ctx) {
     IM_CHECK((ctx->ItemInfo("Scan charts").ItemFlags & ImGuiItemFlags_Disabled) != 0);
 }
 
+// The search box, the chips, the second line and the empty state, on the
+// scratch library (97 charts in testdata\input).
+void test_library_search(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    ctx->SetRef("//Hydra");
+    const auto shown = [&] { return h.app->library_shown_count(); };
+
+    IM_CHECK_EQ(shown(), (size_t)97);
+    IM_CHECK(visible_text(h).find("97 charts") != std::string::npos);
+    IM_CHECK(ctx->ItemExists("**/All (97)##chipall"));
+    IM_CHECK(ctx->ItemExists("**/Not analyzed (97)##chipnew"));
+    IM_CHECK((ctx->ItemInfo("**/Stale (0)##chipstale").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+    // A quoted phrase: the five charts under "...\Tier 4".
+    ctx->ItemInputValue("**/##search", "\"tier 4\"");
+    IM_CHECK(wait_until(ctx, [&] { return shown() == 5; }, 5));
+    IM_CHECK(ctx->ItemExists("**/All (5)##chipall"));
+    std::string text = visible_text(h);
+    IM_CHECK(text.find("5 of 97 charts") != std::string::npos);
+    for (const char* title : {"Burnout", "Chair", "Limb From Limb", "Unbound (The Wild Ride)", "YYZ"})
+        IM_CHECK(text.find(title) != std::string::npos);
+
+    // With a song open, Folder makes way, so each row says where it matched.
+    h.app->select(h.app->library_row_at(0).entry);
+    IM_CHECK(wait_until(ctx, [&] { return !ctx->ItemExists("**/Folder"); }, 5));
+    IM_CHECK(wait_until(ctx, [&] {
+        return visible_text(h).find("Matched on folder.") != std::string::npos;
+    }, 5));
+    h.app->close_details();
+    IM_CHECK(wait_until(ctx, [&] { return ctx->ItemExists("**/Folder"); }, 5));
+
+    // Words in any order, across title and artist.
+    ctx->ItemInputValue("**/##search", "green burnout");
+    IM_CHECK(wait_until(ctx, [&] { return shown() == 1; }, 5));
+    IM_CHECK(h.app->library_row_at(0).title == "Burnout");
+
+    // A charter stored with colour tags is found and drawn without them.
+    // Bloodline charted 15 of the scratch charts (13 of them tagged), so
+    // every row shown is theirs, Acid Romance among them.
+    ctx->ItemInputValue("**/##search", "bloodline");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->search == "bloodline" && shown() > 1; }, 5));
+    bool acid_shown = false;
+    for (size_t i = 0; i < shown(); ++i) {
+        IM_CHECK(h.app->library_row_at(i).charter == "Bloodline");
+        acid_shown = acid_shown || h.app->library_row_at(i).title == "Acid Romance";
+    }
+    IM_CHECK(acid_shown);
+    text = visible_text(h);
+    IM_CHECK(text.find("Acid Romance") != std::string::npos);
+    IM_CHECK(text.find("Bloodline") != std::string::npos);
+    IM_CHECK(text.find("<color=") == std::string::npos);
+
+    // A filter it can't read says so under the box.
+    ctx->ItemInputValue("**/##search", "stars:9");
+    IM_CHECK(wait_until(ctx, [&] { return !h.app->library.query().errors.empty(); }, 5));
+    IM_CHECK(visible_text(h).find(h.app->library.query().errors[0]) != std::string::npos);
+
+    // Nothing matches: the empty state, and Clear search brings it all back.
+    ctx->ItemInputValue("**/##search", "zzqx");
+    IM_CHECK(wait_until(ctx, [&] { return shown() == 0; }, 5));
+    IM_CHECK(visible_text(h).find("No charts match your search.") != std::string::npos);
+    ctx->ItemClick("**/Clear search");
+    IM_CHECK(wait_until(ctx, [&] { return shown() == 97 && h.app->search.empty(); }, 5));
+
+    // Escape in the box clears it; a second Escape leaves the box.
+    ctx->ItemInputValue("**/##search", "chair");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->search == "chair"; }, 5));
+    ctx->ItemClick("**/##search");
+    ctx->KeyPress(ImGuiKey_Escape);
+    IM_CHECK(wait_until(ctx, [&] { return h.app->search.empty(); }, 5));
+    ctx->KeyPress(ImGuiKey_Escape);
+    ctx->Yield(2);
+
+    // Ctrl+F puts the cursor in the box.
+    ctx->KeyPress(ImGuiMod_Ctrl | ImGuiKey_F);
+    ctx->Yield(2);
+    IM_CHECK_EQ(ctx->UiContext->ActiveId, ctx->ItemInfo("**/##search").ID);
+    ctx->KeyPress(ImGuiKey_Escape);
+    ctx->Yield(2);
+}
+
+// Sorting and scrolling: every chart is one scroll away, and only the rows on
+// screen are drawn.
+void test_library_sort_scroll(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    ctx->SetRef("//Hydra");
+
+    IM_CHECK(h.app->library.sort_column() == hydra::ui::LibrarySort::Title);
+    IM_CHECK(h.app->library.ascending());
+    const size_t count = h.app->library_shown_count();
+    const std::string first = h.app->library_row_at(0).title;
+    const std::string last = h.app->library_row_at(count - 1).title;
+    IM_CHECK(visible_text(h).find(first) != std::string::npos);
+    IM_CHECK(visible_text(h).find("Not analyzed") != std::string::npos);
+    IM_CHECK(visible_text(h).find("-----") == std::string::npos);  // no filler rows
+
+    // The table scrolls like any list: its end brings the last title into
+    // view. (The harness's text log turns the row clipper off, so every row
+    // is submitted while testing; "in view" is judged by the row's place
+    // against the table's visible area instead of by what was drawn.)
+    ImGuiWindow* table = nullptr;
+    for (ImGuiWindow* w : ImGui::GetCurrentContext()->Windows)
+        if ((w->Flags & ImGuiWindowFlags_ChildWindow) && std::strstr(w->Name, "##librarytable"))
+            table = w;
+    IM_CHECK(table != nullptr);
+    if (table == nullptr) return;
+    const std::string last_ref = "**/" + escape_ref(last);
+    const auto last_in_view = [&] {
+        ImGuiTestItemInfo info = ctx->ItemInfo(last_ref.c_str(), ImGuiTestOpFlags_NoError);
+        return info.ID != 0 && table->InnerRect.Contains(info.RectFull.GetCenter());
+    };
+    IM_CHECK(!last_in_view());  // below the fold
+    ctx->ScrollToBottom(ImGuiTestRef(table->ID));
+    IM_CHECK(wait_until(ctx, last_in_view, 5));
+
+    // The Title header reverses the order; a second click restores it (the
+    // ImGui context, and so the table's sort, outlives this test's app).
+    ctx->ItemClick("**/Title");
+    IM_CHECK(wait_until(ctx, [&] { return !h.app->library.ascending(); }, 5));
+    IM_CHECK(h.app->library_row_at(0).title == last);
+    ctx->ItemClick("**/Title");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->library.ascending(); }, 5));
+    IM_CHECK(h.app->library_row_at(0).title == first);
+}
+
 }  // namespace
 
 const std::vector<TestEntry>& library_tests() {
@@ -228,6 +349,8 @@ const std::vector<TestEntry>& library_tests() {
         {"rules-error", test_rules_error},
         {"library-state-per-app", test_library_state_per_app},
         {"view-settings", test_view_settings},
+        {"library-search", test_library_search},
+        {"library-sort-scroll", test_library_sort_scroll},
     };
     return entries;
 }

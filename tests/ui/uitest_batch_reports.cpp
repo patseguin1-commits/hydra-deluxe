@@ -64,12 +64,12 @@ void test_settings_and_reports(ImGuiTestContext* ctx) {
 
     // Batch-analyze just the first chart (search narrows the batch), which
     // builds the path report; with auto-open off no browser is launched.
-    std::string title = h.app->current_page.rows[0].title;
-    ctx->ItemInputValue("##search", title.c_str());
+    std::string title = h.app->library_row_at(0).title;
+    ctx->ItemInputValue("**/##search", title.c_str());
     IM_CHECK(wait_until(ctx, [&] { return h.app->search == title; }, 5));
     char label[96];
     std::snprintf(label, sizeof(label), "Analyze search (%lld)",
-                  (long long)h.app->current_page.total_count);
+                  (long long)h.app->library_match_count());
     ctx->ItemClick(label);
     ctx->SetRef("//Analyzing");
     ctx->ItemClick("Start");
@@ -179,13 +179,13 @@ void test_report_buttons(ImGuiTestContext* ctx) {
     IM_CHECK(!ctx->ItemExists("Open path report"));  // no report built yet
 
     // Batch just the first chart (the search narrows the batch).
-    std::string title = h.app->current_page.rows[0].title;
-    ctx->ItemInputValue("##search", title.c_str());
+    std::string title = h.app->library_row_at(0).title;
+    ctx->ItemInputValue("**/##search", title.c_str());
     IM_CHECK(wait_until(ctx, [&] { return h.app->search == title; }, 5));
     auto run_batch = [&] {
         char label[96];
         std::snprintf(label, sizeof(label), "Analyze search (%lld)",
-                      (long long)h.app->current_page.total_count);
+                      (long long)h.app->library_match_count());
         ctx->SetRef("//Hydra");
         ctx->ItemClick(label);
         ctx->SetRef("//Analyzing");
@@ -219,7 +219,7 @@ void test_report_buttons(ImGuiTestContext* ctx) {
     IM_CHECK(h.app->batch_redo);
     char label[96];
     std::snprintf(label, sizeof(label), "Analyze search (%lld)",
-                  (long long)h.app->current_page.total_count);
+                  (long long)h.app->library_match_count());
     ctx->ItemClick(label);
     ctx->Yield(2);
     IM_CHECK(visible_text(h).find("will be re-analyzed") != std::string::npos);

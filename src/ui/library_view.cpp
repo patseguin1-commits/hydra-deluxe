@@ -69,8 +69,9 @@ void render_main_window(AppState& app) {
     // Interim (Task 12): the library pane's own heading ("Library  5 of 97
     // charts") replaced the separator title that read the old paged count.
     // The view controls and the report button stay on their own row until
-    // T9's layout replaces this block at merge.
-    ImGui::Separator();
+    // T9's layout replaces this block at merge. (Spacing, not a separator:
+    // ImGui's text log writes a separator as a row of dashes.)
+    ImGui::Spacing();
 
     // A way back into the last batch's HTML report (it used to exist only as
     // an unrequested browser launch right after a batch). While a report job
