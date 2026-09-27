@@ -176,6 +176,7 @@ add_library(hydra_core STATIC
     src/app/html_page.cpp
     src/app/dynamics_breakdown.cpp
     src/app/display_format.cpp
+    src/app/library_query.cpp
     src/app/path_view.cpp
     src/app/preview_view.cpp
     src/app/preview_source.cpp
@@ -340,6 +341,7 @@ endforeach()
 add_executable(hydra_tests
     tests/test_main.cpp
     tests/test_strutil.cpp
+    tests/test_library_query.cpp
     tests/test_corpus_cache.cpp
     tests/test_timing.cpp
     tests/test_chord_code.cpp
