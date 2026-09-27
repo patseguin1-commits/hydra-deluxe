@@ -1,6 +1,6 @@
 // Tests for app/dm_report: the score-vs-optimal join (collect_dm_rows) and
-// the comparison page (build_dm_html). Pins the status strings the UI
-// compares as raw literals (see ui/dm_jobs.cpp's DmReportJob tally).
+// the comparison page (build_dm_html). Pins the status strings the page's
+// filter and chip classes key on, and the four counts the app shows.
 
 #include "doctest.h"
 
@@ -85,11 +85,11 @@ TEST_CASE("collect_dm_rows joins scores to records and labels them") {
         app::dm_report::collect_dm_rows(store, scores, kMode, store::Lens{});
     REQUIRE(rows.size() == 3);
 
-    // These exact strings are load-bearing: ui/dm_jobs.cpp tallies the finished
-    // modal's counts by comparing them as literals.
+    // These exact strings are load-bearing: the page's status filter and chip
+    // classes key on them.
     CHECK(rows[0].status == "matched");
     CHECK(rows[1].status == "above optimal");
-    CHECK(rows[2].status == "unmatched");
+    CHECK(rows[2].status == "not in library");
 
     CHECK(rows[0].optimal == optimal);
     CHECK(rows[0].delta == 1000);
@@ -208,12 +208,13 @@ TEST_CASE("generate_dm_report: tally and framing behind one seam") {
         app::dm_report::generate_dm_report(store, scores, kMode, store::Lens{}, "TestUser");
     CHECK(result.stats.total == 3);
     CHECK(result.stats.matched == 1);
-    CHECK(result.stats.above == 1);
-    CHECK(result.stats.unmatched == 1);
+    CHECK(result.stats.above_optimal == 1);
+    CHECK(result.stats.not_analyzed == 0);
+    CHECK(result.stats.not_in_library == 1);
 
     // The subtitle the finished modal's counts must agree with.
     CHECK(result.html.find("TestUser — 3 scores: 1 matched, 1 above optimal, "
-                           "1 not in your library") != std::string::npos);
+                           "0 not analyzed, 1 not in your library") != std::string::npos);
     // (The apostrophe in "Hydra's" is HTML-escaped, so match up to it.)
     CHECK(result.html.find(
               "Actual scores from dmleaderboards.com against Hydra") !=
@@ -239,4 +240,44 @@ TEST_CASE("collect_dm_rows: a blank stored song name reads (unknown)") {
         store, {unknown_meta}, kMode, store::Lens{});
     REQUIRE(rows.size() == 1);
     CHECK(rows[0].song == kUnknownTitle);
+}
+
+TEST_CASE("collect_dm_rows tells not analyzed from not in library") {
+    store::RecordStore store(":memory:");
+    const int64_t optimal = fill_store(store);
+    REQUIRE(optimal > 0);
+
+    // The last scan found kHash and one more chart nobody has analyzed. The
+    // scanned hash is upper case on purpose: the join ignores case.
+    constexpr const char* kScannedUpper = "ABCDEF00112233445566778899AABBCC";
+    constexpr const char* kScanned = "abcdef00112233445566778899aabbcc";
+    store::ChartLibraryEntry analyzed;
+    analyzed.md5 = kHash;
+    analyzed.title = "Stored Title";
+    store::ChartLibraryEntry scanned;
+    scanned.md5 = kScannedUpper;
+    scanned.title = "Scanned Only";
+    store.rebuild_chart_library({analyzed, scanned});
+
+    std::vector<DmReportRow> rows = app::dm_report::collect_dm_rows(
+        store,
+        {make_score(kHash, optimal - 1000),                        // matched
+         make_score(kScanned, 5000),                               // in the library, no result
+         make_score("00ff00ff00ff00ff00ff00ff00ff00ff", 123456)},  // never scanned
+        kMode, store::Lens{});
+    REQUIRE(rows.size() == 3);
+    CHECK(rows[0].status == "matched");
+    CHECK(rows[1].status == "not analyzed");
+    CHECK(rows[2].status == "not in library");
+    CHECK_FALSE(rows[1].optimal.has_value());
+
+    const app::dm_report::DmReportStats stats = app::dm_report::tally_dm_rows(rows);
+    CHECK(stats.total == 3);
+    CHECK(stats.matched == 1);
+    CHECK(stats.above_optimal == 0);
+    CHECK(stats.not_analyzed == 1);
+    CHECK(stats.not_in_library == 1);
+    // The old names, kept filled until ui/dm_jobs.cpp reads the new ones.
+    CHECK(stats.above == 0);
+    CHECK(stats.unmatched == 2);
 }

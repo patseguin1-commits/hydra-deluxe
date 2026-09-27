@@ -470,7 +470,8 @@ TEST_CASE("report pages: write samples for the browser check" * doctest::skip())
     };
     add_dm("Song A", 120000, 123456, "matched", true, 3);
     add_dm("Song B", 251000, 250000, "above optimal", false, 1);
-    add_dm("Song C", 90000, std::nullopt, "unmatched", false, std::nullopt);
+    add_dm("Song C", 90000, std::nullopt, "not in library", false, std::nullopt);
+    add_dm("Song D", 80000, std::nullopt, "not analyzed", false, std::nullopt);
 
     std::vector<fill_report::FillCompareRow> fill;
     auto add_fill = [&](const char* song, std::optional<int64_t> old_score,
@@ -730,4 +731,20 @@ TEST_CASE("path report counts charts by hash in the tile and the subtitle") {
     CHECK(html.find("['Charts', new Set(rows.map(r => r.c)).size.toLocaleString()]") !=
           std::string::npos);
     CHECK(html.find("r.song + r.artist))") == std::string::npos);
+}
+
+TEST_CASE("comparison page explains its columns and splits the missing scores") {
+    const std::string html = dm_report::build_dm_html({}, "sub", "foot");
+    for (const char* key : {"actual", "optimal", "delta", "pct", "fc", "speed", "rank",
+                            "posted", "status"}) {
+        INFO(key);
+        CHECK(col_line(html, key).find("d:'") != std::string::npos);
+    }
+    CHECK(html.find("<option value=\"not analyzed\">") != std::string::npos);
+    CHECK(html.find("<option value=\"not in library\">") != std::string::npos);
+    CHECK(html.find("value=\"unmatched\"") == std::string::npos);
+    CHECK(html.find("'not analyzed':'s-notanalyzed'") != std::string::npos);
+    CHECK(html.find("id=\"q\" aria-label=\"Search scores\"") != std::string::npos);
+    CHECK(html.find("id=\"status\" aria-label=\"Status\"") != std::string::npos);
+    CHECK(html.find("<dl class=\"legend\" id=\"legend\"></dl>") != std::string::npos);
 }
