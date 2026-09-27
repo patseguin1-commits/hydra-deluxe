@@ -384,8 +384,7 @@ void PreviewRenderer::resize(int width, int height) {
     Impl& d = *impl_;
     d.width = std::max(1, width);
     d.height = std::max(1, height);
-    d.track_h = std::min(d.height, static_cast<int>(std::lround(d.width * d.cfg.view.height_width_ratio)));
-    d.track_h = std::max(1, d.track_h);
+    d.track_h = track_height(d.cfg, d.width, d.height);
     d.create_targets();
 }
 

@@ -60,6 +60,13 @@ HighwayCamera make_camera(const PreviewConfig& cfg, float aspect) {
     return cam;
 }
 
+int track_height(const PreviewConfig& cfg, int width, int height) {
+    const int w = std::max(1, width);
+    const int h = std::max(1, height);
+    const int t = std::min(h, static_cast<int>(std::lround(w * cfg.view.height_width_ratio)));
+    return std::max(1, t);
+}
+
 double time_to_z(const PreviewConfig& cfg, double now_s, double t_s, double speed) {
     const double far_time = now_s + speed * cfg.track.secs_future;
     return cfg.track.z_now +

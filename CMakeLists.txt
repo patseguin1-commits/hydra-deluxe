@@ -222,6 +222,7 @@ add_library(hydra_render STATIC
     src/render/preview_config.cpp
     src/render/track_state.cpp
     src/render/highway_draw.cpp
+    src/render/overlay_layout.cpp
     src/render/preview_renderer.cpp
 )
 target_link_libraries(hydra_render PUBLIC hydra_core)
@@ -353,6 +354,7 @@ add_executable(hydra_tests
     tests/test_preview_config.cpp
     tests/test_track_state.cpp
     tests/test_highway_draw.cpp
+    tests/test_overlay_layout.cpp
     tests/test_preview_golden.cpp
     tests/test_preview_clock.cpp
     tests/test_preview_transport.cpp
