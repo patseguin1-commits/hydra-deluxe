@@ -25,6 +25,7 @@
 #include "core/model.h"
 #include "core/rules.h"
 #include "core/timing.h"
+#include "app/path_view.h"
 #include "parse/song.h"
 
 namespace hydra::app {
@@ -95,6 +96,10 @@ struct PreviewActivation {
     // chord.
     PreviewLane lane = PreviewLane::Kick;
     bool has_lane = false;
+    // The activation's position as the Paths tab prints it (format_measure)
+    // and its chord (Chord::rowstr); chord is empty when the record has none.
+    std::string measure;
+    std::string chord;
 };
 
 // A beat line on the highway: a bar line, a beat line, or the fainter
@@ -234,6 +239,12 @@ struct PreviewTimeBox {
     std::string bpm;
     std::string time_sig;
     std::string section;
+    // The redesigned box's lines. Task 11 draws these, deletes measure_beat,
+    // bpm, time_sig and section above, and moves `timestamp` beside the scrubber.
+    std::string position;      // format_measure at the playhead, "m27.2.450"
+    std::string length;        // format_measure at the song's end, "m96.3.240"
+    std::string tempo;         // "BPM 191.001 · 4/4"
+    std::string section_line;  // "Section chorus_1"; empty when no section is in force
 };
 
 PreviewTimeBox build_time_box(const PreviewScene& scene, double now_ms,
@@ -285,6 +296,37 @@ PreviewDrainBox build_drain_box(const PreviewScene& scene, double now_ms);
 // changes. A scene with no timing returns `now_ms` unchanged.
 double step_tick_ms(const PreviewScene& scene, double now_ms, double length_ms,
                     int delta_ticks);
+
+// Where each activation of the shown path sits on the scrubber: its onset over
+// `length_ms` (the transport's length, the scrubber's right edge), clamped to
+// 0..1, in activation order. Empty with no path or no length.
+std::vector<double> build_scrub_marks(const PreviewScene& scene, double length_ms);
+
+// Where "< Act" (direction -1) or "Act >" (+1) moves the playhead from
+// `now_ms`: the onset of the nearest activation strictly before or after it.
+// Half a millisecond of slack each way, so a playhead parked on an activation
+// moves past it. nullopt when there is none that way.
+std::optional<double> activation_jump_ms(const PreviewScene& scene, double now_ms,
+                                         int direction);
+
+// The box at the highway's bottom-left: the first activation at or after the
+// playhead (the same half-millisecond slack), "Next: activation 1 of 3" and
+// "at m32.1.0 · [Kick - GreenCym]". Hidden past the last activation and when
+// the scene has no path.
+struct PreviewNextActBox {
+    bool shown = false;
+    std::string header;
+    std::string detail;
+};
+PreviewNextActBox build_next_act_box(const PreviewScene& scene, double now_ms);
+
+// The number under the SP gauge: bars banked at `now_ms` over the cap, one
+// decimal ("2.5/4"). Empty when the curve has no segments.
+std::string sp_meter_readout(const SpMeterCurve& curve, double now_ms);
+
+// One entry of the Preview's "Showing" list: the path's notation, with
+// "  (optimal)" on an Optimal path and "  (0 ms limit)" on the all-0 path.
+std::string preview_path_label(const PathButtonView& button);
 
 // Bars banked at `ms`: 0 before the curve begins, its final value after the
 // curve ends, and interpolated inside a segment. On a boundary shared by two

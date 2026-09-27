@@ -315,7 +315,9 @@ PreviewScene build_preview_scene(const Song& song, const Path* path, int sp_cap,
             if (a.chord.count() > 0) {
                 pa.has_lane = true;
                 pa.lane = lane_of(a.chord.activation_note().colortype);
+                pa.chord = a.chord.rowstr();
             }
+            pa.measure = format_measure(timing, pa.tick);
             scene.activations.push_back(pa);
         }
     }
@@ -472,6 +474,8 @@ PreviewTimeBox build_time_box(const PreviewScene& scene, double now_ms,
         return bracket_str(mbt[0] + 1, mbt[1] + 1, mbt[2]);
     };
     box.measure_beat = mbt_str(now_tick) + " / " + mbt_str(end_tick);
+    box.position = scene.timing ? format_measure(*scene.timing, now_tick) : "m1.1.0";
+    box.length = scene.timing ? format_measure(*scene.timing, end_tick) : "m1.1.0";
 
     // The tempo in force: the last change at or before now (the opening tempo
     // before any change).
@@ -493,11 +497,14 @@ PreviewTimeBox build_time_box(const PreviewScene& scene, double now_ms,
     }
     std::snprintf(buf, sizeof buf, "Time signature: %d/%d", ts_num, ts_den);
     box.time_sig = buf;
+    std::snprintf(buf, sizeof buf, "BPM %.3f \xC2\xB7 %d/%d", bpm, ts_num, ts_den);
+    box.tempo = buf;
 
     for (const PreviewSection& s : scene.sections) {
         if (s.tick > now_tick) break;
         box.section = s.name;
     }
+    if (!box.section.empty()) box.section_line = "Section " + box.section;
     return box;
 }
 
@@ -575,6 +582,63 @@ double step_tick_ms(const PreviewScene& scene, double now_ms, double length_ms,
     int64_t target = tick_at(*scene.timing, shown_ms(now_ms, length_ms)) + delta_ticks;
     if (target < 0) target = 0;
     return scene.timing->ms_index().at(target);
+}
+
+std::vector<double> build_scrub_marks(const PreviewScene& scene, double length_ms) {
+    std::vector<double> marks;
+    if (length_ms <= 0.0) return marks;
+    marks.reserve(scene.activations.size());
+    for (const PreviewActivation& a : scene.activations)
+        marks.push_back(std::clamp(a.ms / length_ms, 0.0, 1.0));
+    return marks;
+}
+
+namespace {
+// How far from an activation the playhead may sit and still count as on it.
+constexpr double kOnActivationMs = 0.5;
+}  // namespace
+
+std::optional<double> activation_jump_ms(const PreviewScene& scene, double now_ms,
+                                         int direction) {
+    if (direction > 0) {
+        for (const PreviewActivation& a : scene.activations)
+            if (a.ms > now_ms + kOnActivationMs) return a.ms;
+        return std::nullopt;
+    }
+    for (auto it = scene.activations.rbegin(); it != scene.activations.rend(); ++it)
+        if (it->ms < now_ms - kOnActivationMs) return it->ms;
+    return std::nullopt;
+}
+
+PreviewNextActBox build_next_act_box(const PreviewScene& scene, double now_ms) {
+    PreviewNextActBox box;
+    const size_t count = scene.activations.size();
+    for (size_t i = 0; i < count; ++i) {
+        const PreviewActivation& a = scene.activations[i];
+        if (a.ms < now_ms - kOnActivationMs) continue;
+        box.shown = true;
+        box.header = "Next: activation " + std::to_string(i + 1) + " of " + std::to_string(count);
+        box.detail = "at " + a.measure;
+        if (!a.chord.empty()) box.detail += " \xC2\xB7 " + a.chord;
+        break;
+    }
+    return box;
+}
+
+std::string sp_meter_readout(const SpMeterCurve& curve, double now_ms) {
+    if (curve.segments.empty()) return {};
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "%.1f/%d", sp_meter_bars_at(curve, now_ms), curve.cap);
+    return buf;
+}
+
+std::string preview_path_label(const PathButtonView& button) {
+    switch (button.group) {
+        case PathButtonView::Group::Optimal: return button.notation + "  (optimal)";
+        case PathButtonView::Group::AllZero: return button.notation + "  (0 ms limit)";
+        case PathButtonView::Group::Within:  break;
+    }
+    return button.notation;
 }
 
 std::string path_overlay_key(const Path* path) {

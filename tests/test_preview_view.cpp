@@ -13,6 +13,7 @@
 
 #include "app/analysis.h"
 #include "app/preview_view.h"
+#include "app/path_view.h"
 #include "core/model.h"
 #include "core/replay.h"
 #include "core/squeeze_rating.h"
@@ -399,8 +400,13 @@ TEST_CASE("build_time_box: timestamp, measure:beat:tick, BPM") {
     CHECK(box.measure_beat == "[1:3:288] / [3:3:000]");
     CHECK(box.bpm == "BPM: 120.000");
     CHECK(box.section.empty());
+    CHECK(box.position == "m1.3.288");
+    CHECK(box.length == "m3.3.0");
+    CHECK(box.tempo == "BPM 120.000 " + kDot + " 4/4");
+    CHECK(box.section_line.empty());
 
     CHECK(build_time_box(scene, 0.0, 5000.0).measure_beat == "[1:1:000] / [3:3:000]");
+    CHECK(build_time_box(scene, 0.0, 5000.0).position == "m1.1.0");
 
     PreviewTimeBox later = build_time_box(scene, 64000.0, 64000.0);
     CHECK(later.timestamp == "1:04.000 / 1:04.000");
@@ -417,6 +423,8 @@ TEST_CASE("build_time_box: the end bracket runs past the last beat line") {
     REQUIRE(scene.beats.back().tick == 4320);
     PreviewTimeBox box = build_time_box(scene, 30000.0, 30000.0);
     CHECK(box.measure_beat == "[16:1:000] / [16:1:000]");
+    CHECK(box.position == "m16.1.0");
+    CHECK(box.length == "m16.1.0");
     CHECK(box.timestamp == "0:30.000 / 0:30.000");
 }
 
@@ -440,6 +448,9 @@ TEST_CASE("build_time_box: the practice section in force") {
     CHECK(build_time_box(scene, 2000.0, len).section == "Verse 1");
     CHECK(build_time_box(scene, 2500.0, len).section == "Chorus");
     CHECK(build_time_box(scene, 9000.0, len).section == "Chorus");
+    CHECK(build_time_box(scene, 400.0, len).section_line.empty());
+    CHECK(build_time_box(scene, 500.0, len).section_line == "Section Verse 1");
+    CHECK(build_time_box(scene, 2500.0, len).section_line == "Section Chorus");
 }
 
 TEST_CASE("build_time_box: a mid-measure meter change follows the engine") {
@@ -471,6 +482,7 @@ TEST_CASE("build_time_box: a mid-measure meter change follows the engine") {
 
     PreviewTimeBox box = build_time_box(scene, 3750.0, 3750.0);
     CHECK(box.measure_beat == "[3:1:240] / [3:1:240]");
+    CHECK(box.position == "m3.1.240");
 
     // ...and that measure is the one the drawn bar lines put tick 3600 in: the
     // third line is at 3360 and the fourth at 4800.
@@ -510,6 +522,10 @@ TEST_CASE("build_time_box: the time signature in force, as the chart wrote it") 
     CHECK(build_time_box(scene, 3500.0, 5000.0).time_sig == "Time signature: 3/4");
     // A scene built from nothing reads the chart default.
     CHECK(build_time_box(PreviewScene{}, 0.0, 0.0).time_sig == "Time signature: 4/4");
+    CHECK(build_time_box(scene, 2000.0, 5000.0).tempo == "BPM 120.000 " + kDot + " 6/8");
+    CHECK(build_time_box(scene, 3500.0, 5000.0).tempo == "BPM 120.000 " + kDot + " 3/4");
+    CHECK(build_time_box(PreviewScene{}, 0.0, 0.0).tempo == "BPM 0.000 " + kDot + " 4/4");
+    CHECK(build_time_box(PreviewScene{}, 0.0, 0.0).position == "m1.1.0");
 }
 
 TEST_CASE("build_preview_scene: no path means no overlay") {
@@ -581,6 +597,8 @@ TEST_CASE("build_preview_scene: an analyzed chart's overlay matches its path") {
             CHECK(pa.has_lane);
             CHECK(pa.lane == lane_of(a.chord.activation_note().colortype));
         }
+        CHECK(pa.measure == format_measure(r.song.timing(), pa.tick));
+        CHECK(pa.chord == (a.chord.count() > 0 ? a.chord.rowstr() : std::string()));
     }
 
     // Same song, no path: identical notes, empty overlay.
@@ -972,6 +990,8 @@ TEST_CASE("step_tick_ms: one tick from the tick the time box shows") {
     CHECK(back == doctest::Approx(ms.at(1247)));
     CHECK(build_time_box(scene, fwd, 5000.0).measure_beat == "[1:3:289] / [3:3:000]");
     CHECK(build_time_box(scene, back, 5000.0).measure_beat == "[1:3:287] / [3:3:000]");
+    CHECK(build_time_box(scene, fwd, 5000.0).position == "m1.3.289");
+    CHECK(build_time_box(scene, back, 5000.0).position == "m1.3.287");
 
     // Between ticks it steps from the rounded tick: 1300.6 ms rounds to 1249.
     CHECK(step_tick_ms(scene, 1300.6, 5000.0, 1) == doctest::Approx(ms.at(1250)));
@@ -1223,4 +1243,86 @@ TEST_CASE("drain box: an activation with no stored end stays idle") {
     CHECK(box.shown);
     CHECK_FALSE(box.active);
     CHECK(box.detail.rfind("full meter ", 0) == 0);
+}
+
+namespace {
+
+// Two one-bar activations on make_sp_song's timing (120 BPM, 4/4, 480 ticks a
+// beat): tick 1920 is 2000 ms, measure 2; tick 7680 is 8000 ms, measure 5.
+// One phrase ends at tick 960 (1000 ms) to fill the first bar. The notes run
+// to tick 13440 so the second activation's deact node (tick 11520) is inside.
+struct TwoActs {
+    Song song = make_sp_song({960}, /*last_tick=*/13440);
+    Path path;
+    PreviewScene scene;
+    TwoActs() {
+        Activation a = sp_act_at(song, 1920, /*sp_meter=*/1);
+        a.chord.add_note(NoteColor::Red);
+        Activation b = sp_act_at(song, 7680, /*sp_meter=*/1);
+        b.chord.add_note(NoteColor::Red);
+        path.activations = {a, b};
+        scene = build_preview_scene(song, &path);
+    }
+};
+
+}  // namespace
+
+TEST_CASE("scrub marks: each activation's onset over the scrubber's length") {
+    TwoActs t;
+    std::vector<double> marks = build_scrub_marks(t.scene, 10000.0);
+    REQUIRE(marks.size() == 2);
+    CHECK(marks[0] == doctest::Approx(0.2));
+    CHECK(marks[1] == doctest::Approx(0.8));
+    // Clamped into the bar when the length is shorter than the path.
+    CHECK(build_scrub_marks(t.scene, 4000.0)[1] == doctest::Approx(1.0));
+    CHECK(build_scrub_marks(t.scene, 0.0).empty());
+    CHECK(build_scrub_marks(build_preview_scene(t.song, nullptr), 10000.0).empty());
+}
+
+TEST_CASE("activation jumps: nearest activation before or after the playhead") {
+    TwoActs t;
+    CHECK(activation_jump_ms(t.scene, 0.0, +1) == doctest::Approx(2000.0));
+    // Parked on an activation, "next" moves on and "previous" goes back past it.
+    CHECK(activation_jump_ms(t.scene, 2000.0, +1) == doctest::Approx(8000.0));
+    CHECK(activation_jump_ms(t.scene, 2000.3, +1) == doctest::Approx(8000.0));
+    CHECK_FALSE(activation_jump_ms(t.scene, 2000.0, -1).has_value());
+    CHECK(activation_jump_ms(t.scene, 5000.0, -1) == doctest::Approx(2000.0));
+    CHECK(activation_jump_ms(t.scene, 8000.0, -1) == doctest::Approx(2000.0));
+    CHECK_FALSE(activation_jump_ms(t.scene, 8000.0, +1).has_value());
+    CHECK_FALSE(activation_jump_ms(build_preview_scene(t.song, nullptr), 0.0, +1).has_value());
+}
+
+TEST_CASE("next activation box: the activation at or after the playhead") {
+    TwoActs t;
+    PreviewNextActBox box = build_next_act_box(t.scene, 0.0);
+    CHECK(box.shown);
+    CHECK(box.header == "Next: activation 1 of 2");
+    CHECK(box.detail == "at m2.1.0 " + kDot + " [Red]");
+    CHECK(build_next_act_box(t.scene, 2000.0).header == "Next: activation 1 of 2");
+    CHECK(build_next_act_box(t.scene, 2001.0).header == "Next: activation 2 of 2");
+    CHECK(build_next_act_box(t.scene, 2001.0).detail == "at m5.1.0 " + kDot + " [Red]");
+    CHECK_FALSE(build_next_act_box(t.scene, 9000.0).shown);
+    CHECK_FALSE(build_next_act_box(build_preview_scene(t.song, nullptr), 0.0).shown);
+}
+
+TEST_CASE("sp meter readout: bars banked over the cap") {
+    TwoActs t;
+    // The phrase at 1000 ms banks a bar; the activation at 2000 ms drains it
+    // to empty at its deact node, two measures later (6000 ms).
+    CHECK(sp_meter_readout(t.scene.sp_meter, 1500.0) == "1.0/4");
+    CHECK(sp_meter_readout(t.scene.sp_meter, 4000.0) == "0.5/4");
+    CHECK(sp_meter_readout(SpMeterCurve{}, 0.0).empty());
+}
+
+TEST_CASE("preview path label: the notation and which list it came from") {
+    PathButtonView b;
+    b.notation = "3- 1 2";
+    b.group = PathButtonView::Group::Optimal;
+    CHECK(preview_path_label(b) == "3- 1 2  (optimal)");
+    b.notation = "0 4 1";
+    b.group = PathButtonView::Group::Within;
+    CHECK(preview_path_label(b) == "0 4 1");
+    b.notation = "0 0 0 0";
+    b.group = PathButtonView::Group::AllZero;
+    CHECK(preview_path_label(b) == "0 0 0 0  (0 ms limit)");
 }
