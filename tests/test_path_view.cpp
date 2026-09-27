@@ -41,6 +41,25 @@ const AnalysisResult& analyzed() {
     return result;
 }
 
+// Burnout (Green Day, charter Hoph2o), analyzed the way the GUI tests
+// analyze it: Expert, Pro Drums, 2x Bass, SP cap 4, 2 scores, 10 ms limit.
+const AnalysisResult& burnout() {
+    static const AnalysisResult result = [] {
+        AnalysisSettings settings;
+        settings.depth_mode = DepthMode::Scores;
+        settings.depth_value = 2;
+        settings.ms_filter = 10.0;
+        for (const std::string& path : corpus::chart_paths())
+            if (path.find("Green Day - Burnout") != std::string::npos)
+                return analyze_chart_file(path, settings);
+        throw std::runtime_error("Burnout is not in testdata/input");
+    }();
+    return result;
+}
+
+// The separator the new labels use: a middle dot, U+00B7, in UTF-8.
+const std::string kDot = " \xC2\xB7 ";
+
 }  // namespace
 
 TEST_CASE("build_record_status: the three states and their lines") {
@@ -599,4 +618,290 @@ TEST_CASE("PathsTabCache: 600 cached frames cost far less than 600 rebuilds") {
     MESSAGE("600 rebuilt frames: " << rebuilt_ms << " ms; 600 cached frames: " << cached_ms
                                    << " ms");
     CHECK(cached_ms * 10.0 < rebuilt_ms);
+}
+
+TEST_CASE("format_measure: one form for both tabs") {
+    // 192 ticks a beat, 768 a measure: tick 960 is measure 2, beat 2.
+    std::map<int64_t, int64_t> tpm{{0, 768}};
+    std::map<int64_t, double> bpm{{0, 120.0}};
+    SongTiming timing(192, tpm, bpm);
+    CHECK(format_measure(timing, 0) == "m1.1.0");
+    CHECK(format_measure(timing, 960) == "m2.2.0");
+    CHECK(format_measure(timing, 1000) == "m2.2.40");
+    CHECK(format_measure(timing.timecode(960)) == "m2.2.0");
+    CHECK(format_ms_spaced(163.0) == "163.0 ms");
+}
+
+TEST_CASE("activation rows: Burnout's three activations") {
+    const AnalysisResult& ar = burnout();
+    const HydraRecord& rec = ar.record;
+    const Path& best = rec.best_path();
+    REQUIRE(best.pathstring() == "3- 1 2");
+    REQUIRE(best.totalscore() == 378315);
+    const SongTiming& timing = ar.song.timing();
+
+    ActivationsView view = build_activations(best, rec, &timing, kDefaultHitWindowMs);
+    REQUIRE(view.acts.size() == 3);
+    CHECK(view.summary == "3" + kDot + "3 bars each" + kDot + "no SP left over");
+
+    const ActivationRowView& a1 = view.acts[0];
+    CHECK(a1.number == 1);
+    CHECK(a1.notation == "3-");
+    CHECK(a1.measure == "m32.1.0");
+    CHECK(a1.sp_bars == 3);
+    CHECK(a1.bars == "3 bars");
+    CHECK(a1.badge == "squeeze out 163 ms");
+    CHECK(a1.difficult);
+    CHECK(a1.chord == "[Kick - GreenCym]");
+    REQUIRE(a1.squeeze_sentences.size() == 1);
+    CHECK(a1.squeeze_sentences[0].text ==
+          "Hit the [  Y  ] note more than 163.0 ms late so it lands after Star Power "
+          "ends. It scores 260 fewer points, and its SP phrase banks for later.");
+    CHECK(a1.squeeze_sentences[0].warn);
+    CHECK(a1.backends_label == "3 notes near the SP end");
+
+    const ActivationRowView& a2 = view.acts[1];
+    CHECK(a2.number == 2);
+    CHECK(a2.notation == "1");
+    CHECK(a2.measure == "m58.1.0");
+    CHECK(a2.badge.empty());
+    CHECK(a2.squeeze_sentences.empty());
+    CHECK(a2.backends_label == "6 notes near the SP end");
+
+    const ActivationRowView& a3 = view.acts[2];
+    CHECK(a3.notation == "2");
+    CHECK(a3.measure == "m88.1.0");
+    CHECK(a3.backends_label == "7 notes near the SP end");
+
+    // No song length given: no timeline.
+    CHECK_FALSE(a1.song_fraction.has_value());
+    CHECK(view.timeline_end.empty());
+}
+
+TEST_CASE("activation timeline: onset over the song's length, and the end measure") {
+    // 120 BPM, 4/4, 192 ticks a beat: a measure is 2000 ms.
+    std::map<int64_t, int64_t> tpm{{0, 768}};
+    std::map<int64_t, double> bpm{{0, 120.0}};
+    SongTiming timing(192, tpm, bpm);
+    Activation act;
+    act.timecode = timing.timecode(768);  // measure 2, 2000 ms
+    act.sp_meter = 2;
+    act.skips = 0;
+    act.e_offset = 300.0;  // not e-critical
+    Path p;
+    p.activations.push_back(act);
+    HydraRecord rec;
+
+    ActivationsView view = build_activations(p, rec, &timing, 85.0, std::nullopt,
+                                             core::default_rules(), 10000.0);
+    REQUIRE(view.acts.size() == 1);
+    REQUIRE(view.acts[0].song_fraction.has_value());
+    CHECK(*view.acts[0].song_fraction == doctest::Approx(0.2));
+    CHECK(view.timeline_end == "m6");  // 10 s is tick 3840, the start of measure 6
+    CHECK(view.summary == "1" + kDot + "2 bars" + kDot + "no SP left over");
+
+    // No timing: no fraction, whatever the length.
+    ActivationsView blind = build_activations(p, rec, nullptr, 85.0, std::nullopt,
+                                              core::default_rules(), 10000.0);
+    CHECK_FALSE(blind.acts[0].song_fraction.has_value());
+    CHECK(blind.timeline_end.empty());
+}
+
+TEST_CASE("activation badge: shown only when the activation needs a squeeze") {
+    Activation none;
+    none.skips = 0;
+    none.e_offset = 300.0;  // not e-critical
+    CHECK(activation_badge(none).empty());
+
+    Activation sqin = none;
+    sqin.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, 12.4});
+    CHECK(activation_badge(sqin) == "squeeze in 12 ms");
+
+    Activation sqout = none;
+    sqout.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -163.0});
+    CHECK(activation_badge(sqout) == "squeeze out 163 ms");
+
+    // A required (E0) calibration fill is a squeeze too; the hardest one names the badge.
+    Activation e0 = none;
+    e0.e_offset = -30.0;
+    CHECK(activation_badge(e0) == "calibration fill 30 ms");
+    e0.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -5.0});
+    CHECK(activation_badge(e0) == "calibration fill 30 ms");
+
+    // An optional (E1) fill is not required, so no badge.
+    Activation e1 = none;
+    e1.skips = 1;
+    e1.e_offset = -30.0;
+    CHECK(activation_badge(e1).empty());
+}
+
+TEST_CASE("squeeze sentences: SqIn, SqOut, and what a squeeze-out costs") {
+    HydraRecord rec;
+    auto sentence_of = [&rec](const Activation& act) {
+        Path p;
+        p.activations.push_back(act);
+        ActivationsView v = build_activations(p, rec, nullptr, 85.0);
+        REQUIRE(v.acts.size() == 1);
+        REQUIRE(v.acts[0].squeeze_sentences.size() == 1);
+        return v.acts[0].squeeze_sentences[0];
+    };
+    Activation base;
+    base.skips = 0;
+    base.e_offset = 300.0;  // not e-critical
+
+    Activation sqin = base;
+    sqin.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, 50.0});
+    TextLine s = sentence_of(sqin);
+    CHECK(s.text ==
+          "Hit the SP phrase's last note more than 50.0 ms early so it lands before Star "
+          "Power ends. The phrase then counts while Star Power runs, which makes Star "
+          "Power last longer.");
+    CHECK(s.warn);
+
+    Activation easy_in = base;
+    easy_in.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, -20.0});
+    s = sentence_of(easy_in);
+    CHECK(s.text.rfind("Hit the SP phrase's last note no more than 20.0 ms late so it "
+                       "lands before Star Power ends.", 0) == 0);
+    CHECK_FALSE(s.warn);
+
+    // A SqOut with no stored squeezed-out row names no chord and no cost.
+    Activation bare_out = base;
+    bare_out.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, 60.0});
+    CHECK(sentence_of(bare_out).text ==
+          "Hit the SP phrase's last note no more than 60.0 ms early so it lands after "
+          "Star Power ends. Its SP phrase banks for later.");
+
+    // The Round and Round fixture: an R+Y phrase chord squeezed out 480 ms past
+    // the SP end. The engine never counted it, so it costs nothing.
+    Activation far = base;
+    BackendSqueeze row;
+    row.timecode = Timecode::raw(3256);
+    row.chord.add_note(NoteColor::Red);
+    row.chord.add_note(NoteColor::Yellow);
+    row.points = 460;
+    row.sqout_points = 260;
+    row.is_sp = true;
+    row.offset_ms = 479.999;
+    far.backends.push_back(row);
+    far.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, 479.999});
+    far.sqout_tick = 3256;
+    s = sentence_of(far);
+    CHECK(s.text ==
+          "Hit the [ RY  ] note no more than 480.0 ms early so it lands after Star Power "
+          "ends. It costs no points, because Hydra's score never counted that note under "
+          "Star Power, and its SP phrase banks for later.");
+    CHECK_FALSE(s.warn);
+
+    // The same chord 5 ms inside SP really costs 460 - 260 = 200.
+    Activation near = far;
+    near.backends[0].offset_ms = -5.0;
+    near.sqinouts[0].offset_ms = -5.0;
+    s = sentence_of(near);
+    CHECK(s.text ==
+          "Hit the [ RY  ] note more than 5.0 ms late so it lands after Star Power ends. "
+          "It scores 200 fewer points, and its SP phrase banks for later.");
+    CHECK(s.warn);
+}
+
+TEST_CASE("path buttons: Burnout's list, in the mockup's groups") {
+    const HydraRecord& rec = burnout().record;
+    PathButtonsView v = build_path_buttons(rec, /*depth_mode=*/0, /*depth_value=*/2);
+    CHECK(v.within_label == "Within 2 scores");
+    REQUIRE(v.buttons.size() == 4);
+
+    CHECK(v.buttons[0].path == &rec.best_path());
+    CHECK(v.buttons[0].group == PathButtonView::Group::Optimal);
+    CHECK(v.buttons[0].notation == "3- 1 2");
+    CHECK(v.buttons[0].title == "378,315" + kDot + "3- 1 2");
+    CHECK(v.buttons[0].detail == "hardest squeeze 163.0 ms");
+    CHECK(v.buttons[0].detail_warn);
+
+    CHECK(v.buttons[1].group == PathButtonView::Group::Within);
+    CHECK(v.buttons[1].title == "378,175" + kDot + "0 4 1");
+    CHECK(v.buttons[1].detail.empty());
+    CHECK(v.buttons[2].group == PathButtonView::Group::Within);
+    CHECK(v.buttons[2].title == "378,075" + kDot + "2 1 2");
+
+    CHECK(v.buttons[3].group == PathButtonView::Group::AllZero);
+    CHECK(v.buttons[3].title == "375,955" + kDot + "0 0 0 0");
+    CHECK(v.buttons[3].detail == "2,360 below optimal");
+    CHECK_FALSE(v.buttons[3].detail_warn);
+
+    CHECK(within_label(0, 1) == "Within 1 score");
+    CHECK(within_label(1, 5000) == "Within 5,000 points");
+    CHECK(within_label(1, 1) == "Within 1 point");
+}
+
+TEST_CASE("multiplier squeeze: Burnout's one squeeze and the fold's summary") {
+    std::vector<MultSqueezeView> v = build_multsqueezes(burnout().record);
+    REQUIRE(v.size() == 1);
+    CHECK(v[0].label == "2x   (+15 pts):   [Red - YellowCym]");
+    CHECK(v[0].howto == "Hit [Red] first.");
+    CHECK(v[0].points == 15);
+    CHECK(multsqueeze_summary(v) == "+15");
+    CHECK(multsqueeze_summary({}) == "none");
+    std::vector<MultSqueezeView> three(3, v[0]);
+    CHECK(multsqueeze_summary(three) == "3" + kDot + "+45");
+}
+
+TEST_CASE("PathsTabUi: one row open at a time, expand and collapse all") {
+    PathsTabUi ui;
+    ui.reset(3);
+    CHECK(ui.act_open == std::vector<char>{1, 0, 0});
+    CHECK(ui.backends_open == std::vector<char>{0, 0, 0});
+    CHECK_FALSE(ui.all_open());
+
+    ui.click_row(2);  // opens row 3 alone
+    CHECK(ui.act_open == std::vector<char>{0, 0, 1});
+    ui.click_row(2);  // closes it again
+    CHECK(ui.act_open == std::vector<char>{0, 0, 0});
+
+    ui.set_all(true);
+    CHECK(ui.all_open());
+    ui.click_row(1);  // an open row closes and leaves the others open
+    CHECK(ui.act_open == std::vector<char>{1, 0, 1});
+    ui.set_all(false);
+    CHECK(ui.act_open == std::vector<char>{0, 0, 0});
+    ui.click_row(7);  // past the end: nothing
+    CHECK(ui.act_open == std::vector<char>{0, 0, 0});
+
+    PathsTabUi empty;
+    empty.reset(0);
+    CHECK_FALSE(empty.all_open());
+}
+
+TEST_CASE("PathsTabCache: folds reset for a new path, not for a display setting") {
+    const AnalysisResult& ar = burnout();
+    const HydraRecord& rec = ar.record;
+    const SongTiming& timing = ar.song.timing();
+    const Path& best = rec.best_path();
+    PathsTabCache cache;
+
+    cache.details(best, rec, 1, &timing, 70.0, std::nullopt, core::default_rules());
+    REQUIRE(cache.ui().act_open.size() == 3);
+    CHECK(cache.ui().act_open[0] == 1);
+    cache.ui().set_all(true);
+
+    // A display setting rebuilds the rows but keeps what is unfolded.
+    cache.details(best, rec, 1, &timing, 70.0, 30.0, core::default_rules());
+    CHECK(cache.ui().all_open());
+    cache.details(best, rec, 1, &timing, 70.0, 30.0, core::default_rules(), 126000.0);
+    CHECK(cache.ui().all_open());
+    CHECK(cache.details_builds() == 3);
+
+    // Another path starts fresh: first row open, the rest folded.
+    const Path& other = *rec.all_paths()[1];
+    cache.details(other, rec, 1, &timing, 70.0, 30.0, core::default_rules(), 126000.0);
+    CHECK(cache.ui().act_open.size() == other.walk_activations().size());
+    CHECK(cache.ui().act_open[0] == 1);
+    CHECK_FALSE(cache.ui().all_open());
+
+    // The path buttons: once per record generation and score range.
+    for (int frame = 0; frame < 5; ++frame) cache.buttons(rec, 1, 0, 2);
+    CHECK(cache.buttons_builds() == 1);
+    cache.buttons(rec, 1, 0, 3);
+    CHECK(cache.buttons_builds() == 2);
+    cache.buttons(rec, 2, 0, 3);
+    CHECK(cache.buttons_builds() == 3);
 }

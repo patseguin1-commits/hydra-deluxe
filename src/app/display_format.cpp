@@ -26,4 +26,10 @@ std::string format_ms(double ms) {
     return buf;
 }
 
+std::string format_ms_spaced(double ms) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.1f ms", ms);
+    return buf;
+}
+
 }  // namespace hydra::app
