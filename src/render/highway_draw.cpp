@@ -347,10 +347,7 @@ std::vector<DrawCommand> build_highway_draws(const TrackState& state, const Prev
             } else {
                 pad_x(cfg, g.pad, x1, x2);
             }
-            // Hydra departs from Onyx here: Onyx shrinks every ghost, kicks
-            // included, but a shrunken kick reads as a bar that stops short
-            // of the highway edge. A ghost kick shows only the overlay.
-            if (g.velocity == Velocity::Ghost && !g.kick) {
+            if (g.velocity == Velocity::Ghost) {
                 const float cx = x1 + (x2 - x1) * 0.5f;
                 x1 = cx + (x1 - cx) * kGhostWidthScale;
                 x2 = cx + (x2 - cx) * kGhostWidthScale;
