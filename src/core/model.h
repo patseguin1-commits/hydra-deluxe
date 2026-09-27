@@ -441,6 +441,12 @@ struct Path {
     // skips == 0. False for a path with no activations.
     bool is_allzero() const;
 
+    // The chart's base score: every note at 1x with no Star Power (50 a gem,
+    // 65 a cymbal, doubled for a ghost or accent). Clone Hero divides by
+    // this for the average multiplier and multiplies it for star cutoffs.
+    // Every path hits every note, so it is the same on every path.
+    int64_t chart_base_score() const;
+
     // Points per scored note, on average. 0.0 for a path with no scoring
     // notes, instead of dividing by zero.
     double avg_mult() const;
