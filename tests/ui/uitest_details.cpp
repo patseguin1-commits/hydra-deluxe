@@ -85,58 +85,6 @@ void test_cap_switch(ImGuiTestContext* ctx) {
     }
 }
 
-// The backend limit is a display-only setting: it filters the Backends tables
-// and nothing else, so flipping it must persist to the INI without touching
-// the stored record. Also pins the renamed "Path limit" status line.
-// (Task 10 moves the Backend limit control to the Paths tab and re-creates
-// this test there; the merge removes this copy and its run-order entry.)
-void test_backend_limit(ImGuiTestContext* ctx) {
-    Harness& h = harness(ctx);
-    reset_app(h);
-    scan_library(ctx);
-    if (ctx->IsError()) return;
-    open_details(ctx, 0);
-    if (ctx->IsError()) return;
-    ctx->ItemClick(analyze_button_ref(h).c_str());
-    IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
-    IM_CHECK(h.app->viewed.record.has_value());
-
-    // The stored-result panel says "Path limit", not the old "Limit timings".
-    IM_CHECK(wait_until(
-        ctx, [&] { return visible_text(h).find("Path limit:") != std::string::npos; }, 5));
-
-    // Off by default, and the number box is inert until it is ticked.
-    IM_CHECK(!h.app->settings.backendlimit_enabled);
-    IM_CHECK_EQ(h.app->settings.backendlimit_value, 50);
-    IM_CHECK((ctx->ItemInfo("**/##backendlimitvalue").ItemFlags &
-              ImGuiItemFlags_Disabled) != 0);
-
-    ctx->ItemClick("**/##backendlimit");
-    IM_CHECK(wait_until(ctx, [&] { return h.app->settings.backendlimit_enabled; }, 5));
-    IM_CHECK(hydra::app::Settings::load_file(h.ini_path).backendlimit_enabled);
-
-    ctx->ItemInputValue("**/##backendlimitvalue", 30);
-    IM_CHECK(wait_until(ctx, [&] { return h.app->settings.backendlimit_value == 30; }, 5));
-    IM_CHECK_EQ(hydra::app::Settings::load_file(h.ini_path).backendlimit_value, 30);
-    IM_CHECK(h.app->settings.backend_limit() == 30.0);
-
-    // The full engine window (500 ms) is reachable; beyond it clamps back.
-    ctx->ItemInputValue("**/##backendlimitvalue", 500);
-    IM_CHECK(wait_until(ctx, [&] { return h.app->settings.backendlimit_value == 500; }, 5));
-    ctx->ItemInputValue("**/##backendlimitvalue", 600);
-    IM_CHECK(wait_until(ctx, [&] { return h.app->settings.backendlimit_value == 500; }, 5));
-
-    // Display-only: the record the panel shows is still the analyzed one.
-    IM_CHECK(h.app->viewed.record.has_value());
-    IM_CHECK(h.app->view_row_status(0) == hydra::store::RecordStatus::Ready);
-
-    // Unticking turns the filter off again, and that persists too.
-    ctx->ItemClick("**/##backendlimit");
-    IM_CHECK(wait_until(ctx, [&] { return !h.app->settings.backendlimit_enabled; }, 5));
-    IM_CHECK(!hydra::app::Settings::load_file(h.ini_path).backendlimit_enabled);
-    IM_CHECK(!h.app->settings.backend_limit().has_value());
-}
-
 void test_dynamics(ImGuiTestContext* ctx) {
     Harness& h = harness(ctx);
     reset_app(h);
@@ -499,7 +447,6 @@ const std::vector<TestEntry>& details_tests() {
     static const std::vector<TestEntry> entries = {
         {"analyze", test_analyze},
         {"cap-switch", test_cap_switch},
-        {"backend-limit", test_backend_limit},
         {"dynamics", test_dynamics},
         {"dynamics-stored", test_dynamics_stored},
         {"stars", test_stars},
