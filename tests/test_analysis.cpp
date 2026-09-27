@@ -232,21 +232,22 @@ std::vector<ScanItem> fake_items(int n) {
 }  // namespace
 
 TEST_CASE("run_batch: cancel stops running searches within seconds") {
-    // A stand-in for a heavy chart: it runs for a minute, reporting progress
-    // every millisecond the way the engine's sweep does. Only a progress
-    // callback that throws on cancel can stop it early.
+    // A stand-in for a heavy chart: it runs for 10 s, reporting progress every
+    // millisecond the way the engine's sweep does. Only a progress callback
+    // that throws on cancel can stop it early. 10 s is twice the 5 s pass
+    // line, so a broken cancel still fails, in about 40 s rather than minutes.
     std::atomic<int> started{0};
     BatchCallbacks callbacks;
     callbacks.analyze = [&started](const std::string&, const AnalysisSettings&,
                                    const std::function<void(float)>& on_progress)
         -> AnalysisResult {
         ++started;
-        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         while (std::chrono::steady_clock::now() < until) {
             if (on_progress) on_progress(0.5f);
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        throw std::runtime_error("the fake search ran its full minute");
+        throw std::runtime_error("the fake search ran its full 10 s");
     };
     std::atomic<bool> cancel{false};
     callbacks.cancel = &cancel;
@@ -274,7 +275,7 @@ TEST_CASE("run_batch: cancel stops running searches within seconds") {
     canceller.join();
 
     CHECK(started.load() == 4);  // no chart started after the cancel
-    CHECK(seconds < 5.0);        // without the cancel check this takes 60 s
+    CHECK(seconds < 5.0);        // without the cancel check this takes 40 s
     CHECK(errors == 0);          // a stopped search is not a failure...
     CHECK(results == 0);         // ...and not a result
     CHECK(store.counts().second == 0);

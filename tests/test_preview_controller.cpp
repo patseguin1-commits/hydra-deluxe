@@ -170,10 +170,13 @@ TEST_CASE("switching paths builds the new overlay off the UI thread") {
     CHECK(pc.overlay_path_key() == before);
     CHECK_FALSE(pc.loading());
 
-    // The new overlay lands on a later poll.
-    for (int i = 0; i < 1200 && pc.overlay_path_key().rfind(best_key, 0) != 0; ++i) {
+    // The new overlay lands on a later poll. A failed build sets the error,
+    // and then nothing more will land, so stop waiting.
+    for (int i = 0; i < 1200 && pc.overlay_path_key().rfind(best_key, 0) != 0 && !pc.has_error();
+         ++i) {
         pc.poll();
         Sleep(10);
     }
+    CHECK_FALSE(pc.has_error());
     CHECK(pc.overlay_path_key().rfind(best_key, 0) == 0);
 }

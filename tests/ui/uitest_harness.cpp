@@ -288,6 +288,10 @@ void reset_app(Harness& h, const std::string& rules_text) {
 bool wait_until(ImGuiTestContext* ctx, const std::function<bool()>& pred, double seconds) {
     auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
     while (!pred()) {
+        // The test has already failed (a click found no such item, a check
+        // failed): nothing it waits on will happen, so don't sit out the
+        // timeout.
+        if (ctx->IsError()) return false;
         if (std::chrono::steady_clock::now() > deadline) return false;
         ctx->Yield();
         // Fast mode spins frames flat out; a short nap keeps the worker

@@ -102,7 +102,8 @@ inline Harness& harness(ImGuiTestContext* ctx) {
 }
 
 // Yield frames until pred() holds or `seconds` of wall-clock pass. Jobs run
-// on real threads, so the wait is wall-clock, not frame-count.
+// on real threads, so the wait is wall-clock, not frame-count. Returns false
+// at once when the test has already failed (ctx->IsError()).
 bool wait_until(ImGuiTestContext* ctx, const std::function<bool()>& pred, double seconds);
 
 // True while any background job (scan, batch, analyze, report, DM fetch/report)
