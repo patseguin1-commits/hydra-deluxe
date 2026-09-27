@@ -27,7 +27,9 @@ settings the analysis ran with. Its key is the chart, the chart mode, the SP
 cap, and the analysis settings (the ms limit and the score range). A chart
 keeps one record per settings combination; records share their stored paths,
 so a path found under several combinations is stored once. A record is stale
-unless both hold: this build's version stamped it, and its stored paths are in
+unless both hold: it carries a results stamp this build accepts (a stamp that
+changes only when analysis output changes, not with every release; see
+src/store/stored_versions.h), and its stored paths are in
 this build's path-structure format under the rules in force. A lookup reports
 it as one of three statuses: not
 analyzed, stale, or ready. A listing returns only ready records, so a stale

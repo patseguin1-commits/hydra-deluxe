@@ -34,6 +34,7 @@
 #include "record_bytes.h"
 #include "search/pather.h"
 #include "store/record_store.h"
+#include "store/stored_versions.h"
 #include "store/serialize.h"
 
 using namespace hydra;
@@ -313,6 +314,53 @@ TEST_CASE("RecordStore maintenance: has_record, list_records, reindex") {
     store.add_row(stale);
     CHECK(store.counts().second == 2);
     CHECK_FALSE(store.has_record(RecordKey{"h2", "Expert Pro Drums, 2x Bass", at4}));
+}
+
+TEST_CASE("RecordStore results stamp: every accepted stamp reads Ready, others Stale") {
+    // The stamp is not the app version (ADR 0018). 1.8.3 stamped its app
+    // version on results identical to 1.8.2's, so both read Ready, through
+    // the C++ rule (get_record, get_summary) and its SQL twin (has_record).
+    CHECK(kResultsStamp.is_current("1.8.2"));
+    CHECK(kResultsStamp.is_current("1.8.3"));
+    CHECK(current_record_version() == std::string(kResultsStamp.written));
+
+    const CapQuery at4 = CapQuery::at(4);
+    HydraRecord record;
+    for (const std::string& path : corpus::chart_paths()) {
+        Song s = load_songpath(path, true, true);
+        if (s.is_empty()) continue;
+        try {
+            SearchSettings settings;
+            settings.sp_cap = 4;
+            settings.depth_mode = DepthMode::Scores;
+            settings.depth_value = 0;
+            record = analyze_chart(s, settings);
+        } catch (const ChartFileError&) {
+            continue;
+        }
+        break;
+    }
+    REQUIRE_FALSE(record.paths.empty());
+
+    RecordStore store(":memory:");
+    const struct {
+        const char* hash;
+        const char* stamp;
+        RecordStatus want;
+    } cases[] = {{"a", "1.8.2", RecordStatus::Ready},
+                 {"b", "1.8.3", RecordStatus::Ready},
+                 {"c", "1.8.1", RecordStatus::Stale},
+                 {"d", "0.0.0", RecordStatus::Stale}};
+    for (const auto& c : cases) {
+        CAPTURE(c.stamp);
+        const RecordKey key{c.hash, "Expert Pro Drums, 2x Bass", at4};
+        PreparedRow row = prepare_row(key, record);
+        row.hyversion = c.stamp;
+        store.add_row(row);
+        CHECK(store.get_record(key).status == c.want);
+        CHECK(store.get_summary(key).status == c.want);
+        CHECK(store.has_record(key) == (c.want == RecordStatus::Ready));
+    }
 }
 
 namespace {
@@ -1418,12 +1466,13 @@ TEST_CASE("a file store runs in WAL mode with an index on chart names") {
 TEST_CASE("save_analysis writes the song, the result and the count together") {
     RecordStore store(":memory:");
     const RecordKey key{"h", "mode", CapQuery::at(4)};
-    const DynamicsEntry count{DynamicsKey{"h", "Expert", true}, {1, 2, 3}, 7};
+    const DynamicsEntry count{DynamicsKey{"h", "Expert", true}, {1, 2, 3},
+                              kDynamicsCountStamp.written};
     store.save_analysis("h", "Song", "Artist", "Charter", fixture().song,
                         prepare_row(key, at_cap(4)), count);
     CHECK(store.counts() == std::pair<int64_t, int64_t>{1, 1});
     CHECK(store.get_record(key).status == RecordStatus::Ready);
-    CHECK(store.get_dynamics(count.key, 7) == std::optional<std::vector<uint8_t>>(count.blob));
+    CHECK(store.get_dynamics(count.key) == std::optional<std::vector<uint8_t>>(count.blob));
 
     // No count (the parse dropped the 2x kicks): the song and result still land.
     const RecordKey key2{"h2", "mode", CapQuery::at(4)};

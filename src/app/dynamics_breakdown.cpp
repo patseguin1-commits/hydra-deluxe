@@ -122,7 +122,6 @@ DynamicsBreakdown count_dynamics(const Song& song) {
 
 namespace {
 
-constexpr uint8_t kDynamicsBlobVersion = 1;
 constexpr size_t kRowCount = static_cast<size_t>(DynamicsRow::Count);  // 9
 // version(1) + dynamics_enabled(1) + 9 rows * 3 fields * 4 bytes = 110
 constexpr size_t kDynamicsBlobSize = 1 + 1 + kRowCount * 3 * 4;
@@ -146,7 +145,7 @@ uint32_t read_u32_le(const uint8_t* p) {
 std::vector<uint8_t> encode_dynamics(const DynamicsBreakdown& b) {
     std::vector<uint8_t> out;
     out.reserve(kDynamicsBlobSize);
-    out.push_back(kDynamicsBlobVersion);
+    out.push_back(store::kDynamicsBlobStamp.written);
     out.push_back(b.dynamics_enabled ? 1 : 0);
     for (size_t i = 0; i < kRowCount; ++i) {
         write_u32_le(out, static_cast<uint32_t>(b.rows[i].ghost));
@@ -158,7 +157,7 @@ std::vector<uint8_t> encode_dynamics(const DynamicsBreakdown& b) {
 
 std::optional<DynamicsBreakdown> decode_dynamics(const std::vector<uint8_t>& blob) {
     if (blob.size() < kDynamicsBlobSize) return std::nullopt;
-    if (blob[0] != kDynamicsBlobVersion) return std::nullopt;
+    if (!store::kDynamicsBlobStamp.is_current(blob[0])) return std::nullopt;
 
     DynamicsBreakdown b;
     b.dynamics_enabled = blob[1] != 0;
@@ -183,14 +182,14 @@ store::DynamicsKey dynamics_store_key(const std::string& md5, Difficulty difficu
 
 std::optional<DynamicsBreakdown> load_stored_dynamics(store::RecordStore& store,
                                                       const store::DynamicsKey& key) {
-    auto blob = store.get_dynamics(key, kDynamicsCountVersion);
+    auto blob = store.get_dynamics(key);
     if (!blob) return std::nullopt;
     return decode_dynamics(*blob);
 }
 
 void save_dynamics(store::RecordStore& store, const store::DynamicsKey& key,
                    const DynamicsBreakdown& breakdown) {
-    store.put_dynamics(key, encode_dynamics(breakdown), kDynamicsCountVersion);
+    store.put_dynamics(key, encode_dynamics(breakdown), store::kDynamicsCountStamp.written);
 }
 
 std::optional<store::DynamicsEntry> dynamics_entry_from_analysis(
@@ -198,7 +197,8 @@ std::optional<store::DynamicsEntry> dynamics_entry_from_analysis(
     if (!bass2x) return std::nullopt;  // the 2x kicks were dropped; the counts would be incomplete
     try {
         return store::DynamicsEntry{dynamics_store_key(md5, difficulty, pro),
-                                    encode_dynamics(count_dynamics(song)), kDynamicsCountVersion};
+                                    encode_dynamics(count_dynamics(song)),
+                                    store::kDynamicsCountStamp.written};
     } catch (...) {
         // Best effort: never block the analysis record.
         return std::nullopt;

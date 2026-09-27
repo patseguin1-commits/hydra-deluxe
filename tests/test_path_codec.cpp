@@ -251,7 +251,7 @@ TEST_CASE("path codec: node payloads are flat and content-addressed") {
 
     // A malformed payload is refused, not misread.
     std::vector<uint8_t> bad_version = payload;
-    bad_version[0] = static_cast<uint8_t>(kPathNodeFormatVersion + 1);
+    bad_version[0] = static_cast<uint8_t>(kPathFormatStamp.written + 1);
     CHECK_THROWS_AS(decode_path_node(bad_version), SerializeError);
     std::vector<uint8_t> truncated(payload.begin(), payload.begin() + 6);
     CHECK_THROWS_AS(decode_path_node(truncated), SerializeError);
@@ -308,7 +308,7 @@ TEST_CASE("path codec: a missing node or a bad structure blob throws") {
 
     // A structure blob from another format version, and a truncated one.
     FlatRecord future = flat;
-    future.structure[0] = static_cast<uint8_t>(kPathStructureFormatVersion + 1);
+    future.structure[0] = static_cast<uint8_t>(kPathFormatStamp.written + 1);
     CHECK_THROWS_AS(rebuild_record(future), SerializeError);
 
     // Versions 1, 2 and 3 are real old versions, not just "some other
@@ -339,8 +339,8 @@ TEST_CASE("path codec: a missing node or a bad structure blob throws") {
     // The current version is 6, and the unmodified flat record -- still at
     // that version -- round-trips through rebuild_record without throwing,
     // rules fingerprint included.
-    CHECK(kPathStructureFormatVersion == 6);
-    CHECK(flat.structure[0] == static_cast<uint8_t>(kPathStructureFormatVersion));
+    CHECK(kPathFormatStamp.written == 6);
+    CHECK(flat.structure[0] == static_cast<uint8_t>(kPathFormatStamp.written));
     HydraRecord rebuilt = rebuild_record(flat);
     CHECK(rebuilt.rules_fingerprint == rec.rules_fingerprint);
     CHECK(rebuilt.paths.size() == rec.paths.size());

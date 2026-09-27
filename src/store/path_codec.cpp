@@ -256,7 +256,7 @@ Path read_tree_entry(BinaryReader& r, const PathNodeLookup& lookup) {
 
 std::vector<uint8_t> encode_path_node(const Path& path) {
     BinaryWriter w;
-    w.u32(kPathNodeFormatVersion);
+    w.u32(kPathFormatStamp.written);
     w.u32(static_cast<uint32_t>(path.activations.size()));
     for (const Activation& a : path.activations) write_activation(w, a);
     return std::move(w.bytes);
@@ -264,10 +264,10 @@ std::vector<uint8_t> encode_path_node(const Path& path) {
 
 Path decode_path_node(const std::vector<uint8_t>& payload) {
     BinaryReader r(payload);
-    // Only the current node version is readable. An older node is reachable
+    // Only a current path format is readable. An older node is reachable
     // only through an older structure, and the store never decodes one of
     // those (structure_is_current in record_store.cpp).
-    if (r.u32() != kPathNodeFormatVersion)
+    if (!kPathFormatStamp.is_current(r.u32()))
         throw SerializeError("unsupported path node format version");
 
     Path path;
@@ -307,9 +307,9 @@ FlatRecord flatten_record(const HydraRecord& record) {
     std::unordered_map<std::string, size_t> seen;
 
     BinaryWriter w;
-    w.u32(kPathStructureFormatVersion);
+    w.u32(kPathFormatStamp.written);
     // Right after the version, so the store can compare version and rules
-    // as one fixed 12-byte head in SQL (record_store.cpp kRowReadySql).
+    // off a fixed 12-byte head in SQL (record_store.cpp row_ready_sql).
     w.u64(record.rules_fingerprint);
     w.opt_f64(record.ms_limit);
     w.opt_i32(record.sp_cap);
@@ -340,8 +340,7 @@ FlatRecord flatten_record(const HydraRecord& record) {
 HydraRecord rebuild_record(const std::vector<uint8_t>& structure,
                            const PathNodeLookup& lookup) {
     BinaryReader r(structure);
-    uint32_t version = r.u32();
-    if (version != kPathStructureFormatVersion)
+    if (!kPathFormatStamp.is_current(r.u32()))
         throw SerializeError("unsupported path structure format version");
 
     HydraRecord record;

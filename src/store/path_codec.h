@@ -40,34 +40,13 @@
 
 #include "core/model.h"
 #include "store/serialize.h"
+#include "store/stored_versions.h"
 
 namespace hydra::store {
 
-// Bumped when a node payload's layout changes. Version 1 held activations in
-// the old whole-record blob's version 3 layout; version 2 added deact_tick;
-// version 3 added clamp_tick; version 4 added sqout_tick and
-// collected_phrase_ticks (ADR 0014). Version 5 is the version 4 byte layout,
-// but every chord string is the lane-spelled Chord::code instead of the old
-// lookup-table code (ADR 0015).
-// Version 6 (record format v7, docs/adr/0017) is the activations alone:
-// no squeezes, no totals, and no presence byte on the six always-set fields.
-// Only version 6 is written, and only version 6 is decoded. An older node can
-// be reached only through an older structure, and the store never decodes
-// one of those (see structure_is_current in record_store.cpp), so the old read paths
-// are dead.
-constexpr uint32_t kPathNodeFormatVersion = 6;
-
-// Bumped when the structure blob's layout changes, and also when the node
-// layout it points at changes. Version 3 is the same byte layout as version
-// 2, but a version-3 structure references node payloads in node format 3
-// (activations carry clamp_tick). Version 4 puts the u64 rules fingerprint
-// right after the version, and references node format 4. Version 5 is the
-// version 4 layout referencing node format 5. This version (and,
-// from version 4, the fingerprint after it) is what the store's Ready rule
-// reads off a stored row, so bumping the node layout means bumping this too.
-// Version 6 adds the record's multiplier squeezes after the header and each
-// root's totals after its tree entry, and references node format 6.
-constexpr uint32_t kPathStructureFormatVersion = 6;
+// The structure blob and every node payload start with one u32: the path
+// format, kPathFormatStamp in store/stored_versions.h. Both layouts share
+// that one number, so a change to either bumps it once.
 
 // The 128-bit content hash of a node payload, raw. The structure blob stores
 // these 16 bytes; path_hash() renders the same value as lowercase hex.

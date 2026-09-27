@@ -16,6 +16,7 @@
 
 #include "parse/song.h"
 #include "store/record_store.h"
+#include "store/stored_versions.h"
 
 namespace hydra {
 namespace app {
@@ -67,27 +68,15 @@ std::optional<DynamicsBreakdown> decode_dynamics(const std::vector<uint8_t>& blo
 // the "2x kick" row is known even while the "2x Bass" box is off.
 constexpr bool kDynamicsParseBass2x = true;
 
-// The stamp saved on every stored dynamics row. A row with any other stamp
-// reads as missing, so the Dynamics tab recounts it in the background on the
-// next view and saves it again under this stamp.
-//
-// BUMP THIS BY HAND (add 1) whenever the counting in count_dynamics, or the
-// parser that feeds it, changes what any chart counts: src/parse/song.cpp
-// (the .mid, .chart and .sng loaders), src/parse/midi.cpp and
-// src/parse/srb.cpp. It is deliberately NOT the app version: a release that
-// leaves counting alone keeps every stored row. It does not include the
-// hydra_rules.ini fingerprint either: the rules move activation marks, never
-// which notes a chart has or their velocities.
-//
-// 0 = rows saved before the stamp existed. 1 = the first stamp (Task 13).
-inline constexpr int kDynamicsCountVersion = 1;
+// Stored counts carry store::kDynamicsCountStamp and their blobs start with
+// store::kDynamicsBlobStamp (store/stored_versions.h says when to bump each).
 
-// The stored count for this key, or nullopt when there is none, it carries
-// another stamp, or it fails to decode. The caller then recounts.
+// The stored count for this key, or nullopt when there is none, its stamp
+// isn't current, or it fails to decode. The caller then recounts.
 std::optional<DynamicsBreakdown> load_stored_dynamics(store::RecordStore& store,
                                                       const store::DynamicsKey& key);
 
-// Saves a count under this key, stamped kDynamicsCountVersion. Throws on a
+// Saves a count under this key, stamped kDynamicsCountStamp.written. Throws on a
 // store failure.
 void save_dynamics(store::RecordStore& store, const store::DynamicsKey& key,
                    const DynamicsBreakdown& breakdown);

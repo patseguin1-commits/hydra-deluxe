@@ -296,7 +296,7 @@ TEST_CASE("update_dynamics recounts a stored row with an older count stamp") {
         library_entry(0).md5, app->settings.difficulty(), app->settings.view_prodrums);
     // A row counted before the last bump of the counter.
     app->store->put_dynamics(key, hydra::app::encode_dynamics(hydra::app::DynamicsBreakdown{}),
-                             hydra::app::kDynamicsCountVersion - 1);
+                             hydra::store::kDynamicsCountStamp.written - 1);
 
     app->update_dynamics();
 

@@ -6,16 +6,12 @@
 #include <map>
 #include <stdexcept>
 
-#include "core/version.h"
 #include "store/serialize.h"
+#include "store/stored_versions.h"
 
 namespace hydra::store {
 
 namespace {
-
-// Stamps every stored row; a mismatch marks the row stale (see Candidate).
-// Single-sourced from CMake's project version.
-constexpr const char* kHydraVersion = HYDRA_VERSION;
 
 // RAII wrapper so every query site finalizes even on an early throw. Movable
 // but not copyable: a copy would finalize the same handle twice. Moving lets a
@@ -242,50 +238,56 @@ int bind_lens(sqlite3_stmt* s, int idx, const Lens& lens) {
     return idx + 4;
 }
 
-// The first 12 bytes a structure blob starts with: the u32 structure format,
-// then the u64 rules fingerprint (path_codec.cpp flatten_record).
+// The first 12 bytes a structure blob starts with: the u32 path format, then
+// the u64 rules fingerprint (path_codec.cpp flatten_record), little-endian.
 constexpr int kStructureHeadBytes = 12;
 
-std::vector<uint8_t> structure_head_for(uint64_t rules_fingerprint) {
-    std::vector<uint8_t> b(kStructureHeadBytes);
-    for (int i = 0; i < 4; ++i)
-        b[static_cast<size_t>(i)] =
-            static_cast<uint8_t>(kPathStructureFormatVersion >> (8 * i));
-    for (int i = 0; i < 8; ++i)
-        b[static_cast<size_t>(4 + i)] = static_cast<uint8_t>(rules_fingerprint >> (8 * i));
+uint64_t read_le(const std::vector<uint8_t>& b, size_t at, int bytes) {
+    uint64_t v = 0;
+    for (int i = 0; i < bytes; ++i) v |= static_cast<uint64_t>(b[at + i]) << (8 * i);
+    return v;
+}
+std::vector<uint8_t> write_le(uint64_t v, int bytes) {
+    std::vector<uint8_t> b(static_cast<size_t>(bytes));
+    for (int i = 0; i < bytes; ++i) b[static_cast<size_t>(i)] = static_cast<uint8_t>(v >> (8 * i));
     return b;
 }
 
-// Is this row's stored path tree in the layout this build reads, analyzed
+// Is this row's stored path tree in a path format this build reads?
+bool layout_is_current(const std::vector<uint8_t>& structure_head) {
+    return structure_head.size() >= 4 &&
+           kPathFormatStamp.is_current(static_cast<uint32_t>(read_le(structure_head, 0, 4)));
+}
+
+// Is this row's stored path tree in a path format this build reads, analyzed
 // under the rules this process runs, as a fixed-cap run or as an Auto run?
 // Takes the whole blob or just the substr(structure,1,12) a query selected.
 bool structure_is_current(const std::vector<uint8_t>& structure_head,
                           const core::RulesStamp& rules) {
     if (structure_head.size() < kStructureHeadBytes) return false;
-    for (uint64_t fingerprint : {rules.fixed, rules.autocap}) {
-        const std::vector<uint8_t> want = structure_head_for(fingerprint);
-        if (std::equal(want.begin(), want.end(), structure_head.begin())) return true;
-    }
-    return false;
+    const uint64_t fingerprint = read_le(structure_head, 4, 8);
+    return layout_is_current(structure_head) &&
+           (fingerprint == rules.fixed || fingerprint == rules.autocap);
 }
 
 // The facts that decide whether a row is readable and how it places among
 // the candidates for its chart and mode. rank_row is the only place C++ reads
-// them off a row; kRowReadySql below is the same rule for SQL.
+// them off a row; row_ready_sql below is the same rule for SQL.
 struct Candidate {
-    bool current = false;  // stamped by this build
+    bool current = false;  // stamped with this build's results version
     bool format = false;   // this build's path-structure format, analyzed
                            // under the rules this process runs
     int64_t result_id = 0;
-    // Readable: this build wrote it, in a layout this build reads, under
-    // these rules. Anything else is Stale: another version's bytes, or a path
-    // tree whose activations this build would read back half-empty.
+    // Readable: stamped with this results version, in a layout this build
+    // reads, under these rules. Anything else is Stale: another results
+    // version's bytes, or a path tree whose activations this build would read
+    // back half-empty.
     bool ready() const { return current && format; }
 };
 
 Candidate rank_row(const std::string& hyversion, const std::vector<uint8_t>& structure_head,
                    int64_t result_id, const core::RulesStamp& rules) {
-    return Candidate{hyversion == current_record_version(),
+    return Candidate{kResultsStamp.is_current(hyversion),
                      structure_is_current(structure_head, rules), result_id};
 }
 
@@ -301,14 +303,9 @@ struct StaleReasons {
 StaleReasons stale_reasons(const std::string& hyversion,
                            const std::vector<uint8_t>& structure_head,
                            const core::RulesStamp& rules) {
-    // The first four bytes are the layout; either fingerprint's head has the
-    // same four, so the fixed one serves to read them.
-    const std::vector<uint8_t> want = structure_head_for(rules.fixed);
-    const bool layout_current =
-        structure_head.size() >= kStructureHeadBytes &&
-        std::equal(want.begin(), want.begin() + 4, structure_head.begin());
+    const bool layout_current = layout_is_current(structure_head);
     StaleReasons why;
-    why.build = hyversion != current_record_version() || !layout_current;
+    why.build = !kResultsStamp.is_current(hyversion) || !layout_current;
     why.rules = layout_current && !structure_is_current(structure_head, rules);
     return why;
 }
@@ -319,18 +316,31 @@ StaleReasons stale_reasons(const std::string& hyversion,
 // opposite, so the rule has one SQL spelling. Both columns are NOT NULL, so
 // NOT never meets a NULL.
 //
-// Three bound parameters: the current version text, then the two 12-byte
-// structure heads this store accepts (format + the fixed-cap fingerprint,
-// format + the Auto fingerprint). bind_ready_params binds them and returns
-// the next free index.
-constexpr const char* kRowReadySql =
-    "(hyversion = ? AND substr(structure,1,12) IN (?, ?))";
+// Built from the same StampRule lists is_current reads, so the two spellings
+// cannot drift: every accepted results version, every accepted path format
+// (the first four structure bytes), and the two rules fingerprints (the next
+// eight). bind_ready_params binds them in that order and returns the next
+// free index.
+std::string placeholders(size_t n) {
+    std::string out;
+    for (size_t i = 0; i < n; ++i) out += i ? ", ?" : "?";
+    return out;
+}
+
+const std::string& row_ready_sql() {
+    static const std::string sql =
+        "(hyversion IN (" + placeholders(kResultsStamp.accepted.size()) +
+        ") AND substr(structure,1,4) IN (" + placeholders(kPathFormatStamp.accepted.size()) +
+        ") AND substr(structure,5,8) IN (?, ?))";
+    return sql;
+}
 
 int bind_ready_params(sqlite3_stmt* s, int idx, const core::RulesStamp& rules) {
-    bind_text(s, idx, current_record_version());
-    bind_blob(s, idx + 1, structure_head_for(rules.fixed));
-    bind_blob(s, idx + 2, structure_head_for(rules.autocap));
-    return idx + 3;
+    for (std::string_view v : kResultsStamp.accepted) bind_text(s, idx++, std::string(v));
+    for (uint32_t f : kPathFormatStamp.accepted) bind_blob(s, idx++, write_le(f, 4));
+    bind_blob(s, idx++, write_le(rules.fixed, 8));
+    bind_blob(s, idx++, write_le(rules.autocap, 8));
+    return idx;
 }
 
 // Does `a` beat `b`? This version before another, then this path format
@@ -414,7 +424,7 @@ void rollback_if_open(sqlite3* db) {
 // exact cap when there is one.
 std::string analyzed_filter(const CapQuery& cap) {
     std::string sql =
-        "chartmode=? AND " + std::string(kRowReadySql) + " AND " + lens_match("");
+        "chartmode=? AND " + row_ready_sql() + " AND " + lens_match("");
     if (cap.exact) sql += " AND sp_cap=?";
     else sql += " AND sp_cap>" + std::to_string(kCloneHeroSpCap);
     return sql;
@@ -472,7 +482,7 @@ PathSummary summarize_record(const HydraRecord& record) {
     return s;
 }
 
-std::string current_record_version() { return kHydraVersion; }
+std::string current_record_version() { return std::string(kResultsStamp.written); }
 
 PreparedRow prepare_row(const RecordKey& key, const HydraRecord& record) {
     if (!record.sp_cap)
@@ -675,18 +685,17 @@ void RecordStore::save_analysis(const std::string& hyhash, const std::string& re
     }
 }
 
-std::optional<std::vector<uint8_t>> RecordStore::get_dynamics(const DynamicsKey& key,
-                                                               int count_version) {
+std::optional<std::vector<uint8_t>> RecordStore::get_dynamics(const DynamicsKey& key) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    // A row with another stamp reads as missing, so the caller recounts it
-    // and put_dynamics restamps it.
+    // A row whose count stamp this build doesn't accept reads as missing, so
+    // the caller recounts it and put_dynamics restamps it.
     Stmt s = prepare(db_,
-        "SELECT blob FROM dynamics WHERE md5=? AND difficulty=? AND pro=? AND count_version=?");
+        "SELECT blob, count_version FROM dynamics WHERE md5=? AND difficulty=? AND pro=?");
     bind_text(s, 1, key.md5);
     bind_text(s, 2, key.difficulty);
     sqlite3_bind_int(s, 3, key.pro ? 1 : 0);
-    sqlite3_bind_int(s, 4, count_version);
     if (sqlite3_step(s) != SQLITE_ROW) return std::nullopt;
+    if (!kDynamicsCountStamp.is_current(sqlite3_column_int(s, 1))) return std::nullopt;
     return column_blob(s, 0);
 }
 
@@ -843,7 +852,7 @@ void RecordStore::write_row(const PreparedRow& row) {
     //     what is current, not against this row: a test writing a
     //     deliberately old-stamped row must not take the real rows with it,
     //     and this runs before the insert so the new row is untouched.
-    purge("hyhash=? AND chartmode=? AND NOT " + std::string(kRowReadySql),
+    purge("hyhash=? AND chartmode=? AND NOT " + row_ready_sql(),
           [&](sqlite3_stmt* s) {
               bind_text(s, 1, row.hyhash);
               bind_text(s, 2, row.chartmode);

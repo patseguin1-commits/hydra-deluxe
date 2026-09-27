@@ -157,7 +157,8 @@ struct PreparedRow {
 // record carries.
 PreparedRow prepare_row(const RecordKey& key, const HydraRecord& record);
 
-// The app version that produced a row. For
+// The results version this build stamps on a row and accepts (ADR 0018; not
+// the app version). For
 // the store and its own tests only -- production callers must not compare
 // version stamps themselves; ask a lookup for its RecordStatus instead.
 std::string current_record_version();
@@ -236,7 +237,7 @@ struct DynamicsKey {
 };
 
 // One dynamics count ready to store: its key, its encoded blob and its count
-// stamp (app::kDynamicsCountVersion). Built off the store by
+// stamp (kDynamicsCountStamp.written). Built off the store by
 // app::dynamics_entry_from_analysis, saved by RecordStore::save_analysis.
 struct DynamicsEntry {
     DynamicsKey key;
@@ -282,13 +283,13 @@ public:
                        const std::optional<DynamicsEntry>& dynamics);
 
     // Stores a dynamics-breakdown blob (INSERT OR REPLACE) under the caller's
-    // count stamp (app::kDynamicsCountVersion; go through app::save_dynamics).
+    // count stamp (kDynamicsCountStamp.written; go through app::save_dynamics).
     void put_dynamics(const DynamicsKey& key, const std::vector<uint8_t>& blob,
                       int count_version);
     // Returns the blob for this key, or nullopt when the row is missing or
-    // carries another count stamp (the caller then recounts it).
-    std::optional<std::vector<uint8_t>> get_dynamics(const DynamicsKey& key,
-                                                     int count_version);
+    // its count stamp isn't current (kDynamicsCountStamp; the caller then
+    // recounts it).
+    std::optional<std::vector<uint8_t>> get_dynamics(const DynamicsKey& key);
 
     // ---- reading ------------------------------------------------------
 
