@@ -548,12 +548,10 @@ PreviewDrainBox build_drain_box(const PreviewScene& scene, double now_ms) {
                       (running->sp_end_ms - now) / 1000.0);
     } else {
         box.header = "SP drain (if activated)";
-        // The engine's own SP-end call, from the playhead's tick.
-        const Timecode start = timing.timecode(now_tick);
-        const Timecode end =
-            timing.plusmeasure(start, sp_bars_to_measures(scene.sp_meter.cap));
+        // The cap at the bar time in force here, so it jumps exactly when the
+        // rate line does rather than blending in the sections ahead.
         std::snprintf(buf, sizeof buf, "full meter %.1f s",
-                      (end.ms() - start.ms()) / 1000.0);
+                      bar_ms * static_cast<double>(scene.sp_meter.cap) / 1000.0);
     }
     box.detail = buf;
     return box;
