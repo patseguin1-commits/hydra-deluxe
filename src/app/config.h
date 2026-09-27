@@ -84,11 +84,11 @@ struct Settings {
     // loud and clips, so the default sits well below it.
     int preview_volume = 40;
 
-    // The Star Power meter ceiling in bars. 4 is Clone Hero's rule (the
-    // default). nullopt is "Auto": raise the ceiling until the score settles
-    // (search/pather.h analyze_auto_cap). INI line: sp_cap=4 / sp_cap=auto.
-    // The pre-1.6 keys sp_cap_enabled/sp_cap_value are ignored on load.
-    std::optional<int> sp_cap = kCloneHeroSpCap;
+    // The Star Power meter ceiling in bars, at least 1. 4 is Clone Hero's
+    // rule (the default); other values are what-ifs. INI line: sp_cap=4.
+    // Hydra 1.8.4's sp_cap=auto, zero and junk load as 4. The pre-1.6 keys
+    // sp_cap_enabled/sp_cap_value are ignored on load.
+    int sp_cap = kCloneHeroSpCap;
 
     // Open the HTML path report in the browser as soon as a batch run builds
     // it; off by default (the finished modal offers an "Open report" button).

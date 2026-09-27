@@ -123,7 +123,7 @@ void AppState::select(const store::ChartLibraryEntry& entry) {
 void AppState::close_details() {
     show_details = false;
     // With the window gone there is nowhere to show an analysis' progress,
-    // and the search would keep burning CPU (up to the Auto budget) unseen.
+    // and the search would keep burning CPU unseen.
     // The main window reaps the job once the cancel lands.
     if (analyze_job && !analyze_job->finished()) analyze_job->cancel();
     // The audio device must stop, and the GPU and decode work must not keep

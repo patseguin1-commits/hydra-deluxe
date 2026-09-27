@@ -86,8 +86,9 @@ Settings Settings::load_file(const std::string& path) {
             if (v > 0) s.hit_window_ms = v;
         }
         else if (key == "sp_cap") {
-            if (value == "auto") s.sp_cap = std::nullopt;
-            else if (int v = std::atoi(value.c_str()); v >= 1) s.sp_cap = v;
+            // "auto" (Auto, removed 2026-09-27) is 0 to atoi, so it keeps
+            // the default 4, like zero and junk.
+            if (int v = std::atoi(value.c_str()); v >= 1) s.sp_cap = v;
         }
         else if (key == "auto_open_report") s.auto_open_report = (value == "1");
         else if (key == "dm_last_user") s.dm_last_user = value;
@@ -116,8 +117,7 @@ bool Settings::save_file(const std::string& path) const {
     f << "backendlimit_value=" << backendlimit_value << "\n";
     f << "hit_window_ms=" << hit_window_ms << "\n";
     f << "preview_volume=" << preview_volume << "\n";
-    if (sp_cap) f << "sp_cap=" << *sp_cap << "\n";
-    else f << "sp_cap=auto\n";
+    f << "sp_cap=" << sp_cap << "\n";
     f << "auto_open_report=" << (auto_open_report ? 1 : 0) << "\n";
     if (!dm_last_user.empty()) f << "dm_last_user=" << dm_last_user << "\n";
     for (const std::string& folder : chartfolders) f << "chartfolder=" << folder << "\n";
@@ -160,7 +160,7 @@ std::optional<double> Settings::backend_limit() const {
 }
 
 store::CapQuery Settings::cap_query() const {
-    return store::CapQuery::from_setting(sp_cap);
+    return store::CapQuery::at(sp_cap);
 }
 
 store::Lens Settings::lens() const {

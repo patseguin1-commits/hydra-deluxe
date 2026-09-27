@@ -286,21 +286,10 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
     view.footer.push_back(
         {"Leftover SP: " + std::to_string(path.leftover_sp) + ".", false});
 
-    // Which SP ceiling this result was found under
-    // (warning-colored when an Auto run ran out of
-    // time before the score settled).
-    if (record.sp_cap) {
-        std::string bars = std::to_string(*record.sp_cap);
-        if (record.sp_cap_converged) {
-            view.footer.push_back({"SP meter: " + bars + " bars.", false});
-        } else {
-            view.footer.push_back(
-                {"SP meter: " + bars +
-                     " bars. The search ran out of time before the score "
-                     "settled, so a higher meter may still score more.",
-                 true});
-        }
-    }
+    // Which SP ceiling this result was found under.
+    if (record.sp_cap)
+        view.footer.push_back(
+            {"SP meter: " + std::to_string(*record.sp_cap) + " bars.", false});
 
     return view;
 }

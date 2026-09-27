@@ -1,6 +1,6 @@
-// Analysis orchestration: one run at a fixed cap, the Auto SP-cap ladder,
-// and the dispatch between them. Discovery and the batch thread pool live
-// in app/analysis; this is only what produces a record for one chart.
+// Analysis orchestration: one run at the chosen SP cap. Discovery and the
+// batch thread pool live in app/analysis; this is only what produces a
+// record for one chart.
 
 #ifndef HYDRA_SEARCH_PATHER_H
 #define HYDRA_SEARCH_PATHER_H
@@ -24,9 +24,8 @@ struct SearchSettings {
     DepthMode depth_mode = DepthMode::Scores;
     int depth_value = 4;
     std::optional<double> ms_filter;
-    // The SP meter ceiling in bars (4 = Clone Hero's rule). nullopt is Auto:
-    // the ladder that raises the ceiling until the score settles.
-    std::optional<int> sp_cap = kCloneHeroSpCap;
+    // The SP meter ceiling in bars (4 = Clone Hero's rule).
+    int sp_cap = kCloneHeroSpCap;
     // Score fills by Clone Hero 1.0's spawn deadline instead of 1.1's flat 4
     // beats (FillDeadlineRule in search/graph.h). CLI-only: it is not part of
     // a record's identity, so a legacy run needs its own db (docs/adr/0010).
@@ -54,18 +53,15 @@ std::vector<Path> search_allzero(const ScoreGraph& graph,
 // deact_tick / sp_meter / skips / sqinouts stamped by the engine exactly as a
 // normal search would stamp them. Empty when the engine cannot realize the
 // set (an activation with under 2 bars, a fill it cannot spawn in time, a tick
-// that is not a fill node). settings.sp_cap must be a fixed cap (Auto is
-// rejected with std::invalid_argument). settings.depth_* and ms_filter are
+// that is not a fill node). settings.depth_* and ms_filter are
 // ignored: the search keeps everything and applies no timing filter, because
 // the caller asked for this path, not the best one.
 std::vector<Path> search_target(const Song& song, const SearchSettings& settings,
                                 const std::vector<int64_t>& act_ticks);
 
-// Full analysis for one chart. settings.sp_cap is the SP meter ceiling in
-// bars: 4 is Clone Hero's rule and runs exactly the classic single pass; any
-// other number runs a single pass at that ceiling; nullopt is Auto, the
-// self-settling ladder (settings.rules.auto_budget_s applies only there). Throws
-// hydra::ChartFileError when the song has no notes.
+// Full analysis for one chart: one pass at settings.sp_cap bars (4 is Clone
+// Hero's rule; any other number is a what-if). Throws hydra::ChartFileError
+// when the song has no notes.
 HydraRecord analyze_chart(const Song& song, const SearchSettings& settings,
                           const std::function<void(float)>& on_progress = {});
 

@@ -96,7 +96,7 @@ void usage() {
         "                     [--path <dump-or-target.json>] [--index N]\n"
         "                     [--out <json>] [--pretty] [--prodrums 0|1] [--bass2x 0|1]\n"
         "                     [--difficulty expert|hard|medium|easy]\n"
-        "  hydra_replay dump  --chart <file> --db <path> [--cap N|auto]\n"
+        "  hydra_replay dump  --chart <file> --db <path> [--cap N]\n"
         "                     [--ms N|off] [--depth-mode scores|points] [--depth N]\n"
         "                     [--out <json>] [--pretty] [--no-analyze] [--legacy-fills]\n"
         "  hydra_replay target --chart <file> --ticks \"t1,t2,...\" [--cap N]\n"
@@ -144,8 +144,11 @@ app::Settings settings_from(const Args& a) {
     s.view_difficulty =
         difficulty_name(difficulty_from_name(a.difficulty).value_or(Difficulty::Expert));
 
-    if (a.cap == "auto") s.sp_cap = std::nullopt;
-    else s.sp_cap = std::atoi(a.cap.c_str());
+    const int cap = std::atoi(a.cap.c_str());
+    if (cap < 1)
+        throw std::runtime_error("--cap takes a whole number of bars, 1 or more (4 is "
+                                 "Clone Hero's rule), not \"" + a.cap + "\"");
+    s.sp_cap = cap;
 
     if (a.ms == "off") s.mslimit_enabled = false;
     else { s.mslimit_enabled = true; s.mslimit_value = std::atoi(a.ms.c_str()); }
@@ -619,12 +622,6 @@ std::vector<int64_t> parse_ticks(const std::string& spec) {
 
 int cmd_target(const Args& a) {
     if (a.chart.empty()) { usage(); return 2; }
-    if (a.cap == "auto") {
-        std::fprintf(stderr,
-                     "target needs a fixed --cap: Auto has no single graph to "
-                     "price the path against.\n");
-        return 2;
-    }
     const app::Settings s = settings_from(a);
 
     const std::string hyhash = app::hash_chart_file(a.chart);
@@ -668,7 +665,7 @@ int cmd_target(const Args& a) {
     emit(json{{"hyhash", hyhash},
               {"chartmode", s.chartmode_key()},
               {"source", "target"},
-              {"sp_cap", cfg.sp_cap ? *cfg.sp_cap : -1},
+              {"sp_cap", cfg.sp_cap},
               {"ticks", ticks},
               {"result", json{{"score", best}, {"bestpath", bestpath}}},
               {"paths", paths_json(rec.all_paths(), song.timing())},

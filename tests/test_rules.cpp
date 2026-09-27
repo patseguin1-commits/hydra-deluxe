@@ -66,8 +66,6 @@ TEST_CASE("rules: defaults are the values Hydra always used") {
     CHECK(r.backend_leeway_ms == 3.0);
     CHECK(r.sqout_rule == core::SqOutRule::FirstNote);
     CHECK(r.max_tied_paths == 4);
-    CHECK(r.auto_cap_ladder == std::vector<int>{16, 32, 64, 128, 256, 512});
-    CHECK(r.auto_budget_s == 120.0);
     CHECK(r.fill_cooldown_measures == 4);
     CHECK(r.fill_max_distance_beats == 0.5);
     CHECK(r.fill_length_measures == 0.5);
@@ -87,8 +85,6 @@ TEST_CASE("rules: every key in the file is read") {
         "backend_leeway_ms = 5\n"
         "sqout_rule = whole_chord\n"
         "max_tied_paths = 2\n"
-        "auto_cap_ladder = 8, 24\n"
-        "auto_budget_s = 30\n"
         "fill_cooldown_measures = 2\n"
         "fill_max_distance_beats = 0.25\n"
         "fill_length_measures = 0.25\n"
@@ -96,8 +92,6 @@ TEST_CASE("rules: every key in the file is read") {
     CHECK(r.backend_leeway_ms == 5.0);
     CHECK(r.sqout_rule == core::SqOutRule::WholeChord);
     CHECK(r.max_tied_paths == 2);
-    CHECK(r.auto_cap_ladder == std::vector<int>{8, 24});
-    CHECK(r.auto_budget_s == 30.0);
     CHECK(r.fill_cooldown_measures == 2);
     CHECK(r.fill_max_distance_beats == 0.25);
     CHECK(r.fill_length_measures == 0.25);
@@ -127,8 +121,6 @@ TEST_CASE("rules: a bad value or an unknown key is an error that names the key")
     CHECK(message_for("bad2", "sqout_rule = every_note\n").find("sqout_rule") != std::string::npos);
     CHECK(message_for("bad3", "backend_leeway_ms = fast\n").find("backend_leeway_ms") !=
           std::string::npos);
-    CHECK(message_for("bad4", "auto_cap_ladder = 32, 16\n").find("auto_cap_ladder") !=
-          std::string::npos);
     // A typo is an unknown key, never a silent default.
     CHECK(message_for("bad5", "max_tied_path = 4\n").find("max_tied_path") != std::string::npos);
 }
@@ -138,11 +130,11 @@ TEST_CASE("rules: no rules value has the no-rules fingerprint") {
     // so no stored row can read Ready. That only works if no real rules
     // value ever hashes to it.
     CHECK(core::default_rules().fingerprint() != core::kNoRulesFingerprint);
-    CHECK(core::default_rules().auto_fingerprint() != core::kNoRulesFingerprint);
+    CHECK(core::default_rules().retired_auto_fingerprint() != core::kNoRulesFingerprint);
     core::Rules other = core::default_rules();
     other.max_tied_paths = 2;
     CHECK(other.fingerprint() != core::kNoRulesFingerprint);
-    CHECK(other.auto_fingerprint() != core::kNoRulesFingerprint);
+    CHECK(other.retired_auto_fingerprint() != core::kNoRulesFingerprint);
 }
 
 TEST_CASE("rules: whole_chord takes every note's SP doubling on a squeeze-out") {
@@ -213,26 +205,6 @@ TEST_CASE("rules: max_tied_paths caps the tied paths the engine keeps") {
     CHECK(charts > 0);
 }
 
-TEST_CASE("rules: the Auto ladder and budget come from the rules") {
-    SearchSettings settings;
-    settings.sp_cap = std::nullopt;
-    settings.rules.auto_cap_ladder = {8};
-    for (const std::string& path : corpus::chart_paths()) {
-        Song song = load_songpath(path, true, true);
-        if (song.is_empty()) continue;
-        HydraRecord record = analyze_chart(song, settings);
-        REQUIRE(record.sp_cap.has_value());
-        CHECK(*record.sp_cap == 8);
-        break;
-    }
-
-    // The budget has one home, the rules, and rides along with them.
-    app::Settings s;
-    s.sp_cap = std::nullopt;
-    s.rules.auto_budget_s = 30.0;
-    CHECK(s.to_analysis_settings().rules.auto_budget_s == std::optional<double>(30.0));
-}
-
 TEST_CASE("rules: the generated-fill values come from the rules") {
     Song by_default = fill_song();
     by_default.check_activations();
@@ -253,35 +225,32 @@ TEST_CASE("rules: the generated-fill values come from the rules") {
 
 // ---- the fingerprint's scope (docs/adr/0014, amended 2026-09-26) ----------
 
-TEST_CASE("rules: the time budget is in neither fingerprint") {
-    // A wall-clock limit can't make a result repeatable, so changing it must
-    // never make a stored record Stale (user decision 7).
-    core::Rules r = core::default_rules();
-    const uint64_t fixed = r.fingerprint();
-    const uint64_t autocap = r.auto_fingerprint();
-    r.auto_budget_s = 30.0;
-    CHECK(r.fingerprint() == fixed);
-    CHECK(r.auto_fingerprint() == autocap);
-    r.auto_budget_s = std::nullopt;
-    CHECK(r.fingerprint() == fixed);
-    CHECK(r.auto_fingerprint() == autocap);
+TEST_CASE("rules: the retired Auto keys are read and ignored") {
+    // Auto is gone (2026-09-27), but a hydra_rules.ini that still sets its
+    // two keys must keep loading: an error here would switch analysis off.
+    // Any value is accepted, since the keys no longer do anything.
+    core::Rules r = app::load_rules_file(write_rules("retired",
+        "auto_cap_ladder = 32, 16\n"
+        "auto_budget_s = banana\n"
+        "max_tied_paths = 2\n"));
+    CHECK(r.max_tied_paths == 2);
+    core::Rules expected = core::default_rules();
+    expected.max_tied_paths = 2;
+    CHECK(r.fingerprint() == expected.fingerprint());
 }
 
-TEST_CASE("rules: the Auto ladder is in the Auto fingerprint only") {
-    core::Rules r = core::default_rules();
-    const uint64_t fixed = r.fingerprint();
-    const uint64_t autocap = r.auto_fingerprint();
-    CHECK(fixed != autocap);
-
-    r.auto_cap_ladder = {8, 24};
-    CHECK(r.fingerprint() == fixed);
-    CHECK(r.auto_fingerprint() != autocap);
-
-    // Every other rule is in both.
+TEST_CASE("rules: the retired Auto fingerprint is what Hydra 1.8.4 stamped") {
+    // Pinned. The store finds the results Auto saved by this value, so it must
+    // equal 1.8.4's auto_fingerprint() under its default ladder. The fixed-cap
+    // value beside it is the one on every 4-bar row of a real 1.8.4 database,
+    // which proves the text both hash is unchanged.
+    CHECK(core::default_rules().fingerprint() == 0x70d2e96669604cf2ull);
+    CHECK(core::default_rules().retired_auto_fingerprint() == 0x5b610b430a43a4beull);
+    // Every rule is in it, as it was in auto_fingerprint().
     core::Rules ties = core::default_rules();
     ties.max_tied_paths = 2;
-    CHECK(ties.fingerprint() != fixed);
-    CHECK(ties.auto_fingerprint() != autocap);
+    CHECK(ties.retired_auto_fingerprint() != core::default_rules().retired_auto_fingerprint());
+    CHECK(ties.retired_auto_fingerprint() != ties.fingerprint());
 }
 
 TEST_CASE("rules: the default stamp is built once and matches a fresh record") {
@@ -289,22 +258,18 @@ TEST_CASE("rules: the default stamp is built once and matches a fresh record") {
     // every record built, which includes every record decoded.
     CHECK(&core::default_stamp() == &core::default_stamp());
     CHECK(core::default_stamp().fixed == core::default_rules().fingerprint());
-    CHECK(core::default_stamp().autocap == core::default_rules().auto_fingerprint());
+    CHECK(core::default_stamp().retired_auto ==
+          core::default_rules().retired_auto_fingerprint());
     CHECK(HydraRecord{}.rules_fingerprint == core::default_stamp().fixed);
     CHECK(core::RulesStamp::none().fixed == core::kNoRulesFingerprint);
-    CHECK(core::RulesStamp::none().autocap == core::kNoRulesFingerprint);
+    CHECK(core::RulesStamp::none().retired_auto == core::kNoRulesFingerprint);
 }
 
-TEST_CASE("rules: an Auto run is stamped with the ladder, a fixed cap without it") {
+TEST_CASE("rules: a run is stamped with the rules fingerprint at every cap") {
     SearchSettings settings;
-    settings.rules.auto_cap_ladder = {8};
-    settings.rules.auto_budget_s = std::nullopt;
     for (const std::string& path : corpus::chart_paths()) {
         Song song = load_songpath(path, true, true);
         if (song.is_empty()) continue;
-        settings.sp_cap = std::nullopt;
-        CHECK(analyze_chart(song, settings).rules_fingerprint ==
-              settings.rules.auto_fingerprint());
         settings.sp_cap = 8;
         CHECK(analyze_chart(song, settings).rules_fingerprint == settings.rules.fingerprint());
         settings.sp_cap = 4;

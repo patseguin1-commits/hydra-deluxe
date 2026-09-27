@@ -26,10 +26,8 @@ uint64_t fnv1a64(const std::string& s) {
 
 namespace {
 
-// Every field that can change a fixed-cap run's answer, one line each. The
-// Auto ladder and the Auto budget are not here: a fixed-cap run never climbs
-// the ladder, and the budget is a wall-clock limit no fingerprint can make
-// repeatable (docs/adr/0014, amended 2026-09-26).
+// Every field that can change a run's answer, one line each. The text is
+// frozen: changing it makes every stored result Stale (docs/adr/0014).
 std::string fixed_cap_text(const Rules& r) {
     std::string text;
     add_line(text, "backend_leeway_ms", r.backend_leeway_ms);
@@ -53,12 +51,12 @@ uint64_t hash_rules_text(const std::string& text) {
 
 uint64_t Rules::fingerprint() const { return hash_rules_text(fixed_cap_text(*this)); }
 
-uint64_t Rules::auto_fingerprint() const {
-    std::string text = fixed_cap_text(*this);
-    text += "auto_cap_ladder=";
-    for (int cap : auto_cap_ladder) text += std::to_string(cap) + ",";
-    text += "\n";
-    return hash_rules_text(text);
+uint64_t Rules::retired_auto_fingerprint() const {
+    // Byte for byte what 1.8.4's auto_fingerprint() hashed under the default
+    // ladder. Pinned by the test "rules: the retired Auto fingerprint is what
+    // Hydra 1.8.4 stamped".
+    return hash_rules_text(fixed_cap_text(*this) +
+                           "auto_cap_ladder=16,32,64,128,256,512,\n");
 }
 
 const Rules& default_rules() {

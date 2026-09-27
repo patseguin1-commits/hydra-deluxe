@@ -91,25 +91,17 @@ struct Outcome {
     std::exception_ptr error;
 };
 
-// Every SearchSettings field that can change a record. fingerprint() leaves
-// out the Auto ladder and the Auto budget. Only an Auto run reads those two,
-// so an Auto key adds auto_fingerprint() (the ladder) and the budget, and a
-// fixed-cap key leaves them out: a loop that clears the budget and one that
-// keeps the default then share one fixed-cap answer.
+// Every SearchSettings field that can change a record.
 inline void add_settings(std::ostringstream& k, const hydra::SearchSettings& s) {
     auto opt = [&k](const auto& o) {
         if (o) k << *o;
         else k << "none";
         k << '|';
     };
-    opt(s.sp_cap);
+    k << s.sp_cap << '|';
     k << static_cast<int>(s.depth_mode) << '|' << s.depth_value << '|';
     opt(s.ms_filter);
     k << s.legacy_fill_deadline << '|' << s.rules.fingerprint() << '|';
-    if (!s.sp_cap) {
-        k << s.rules.auto_fingerprint() << '|';
-        opt(s.rules.auto_budget_s);
-    }
 }
 
 }  // namespace detail
