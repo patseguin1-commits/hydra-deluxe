@@ -1,175 +1,219 @@
 # Hydra User Guide
 
-Here's a run-through of the Hydra UI. Screens are presented, then explained from top to bottom.
+This guide walks through Hydra's screen in the order you meet it. First the toolbar, then the analysis settings, then the library and its search. After that comes the song panel with its four tabs, then analyzing the whole library, and last the reports.
 
-> Note: the screenshots below are from the pre-1.4 UI. The layout is the
-> same, but details and styling have moved on.
+## The main screen
 
-## Main Screen
+Hydra has one main screen. The toolbar runs along the top. The **Analysis settings** bar sits under it. The library fills the rest of the window.
 
-View your song library and quickly reference optimal paths for songs.
+Click a song and the **song panel** opens beside the library. Drag the library's right edge to give either side more room. Hydra remembers the width.
 
-<p align="center"><img src="/docs/images/app_library.PNG"></p>
+When something goes wrong, a message appears under the toolbar. A plain notice fades by itself. A problem stays in orange until you dismiss it with its `X`.
 
-### Manage folders...
-Opens the song folders window, where you add and remove the folders Hydra scans.
+### Toolbar
 
-These will probably be your Clone Hero song folder(s). Hydra will find all charts in subfolders. You can add more than one folder; each one has a red `X` to remove it (with a confirmation, since removing a folder changes what the next scan finds).
+**`Manage folders... (N)`** opens the **Song folders** window. N is how many folders you have. Add your Clone Hero song folder (or any folder of charts) with `Add folder...`. Hydra finds every chart in its subfolders. Each folder has a red `X` to remove it, with a confirmation, because removing a folder changes what the next scan finds.
 
-Hydra recognizes `notes.mid`/`notes.chart` + `song.ini` folders, `.sng` archives, and the `.srb` bundles Clone Hero's built-in setlist ships with — so adding the game's own `Clone Hero_Data\StreamingAssets\songs` folder brings in the default songs too.
+Hydra reads `notes.mid`/`notes.chart` + `song.ini` folders, `.sng` archives, and the `.srb` bundles Clone Hero's built-in setlist ships with. Adding the game's own `Clone Hero_Data\StreamingAssets\songs` folder brings in the default songs too.
 
-### Scan charts / Refresh scan
-Starts a scan and updates what songs will be viewable in Hydra.
+**`Scan library`** reads your folders and updates the song list. A song needs a valid ini file to show up. A song that fails is skipped, and the scan window lists the problems when it finishes. Re-scans are fast: a chart whose file size and timestamp haven't changed is not read again. You can cancel a scan part-way; the old library stays as it was.
 
-If the folders are unchanged since your last scan, the button will say `Refresh scan`.
+Songs stay in the list until the next scan, even if you changed their files. After you add, remove or edit songs, scan again.
 
-Currently, songs require a valid ini file to show up. There may be a case where a song is playable in Clone Hero yet Hydra calls it invalid, but this should be very rare.
+**`Analyze library...`** analyzes many songs at once, in the background. While you are searching, the button reads **`Analyze search (N)...`** and only analyzes the N songs your search shows. See [Analyzing the whole library](#analyzing-the-whole-library).
 
-If a song fails, it'll be skipped. The progress window will list any problems when the scan completes. Once the scan is done, all successful songs will appear on the main screen!
+**`Compare with dmleaderboards...`** compares a player's leaderboard scores with your stored results. See [Reports](#reports).
 
-Songs that were scanned remain visible until the next scan, even if you did something to those chart files. If you add, remove, or edit songs, be sure to re-scan.
+**`Open path report`** opens the last path report in your browser. It appears once a report exists.
 
-Re-scans are fast: charts that haven't changed since the last scan are recognized by their file sizes and timestamps and don't need to be read again — only new or modified charts are. A scan can also be cancelled mid-way, which leaves the previous library untouched.
+## Analysis settings
 
-### Analyze library / Analyze search (N)
-Analyzes every chart in the library in one batch, using all but one of your CPU cores. If the search box is filtered, the button becomes `Analyze search (N)` and only analyzes the matching charts.
+The settings bar holds every setting that shapes an analysis. Each one applies to every song, not just the one you have open. A result is saved together with the settings it ran under. Change a setting and the library shows the results for the new settings. Change it back and the old results come back, with no re-analysis.
 
-A confirmation shows how many charts are about to be analyzed before anything starts — a full library can take a while — and the run can be cancelled at any time. Charts that already have a stored result are skipped unless `redo existing` is checked.
+While a batch runs, the bar is locked and says `Stop the batch to change these.` While one song analyzes, it says `Settings are locked while this song analyzes.`
 
-When a batch finishes, Hydra builds the **path index report**: a sortable, searchable HTML page of every analyzed chart's paths, squeeze timings, and scores. Use `Open path report` in the finished dialog (or the same button next to the search box any time after) to open it in your browser; check `Open automatically` if you'd rather it always opens itself.
+**Difficulty.** Which charted difficulty to analyze, path and preview: Expert, Hard, Medium or Easy.
 
-### View Options (Difficulty / Pro Drums / 2x Bass)
-Path/scoring analysis depends on difficulty, whether it's Pro Drums, and whether 2x bass is enabled. When you analyze a song, that analysis result is for that particular combination of options and it'll only be visible when that combination is selected. Pick the difficulty from the dropdown: Expert, Hard, Medium or Easy. 2x Bass only exists on Expert, so it is greyed out on the other three. The dmleaderboards comparison also needs Expert, because the leaderboard only carries Expert scores.
+**Pro Drums.** Analyze with cymbals and toms as separate notes, the way Clone Hero scores Pro Drums.
 
-For example, if you analyzed a song with 2x Bass enabled, but want to see what it would be with 1x bass, simply uncheck 2x Bass and analyze the song again. Whenever you re-check 2x Bass, _that_ analysis will come back.
+**2x Bass.** Include the chart's 2x kicks. 2x Bass only exists on Expert, so it is greyed out on the other difficulties.
 
-### Search
-Filter the song library by an input string. Songs whose title, artist, or charter match will be shown. `Ctrl+F` jumps to the search box.
+For example, say you analyzed a song with 2x Bass on and want to see it with 1x bass. Untick 2x Bass and analyze again. Tick it again and the 2x result comes back.
 
-### Compare dmleaderboards user
-Compares a [dmleaderboards.com](https://dmleaderboards.com) player's posted scores against your library's stored optimals. Pick a user from the searchable ladder (the last pick is remembered), and Hydra fetches their scores, joins them to your analyzed charts by chart hash, and opens a sortable HTML comparison page: actual score, Hydra's optimal, the points left, and a status per row.
+**SP cap.** The most bars of Star Power the meter can hold during the analysis. 4 is Clone Hero's rule and the default. Leave it at 4 for paths you mean to play. Any other number is a what-if: its scores can't be reached in the game. Results are kept per cap, so a 4-bar result and a 16-bar result for the same song sit side by side. The leaderboard comparison only runs at 4 bars.
 
-`above optimal` rows are expected, not errors: Hydra's optimal intentionally excludes several score backends, and many leaderboard scores were set on older Clone Hero versions whose fill spawning allowed totals that are impossible now. Only charts you have analyzed (in the current view options) can be matched — analyze your library first for a full comparison.
+**Score range.** How many extra paths below optimal to keep. The dropdown picks the unit. `scores` keeps the next few distinct scores under optimal. `points` keeps every path within that many points of optimal. These paths are a little worse, but handy when the optimal path is awkward to play. More paths make the analysis slower.
 
-The first request after a while can take tens of seconds; the leaderboard's backend has to wake up.
+**Path limit.** When ticked, an extra path is kept only when its hardest squeeze is within this many milliseconds. That keeps alternates you can realistically hit. Lower or negative values demand more slack. The limit compares raw squeeze milliseconds at the SP end. It does not account for frontend timing scaling (see the Paths tab), so a kept path can be a bit harder than its number suggests where an activation shows a scale warning.
 
-### Library table
-The list of songs from the latest scan, filtered by the search box. The **Best Path** column shows each song's status for the current view options:
+## Searching the library
 
-- **`(New...)`** — not analyzed yet.
-- A gold path string — the optimal path, for quick reference.
-- **`(Stale)`** — analyzed by an older Hydra version, or under different rules in `hydra_rules.ini`; re-analyze to refresh it. Switching the rules back brings the old results back.
+The library lists every song from the latest scan. Its columns are **Title**, **Artist**, **Charter**, **Folder** and **Best path**. Click a column heading to sort by it. Columns can be resized and hidden, and Hydra remembers them. While the song panel is open, the Charter and Folder columns step aside to save room, and the folder shows under the title.
 
-Hover the cell for an explanation. Click on a song's row to go to the details screen for that song. Column widths can be resized and are remembered between sessions.
+The **Best path** cell shows the song's state under the current analysis settings:
 
-### Page left/right
-Down by the bottom are arrow buttons to move between pages of your song library.
+- `Not analyzed` means there is no result yet.
+- A score and a path, like `378,315  3- 1 2`, is the optimal path.
+- `Stale` means the result is out of date. Either another Hydra version made it, or it was made under different rules in `hydra_rules.ini`. Re-analyze to refresh it. If the cause was a rules edit, switching the rules back brings the result back.
 
-## Song Details Screen
+Hover the cell for the same explanation.
 
-Clicking into a song will lead to this screen. This screen displays analysis for the current View Options (Pro Drums / 2x Bass).
+The chips above the table filter by state: `All`, `Not analyzed`, `Stale` and `Analyzed`, each with its count. A chip with a count of 0 is greyed out.
 
-<p align="center"><img src="/docs/images/app_songdetails_analyzed.PNG"></p>
+### The search box
 
-### Song Metadata (upper left)
-Information pulled from the chart's ini (or the archive's embedded metadata, for `.sng`/`.srb`) during the latest scan: Title, Artist, Charter.
+Type in the search box to narrow the list. `Ctrl+F` jumps to it. `Escape` or its `X` clears it. The heading above shows how many songs match, like `Library 5 of 97 charts`.
 
-Lastly, a hash/checksum (the big hexadecimal number) is also shown here; identical chart files will have the same value. However, this comparison is only good within Hydra. Clone Hero and other apps have their own versions of this and they probably don't align.
+Searching ignores case and accents, so `ALLISTER` finds Allister and `beyonce` finds Beyoncé. Colour and style tags in song names are ignored too. The examples below come from Hydra's test library.
 
-### Stored result (upper middle)
-A summary of the saved analysis for this song under the current view options and SP cap: the best score, how many paths were kept, and the settings the analysis ran with (path limit and SP cap; an Auto run shows the cap it settled on). If the song hasn't been analyzed at this cap — or the record is stale — that's shown here instead.
+| You type | What it matches | Example |
+|---|---|---|
+| words | songs whose title, artist, charter or folder contain every word, in any order | `day green` finds Burnout by Green Day |
+| `"quoted text"` | that exact phrase | `"dance gavin dance"` finds the band's 2 songs |
+| `artist:` | the word or phrase in the artist only | `artist:rush` finds YYZ |
+| `charter:` | the charter only | `charter:onyxite` finds 8 songs |
+| `folder:` | the folder only | `folder:"tier 4"` finds the 5 songs in Tier 4 |
+| `title:` | the title only | `title:everlong` finds Everlong |
+| `stars:N` | songs whose optimal path earns exactly N stars (0 to 7) | `stars:7` finds Burnout once it is analyzed |
+| `squeeze<=N` | songs whose optimal path's hardest squeeze is N ms or less | `squeeze<=200` keeps Burnout (163 ms); `squeeze<=20` drops it |
 
-### Analysis Controls (upper right)
-Look here to generate paths for a song (and a lot of scoring info too).
+You can mix them: `charter:hoph2o stars:7`. `squeeze<N` works the same as `squeeze<=N`. A path with no squeeze at all passes any squeeze limit.
 
-#### Score range
-A global setting for how many extra paths below optimal you'd like Hydra to keep during analysis. These paths are worse, but usually only by a little bit. Only a few are really necessary, in case the optimal path is unusually difficult.
+`stars:` and `squeeze<=` only look at current results. A song that is not analyzed, or whose result is Stale, never matches them. A filter Hydra can't read, like `stars:9`, shows a short note under the search box and is left out of the search.
 
-Note that the more extra paths are allowed, the longer analysis will take, though a few should be no problem.
+Under the table, a search shows a `Clear search` button. When a match came from a column that is hidden, a note there says so, like `Matched on folder.`
 
-There are two depth modes. You can keep some extra paths based on a certain number of `scores` (i.e. "the next best score under optimal") or a certain amount of `points` (i.e. "paths that are within 2000 points of optimal").
+## The song panel
 
-#### Path limit
-When enabled, extra paths are only kept if their hardest required squeeze is within this many milliseconds — useful if you want alternates you can realistically hit. Lower (or negative) values demand more slack. The limit a record was analyzed with is shown above its path list.
+Click a song to open its panel beside the library. The top shows the title, the artist and the charter. The `<` and `>` buttons step to the previous and next song in the list. The `X` button, or `Escape`, closes the panel.
 
-Note: the limit compares raw squeeze milliseconds, measured at the SP end. It does not account for frontend timing scaling (see the note under Backends below), so where an activation shows a scale warning, a kept path can be somewhat harder to execute than its listed milliseconds suggest.
+The button on the right analyzes the song. It reads `Analyze this song` when there is no result, and `Re-analyze` when there is one. A long analysis shows a progress bar and can be cancelled. Closing the panel does not stop it: the analysis finishes, is saved, and the library row updates.
 
-#### Backend limit
-This is a display-only filter for the Backends tables in Path Details, not something the analyzer uses. When enabled, a backend row only shows if its timing is within plus/minus this many milliseconds — except a note the path squeezes out, which always shows no matter how far out it is. Off (the default) shows everything the analyzer stored, which reaches out to ±500ms. Because it only changes what's displayed, flipping it never triggers a re-analysis.
+Under the button is the headline: the best score, its path, and one line like `Optimal path · 7 stars · hardest squeeze 163.0 ms`. A Stale result says why it is out of date.
 
-#### SP cap
-The Star Power meter ceiling the analysis runs under, in bars. 4 is Clone Hero's rule and the default; leave it there for paths you intend to play. Any other number is a what-if whose scores are not achievable in game. Tick **Auto** to let Hydra raise the cap until the score stops improving, which approximates no ceiling at all (slower: up to two minutes per chart).
+If the song's file has moved or been deleted since the last scan, the panel says `Song file not found.` and offers a `Rescan library` button.
 
-Results are kept per cap. Changing the cap switches which record the app shows, and a chart is only analyzed again when it has no record at the current cap. The path report follows the current cap; the leaderboard comparison only runs at 4 bars.
+The panel has four tabs: **Paths**, **Preview**, **Dynamics** and **Stars**.
 
-#### Analyze button
-Smash this button to analyze the song and generate paths. The result will be saved and pulled up again whenever you check on this song in the future. Long analyses show a progress bar and can be cancelled; closing the window also cancels them.
+## Paths tab
 
-If the chart's file has moved or been deleted since the last scan, the button is disabled and a `Rescan library` shortcut appears instead.
+The left side lists the paths the analysis kept, grouped by score. **Optimal** comes first. Then come the extra paths under a heading like **Within 2 scores**. Last is **Best at 0 ms limit**: the best path found under a 0 ms path limit, with how far it falls below optimal. Click a path to show it on the right.
 
-### Path List (lower left)
-A list of the paths that were found, organized by score. Click on a path to view that path's details in the panel to the right.
+The right side starts with a summary, like `Activations 3 · 3 bars each · no SP left over`. Under it, a timeline runs from the first measure to the last, with a mark for each activation. Results saved before this version show no timeline until the song is analyzed again.
 
-### Path Details (lower right)
-When it comes to getting an optimal score, following the optimal path is only part of the story. The rest is (sort of) explained here, though it's sort of an info dump at the moment.
-But here's a walkthrough.
-<p align="center"><img src="/docs/images/app_songdetails_details.PNG"></p>
+Each activation is one row. It shows the activation's number, its notation, its measure (like `m32.1.0`), how many bars of SP you spend, and a badge for a squeeze, like `squeeze out 163 ms`. Click a row to open it, or use `Expand all` and `Collapse all`.
 
-#### Copy path string
-Copies the selected path's notation to the clipboard, ready to paste anywhere. `Ctrl+C` does the same for the currently selected path.
+An open row shows:
 
-#### Multiplier squeezes
-When building up combo at the start of a song, sometimes the combo multiplier goes up on a multi-note chord. Since individual notes are scored exactly when they're hit, in this situation you can control which notes are scored on the higher multiplier by hitting those notes *later*. If those notes are also more valuable (cymbal and dynamic notes), then this can result in slightly more points.
+- **Chord**: the chord you activate on. On a multi-note chord, do a frontend squeeze: hit the activation note first, so the other notes score with the Star Power multiplier.
+- **`Show in Preview >`**: jumps the Preview tab to this activation.
+- The calibration fill timing, when the activation has one (the `E` notation). Usually this is `0ms`. The more negative the value, the earlier you have to hit to make the fill show up.
+- A plain sentence for each squeeze: which note to hit early or late, by how much, and what it's worth.
+- **Backend timings**: the notes near the end of Star Power, with a short lead-in above the table.
 
-If you've ever seen FC scores that seem to be identical but one is +15, this is what happened there.
+A backend squeeze means hitting the note at the SP end early, so it lands inside Star Power. The note at `0ms` is exactly where SP ends; the others are the notes just before and after it. If the last activation's SP runs past the end of the chart, the table lists the notes before that end, so every timing is negative. The rating beside each note is a rough guide to how hard it is to fit into Star Power. For double backend squeezes, look for notes in the `3ms` to `85ms` range (the upper edge follows the hit-window setting).
 
-This details panel will list out these multiplier squeezes if they happen in this song. `2x` means it happens when hitting 2x multiplier (10 notes into the song), and so on.
+Star Power length is measured in measures, not milliseconds. If the SP end falls where measures last a different time than at the activation (a tempo or time signature change), frontend timing only partly carries to the SP end. Hitting the activation 50 ms late might move the SP end only 25 ms. When that matters, the row shows a scale warning such as `x0.51`, and the affected backend rows show an effective timing (`eff.`). Late and early hits can even scale differently when the activation or the SP end sits right on a change.
 
-#### Activations
+Sometimes a phrase collected during Star Power fills the meter up to the SP cap. Then the row shows an overfill warning. It means the note that filled the meter, not the activation, is now the one whose timing moves the SP end. The squeeze numbers are unaffected; only the note you would move has changed.
 
-A list of activations in this path. The number from the path notation is shown as well as how many bars of SP you'll have at that activation. Measure number is also shown, if you happen to be referencing an image or some other view of the chart.
+Below the activations:
 
-If an activation has a [calibration fill](https://github.com/DragonDelgar/hydra?tab=readme-ov-file#calibration-fills-e) (the `E` notation), the timing of that calibration fill will be listed. Usually this will be `0ms`. The more negative the value, the more early you have to hit to make the calibration fill show up.
+- **`Multiplier squeeze`** lists the multiplier squeezes in the song. When the combo multiplier goes up on a multi-note chord, hitting the more valuable notes (cymbals, dynamics) a little later scores them on the higher multiplier. It's why two FCs of the same song can differ by 15 points. `2x` means it happens as the multiplier reaches 2x (10 notes in), and so on.
+- **`Score breakdown`** shows the score this path should get, in the same categories as Clone Hero's results screen. It includes multiplier, frontend and backend squeezes. A double squeeze only counts when the backend note lands inside a small leeway past the SP end, `3ms` by default (`backend_leeway_ms` in `hydra_rules.ini`).
+- **`Copy path`** copies the selected path's notation. `Ctrl+C` does the same and flashes `Copied!`.
+- **`Hide backend rows beyond`** hides backend rows more than this many ms from the SP end. A note the path squeezes out always shows. This only changes the display. It is not an analysis setting, so changing it never re-analyzes anything.
 
-Frontend: The chord that the activation is on. If it's a multi-note chord, perform a frontend squeeze by hitting the activation note first, so that the other notes are scored with the Star Power multiplier.
+One more setting feeds these displays: `hit_window_ms` in `hydra_settings.ini` (default 85, the Clone Hero Pro Drums hit window per side). It has no control on screen yet.
 
-Backends: The notes surrounding the end of Star Power for this activation. There is probably a note at `0ms`, which is exactly when SP ends; the others are the notes right before and right after.
+## Preview tab
 
-If the last activation's Star Power runs past the end of the chart, the table lists the notes before that SP end, so every timing is negative.
+The Preview plays the chart as a 3D note highway, in time with the song's audio. It draws the chosen path on the highway: the Star Power windows as a tinted floor, and the fills a player following the path would see.
 
-Perform a backend squeeze by hitting the `0ms` note early, so that it lands during Star Power.
+**`Showing`** picks which path to draw. It lists the same paths as the Paths tab, in the same order. The 0 ms-limit path reads like `0 0 0 0  (0 ms limit)`.
 
-The backends have a (made up by me) rating that just conveys how difficult it would be to fit that note into Star Power. If you're interested in double backend squeezes, look here for notes that are in the `3ms` to `85ms` range (the upper edge follows the hit-window setting). Or even higher if you're crazy. Whether these double backends are actually possible depends on some details that aren't considered by Hydra yet...
+**`< Act`** and **`Act >`** jump to the previous and next activation. The `[` and `]` keys do the same. `Show in Preview >` on the Paths tab lands here too.
 
-One important caveat: Star Power length is measured in measures, not milliseconds. If the SP end falls where measures last a different amount of time than at the activation point (a different time signature and/or tempo), frontend timing only partially transfers to the SP end — hitting the activation 50ms late might move the SP end only 25ms. When this matters, the activation details show a scale warning (e.g. `x0.51`), and affected backend rows show an effective timing (`eff.`) that puts the real difficulty back on the nominal two-hit scale (twice the hit window). The warning appears whenever the scaling is material to a listed squeeze — even a ratio within a fraction of a percent of 1.0 shows up when a large gap makes it decide success. Late and early frontend hits can even scale differently, when the activation or the SP end sits exactly on a signature or tempo change.
+The transport buttons are `-5s`, `< 5 Ticks`, `Play`/`Pause`, `5 Ticks >` and `+5s`, with a volume slider beside them. The keys:
 
-Sometimes a phrase you collect partway through Star Power fills the meter
-all the way to the SP cap (the most bars of SP you can hold at once).
-When that happens, the activation details show an overfill warning. It
-means the note that filled the meter — not the activation — is now the one
-whose early or late timing moves the SP end. The squeeze numbers below the
-warning are unaffected by this; only which note you'd need to move to change
-them has shifted.
+- `Space` plays and pauses.
+- `Left` and `Right` arrows jump 5 seconds.
+- `,` (comma) and `.` (period) step 5 ticks.
+- `[` and `]` jump between activations.
 
-One INI setting feeds these displays (`hydra_settings.ini`, no UI control yet): `hit_window_ms` (default 85 — the registrable Clone Hero Pro Drums window per side).
+The scrubber under the highway shows where you are. Its gold marks are the path's activations.
 
-#### Score breakdown
+The boxes on the highway:
 
-The score that this path should get, following the same categories that Clone Hero uses in its results screen.
+- **Time box** (top left): the measure you're at and the song's last measure, the tempo and time signature, and the practice section when the chart has them.
+- **Score box** (under it): the running score in large type, then the multiplier and combo, like `x4 · combo 212`. It appears once the song is analyzed. It reads `Score unavailable` when the path can't be replayed to its stored score.
+- **Next activation** (bottom left): the next activation's number, where it is, and its chord.
+- **SP meter** (right edge): a gauge of banked Star Power, one line per bar, with the bars shown under it. It rises one bar at each phrase you collect and drains through each activation, reaching empty exactly where the path's SP ends.
+- **Drain box** (top right, beside the meter): how long one bar of SP lasts here, like `1 bar / 2.5 s`. While SP is running on the path it reads `SP drain` and `empties in` the time left. Otherwise it reads `SP drain (if activated)` and how long a full meter would last from here.
 
-The score includes multiplier squeezes, frontend squeezes, and backend squeezes, so if you follow the path but your score has a bit less Star Power score than this readout, one of those was probably missed.
+## Dynamics tab
 
-Double squeezes only count in this score when the backend note lands inside a small leeway past the Star Power end. The leeway is `3ms` by default. You can change it with `backend_leeway_ms` in `hydra_rules.ini` (see below).
+This tab counts the chart's ghost and accent notes. Ghosts and accents are the soft and hard hits that score double in Clone Hero.
 
-### Dynamics tab
+The **Pads** table shows, for each pad (and each cymbal separately under Pro Drums), how many notes are ghosts, accents and normal hits. **Kicks** does the same for kicks, with 2x kicks on their own row and a line saying how many kick notes are 2x. When 2x Bass is off, the 2x kick row stays visible but greyed out and is left out of the totals. **Totals** adds them up.
 
-The third tab in the details screen counts the chart's ghost and accent notes. Ghosts and accents are the soft and hard hits that score double in Clone Hero.
+The **Chart** box says whether the chart has dynamics turned on. A MIDI chart has to opt in. Without that flag Clone Hero ignores the velocity markings, so Hydra shows the counts but notes that the game won't apply them.
 
-The Pads table shows, for each pad (and each cymbal separately under Pro Drums), how many notes are ghosts, accents and normal hits. The Kicks section does the same for kicks, with 2x kicks on their own row and a line saying how many of the kick notes are 2x. When 2x Bass is off, the 2x kick row stays visible but greyed out and is left out of the totals.
+Counts are worked out the first time you open the tab and saved, so it opens instantly after that. Analyzing a song with 2x Bass on also saves them.
 
-The Chart box says whether the chart has dynamics turned on. A MIDI chart has to opt in; without that flag Clone Hero ignores the velocity markings, so Hydra reports the counts but notes that the game will not apply them.
+## Stars tab
 
-Counts are worked out the first time you open the tab and saved in the library database, so the tab opens instantly after that. Analyzing a song with 2x Bass on also saves its counts as a by-product.
+This tab shows the score you need for each star.
+
+**Base score** is every note hit once at 1x, with no Star Power. **Solo bonus** is the chart's full solo bonus. The solo bonus does not count toward stars: Clone Hero compares your score without it.
+
+The table lists stars 1 to 7. **Multiplier** is what the base score is multiplied by (0.1, 0.5, 1.0, 2.0, 2.8, 3.6 and 4.4). **Cutoff** is the score that earns the star, rounded up. **With full solo bonus** is the cutoff plus the whole solo bonus: what the results screen shows at that cutoff if you also collect every solo bonus.
+
+A star counts once your score, without the solo bonus, reaches its cutoff.
+
+## Analyzing the whole library
+
+`Analyze library...` analyzes every song in the library. While you are searching, `Analyze search (N)...` analyzes only the N songs the search shows.
+
+First a window titled **Analyze library** asks you to confirm. It says how many songs it will analyze and lists the settings it will use. To change those, cancel and edit the Analysis settings. Songs that already have a result are skipped, unless you tick `Also re-analyze charts that already have a result`. Click `Start analyzing` to begin, or `Cancel`.
+
+The batch runs in the background, using all but one of your CPU cores. You can keep browsing and open songs while it runs. A strip under the toolbar shows its progress: how many songs are done, the song being analyzed, the time so far and, after a few songs, an estimate of the time left.
+
+- **`Pause`** holds the batch. **`Resume`** carries on.
+- **`Stop`** ends it. Every result finished so far is kept.
+
+The Analysis settings stay locked until the batch ends.
+
+When it finishes, the strip changes to a summary: how many songs were analyzed, failed and skipped, and how long it took. Songs that failed are listed with the reason. A stopped batch keeps its results but builds no report.
+
+## Reports
+
+### The path report
+
+A finished batch builds the **path report**, `hydra_paths.html`. It is a sortable, searchable web page of every analyzed song's paths, squeeze timings and scores. It follows the current analysis settings.
+
+Reports are saved in your **Documents\Hydra** folder. Hydra makes the folder if it's missing. If Windows can't find your Documents folder, the report goes next to Hydra's database instead. A report an older Hydra saved next to `hydra.db` stays there; the next batch writes a new one in Documents\Hydra.
+
+The finished strip offers:
+
+- **`Open report`** opens it in your browser.
+- **`Show in folder`** opens the folder that holds it.
+- **`Open automatically`** opens the report by itself whenever a batch finishes.
+- Its `X` dismisses the strip.
+
+`Open path report` on the toolbar opens the last report at any time.
+
+### Compare with dmleaderboards
+
+`Compare with dmleaderboards...` compares a [dmleaderboards.com](https://dmleaderboards.com) player's posted scores with your stored optimals. Pick a player from the searchable list; Hydra remembers the last pick. Hydra fetches their scores, matches them to your analyzed songs by chart hash, and saves a sortable page, `hydra_dmcompare.html`, in the same Documents\Hydra folder. The page lists each score, Hydra's optimal, the points left, and a status per row.
+
+When it's done, the window counts the scores that matched, the ones above optimal, the ones for songs you haven't analyzed, and the ones for songs not in your library.
+
+Rows above optimal are expected, not errors. Hydra's optimal leaves out several score backends on purpose. Many leaderboard scores were also set on older Clone Hero versions, whose fill rules allowed totals that are impossible now.
+
+The comparison needs Expert and an SP cap of 4, because the leaderboard only holds Expert scores played under Clone Hero's rule. Only songs analyzed under the current settings can match, so analyze your library first for a full comparison.
+
+The first request after a while can take tens of seconds, because the leaderboard's server has to wake up.
 
 ## Scoring rules (`hydra_rules.ini`)
 
@@ -182,8 +226,6 @@ The file is optional. A missing file, or a missing line, means the default below
 backend_leeway_ms = 3.0
 sqout_rule = first_note
 max_tied_paths = 4
-auto_cap_ladder = 16,32,64,128,256,512
-auto_budget_s = 120
 fill_cooldown_measures = 4
 fill_max_distance_beats = 0.5
 fill_length_measures = 0.5
@@ -195,22 +237,22 @@ What each line does:
 - **`backend_leeway_ms`** (default `3.0`): how far past the Star Power end a backend note can land and still count in the score.
 - **`sqout_rule`** (default `first_note`): what a squeeze-out costs. `first_note` removes the Star Power doubling from one note of the chord (the lowest-value one). `whole_chord` removes it from every note in the chord.
 - **`max_tied_paths`** (default `4`): how many paths Hydra keeps when several reach the same score. More paths means longer lists and slower analysis.
-- **`auto_cap_ladder`** (default `16,32,64,128,256,512`): the SP caps Auto tries, in rising order, until the score stops changing. Separate them with commas.
-- **`auto_budget_s`** (default `120`): how many seconds Auto may spend on one chart before it stops climbing the ladder. Changing it never marks a result stale.
 - **`fill_cooldown_measures`** (default `4`): for charts with no authored fills, how many measures must pass after an activation point before Hydra places the next one.
 - **`fill_max_distance_beats`** (default `0.5`): for charts with no authored fills, how far from a measure line a note can sit and still get a fill.
 - **`fill_length_measures`** (default `0.5`): for charts with no authored fills, how long each fill Hydra places is, in measures.
 - **`fill_land_slop_beats`** (default `0.03125`, a 32nd of a beat): how close a fill's end must be to a note for the fill to count. This one applies to authored fills too.
 
-A value Hydra can't read, or a key it doesn't know, is an error that names the key. The command line tools print the error and stop with exit code 2. The app still opens and shows the error, but Analyze stays off until you fix the file and restart Hydra. Hydra never analyzes on the defaults behind your back.
+Older files may still have `auto_cap_ladder` or `auto_budget_s` lines. Hydra reads and ignores them, so those files keep working.
 
-Every analysis result remembers the rules it was made with. After you change the file, results made under the old rules show **`(Stale)`** until you re-analyze them. Switching the rules back brings those results back. Two keys are exceptions. `auto_cap_ladder` only changes what Auto does, so editing it marks only results Auto made as stale; results at a fixed SP cap stay. `auto_budget_s` never marks anything stale, because a time limit can't make a result repeatable anyway.
+A value Hydra can't read, or a key it doesn't know, is an error that names the key. The command line tools print the error and stop with exit code 2. The app still opens and shows the error, but analysis stays off until you fix the file and restart Hydra. Hydra never analyzes on the defaults behind your back.
+
+Every result remembers the rules it was made with. After you change the file, results made under the old rules show `Stale` until you re-analyze them. Switching the rules back brings those results back.
 
 ## Command line tools
 
 Two console programs ship alongside the app and share its settings and library:
 
-- **`hydra_batch`** — runs the same batch analysis as `Analyze library`, printing one line per chart. Flags: `--redo` (re-analyze existing results), `--reindex`, `--db <path>`, `--rules <path>`, `--legacy-fills`. `--legacy-fills` prices charts under Clone Hero 1.0's fill rule instead of 1.1's. It is a command-line-only mode, and it refuses to write the app's own database, so give it its own `--db`.
-- **`hydra_report`** — rebuilds the HTML path index from stored results. Flags: `--paths N`, `--all-paths`, `--out <path>`, `--no-open`, `--db <path>`, `--rules <path>`.
+- **`hydra_batch`** runs the same batch analysis as `Analyze library...`, printing one line per chart. Flags: `--redo` (re-analyze existing results), `--reindex`, `--db <path>`, `--rules <path>`, `--legacy-fills`. `--legacy-fills` prices charts under Clone Hero 1.0's fill rule instead of 1.1's. It is a command-line-only mode, and it refuses to write the app's own database, so give it its own `--db`.
+- **`hydra_report`** rebuilds the HTML path report from stored results. Flags: `--paths N`, `--all-paths`, `--out <path>`, `--no-open`, `--db <path>`, `--rules <path>`.
 
-Both use the chart mode and SP cap from the app's settings file. Both read the scoring rules from `hydra_rules.ini` next to Hydra.exe, or from the file `--rules` names. If that file has an error, they print it and stop with exit code 2.
+Both use the analysis settings from the app's settings file. Both read the scoring rules from `hydra_rules.ini` next to Hydra.exe, or from the file `--rules` names. If that file has an error, they print it and stop with exit code 2.
