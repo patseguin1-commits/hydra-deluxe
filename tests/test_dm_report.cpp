@@ -1,11 +1,27 @@
 // Tests for app/dm_report: the score-vs-optimal join (collect_dm_rows) and
 // the comparison page (build_dm_html). Pins the status strings the UI
-// compares as raw literals (see ui/dm_jobs.cpp's DmReportJob tally).
+// compares as raw literals (see ui/dm_jobs.cpp's DmReportJob tally). Also
+// drives the real WinHTTP transport against a loopback server.
+
+// winsock2.h has to come before anything that pulls in windows.h.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
 
 #include "doctest.h"
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "app/analysis.h"
@@ -239,4 +255,141 @@ TEST_CASE("collect_dm_rows: a blank stored song name reads (unknown)") {
         store, {unknown_meta}, kMode, store::Lens{});
     REQUIRE(rows.size() == 1);
     CHECK(rows[0].song == kUnknownTitle);
+}
+
+namespace {
+
+// A one-shot HTTP server on 127.0.0.1 for the real WinHTTP transport (the
+// Fetcher seam swaps http_get out wholesale, so it can't reach that code).
+// With an empty `reply` nothing ever accepts: the kernel completes the TCP
+// handshake from the listen backlog, WinHTTP sends its request, and no answer
+// comes, like a render.com cold start. Otherwise one thread accepts one
+// connection, reads the request headers and sends `reply`.
+class LoopbackServer {
+public:
+    explicit LoopbackServer(std::string reply) : reply_(std::move(reply)) {
+        WSADATA wsa;
+        REQUIRE(WSAStartup(MAKEWORD(2, 2), &wsa) == 0);
+        listener_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        REQUIRE(listener_ != INVALID_SOCKET);
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = 0;  // any free port
+        REQUIRE(bind(listener_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+        REQUIRE(listen(listener_, 4) == 0);
+        int len = sizeof(addr);
+        REQUIRE(getsockname(listener_, reinterpret_cast<sockaddr*>(&addr), &len) == 0);
+        port_ = ntohs(addr.sin_port);
+        if (!reply_.empty()) thread_ = std::thread([this] { serve_one(); });
+    }
+    ~LoopbackServer() {
+        closesocket(listener_);  // also unblocks an accept() still waiting
+        if (thread_.joinable()) thread_.join();
+        WSACleanup();
+    }
+    LoopbackServer(const LoopbackServer&) = delete;
+    LoopbackServer& operator=(const LoopbackServer&) = delete;
+
+    std::string url() const { return "http://127.0.0.1:" + std::to_string(port_); }
+
+private:
+    void serve_one() {
+        SOCKET s = accept(listener_, nullptr, nullptr);
+        if (s == INVALID_SOCKET) return;
+        std::string request;
+        char buf[4096];
+        while (request.find("\r\n\r\n") == std::string::npos) {
+            int n = recv(s, buf, sizeof(buf), 0);
+            if (n <= 0) break;
+            request.append(buf, static_cast<size_t>(n));
+        }
+        size_t sent = 0;
+        while (sent < reply_.size()) {
+            int n = send(s, reply_.data() + sent,
+                         static_cast<int>(std::min<size_t>(reply_.size() - sent, 1 << 16)), 0);
+            if (n <= 0) break;
+            sent += static_cast<size_t>(n);
+        }
+        // Graceful close: FIN, then wait for the client to hang up, so no
+        // unread bytes turn the close into a reset that drops the reply.
+        shutdown(s, SD_SEND);
+        while (recv(s, buf, sizeof(buf), 0) > 0) {}
+        closesocket(s);
+    }
+
+    std::string reply_;
+    SOCKET listener_ = INVALID_SOCKET;
+    unsigned short port_ = 0;
+    std::thread thread_;
+};
+
+std::string http_response(const std::string& status_line, const std::string& body) {
+    return "HTTP/1.1 " + status_line +
+           "\r\nContent-Type: application/json\r\nContent-Length: " +
+           std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body;
+}
+
+}  // namespace
+
+TEST_CASE("http transport: cancel aborts a request the server never answers") {
+    net::set_fetcher({});  // the real WinHTTP transport
+    LoopbackServer server("");
+
+    // Set before the call: fails at once.
+    std::atomic<bool> cancel{true};
+    CHECK_THROWS_WITH_AS((void)net::fetch_users(server.url(), &cancel), "cancelled",
+                         std::runtime_error);
+
+    // Set while WinHTTP waits on a response that never comes (the receive
+    // timeout is 120 s, so only the cancel can end this promptly).
+    cancel = false;
+    using clock = std::chrono::steady_clock;
+    clock::time_point cancel_at;
+    std::thread setter([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        cancel_at = clock::now();
+        cancel = true;
+    });
+    std::string error;
+    try {
+        (void)net::fetch_users(server.url(), &cancel);
+    } catch (const std::runtime_error& e) {
+        error = e.what();
+    }
+    const clock::time_point returned = clock::now();
+    setter.join();
+
+    CHECK(error == "cancelled");
+    const auto ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(returned - cancel_at).count();
+    MESSAGE("fetch returned " << ms << " ms after the cancel flag was set");
+    CHECK(ms >= 0);
+    CHECK(ms < 500);  // ~50 ms expected; slack for a loaded machine
+}
+
+TEST_CASE("http transport: a 200 reply is read in full, a 404 keeps its message") {
+    net::set_fetcher({});  // the real WinHTTP transport
+
+    // Big enough (~250 KB) to arrive over several read chunks.
+    std::string body = "[";
+    for (int i = 0; i < 5000; ++i) {
+        if (i) body += ",";
+        body += R"({"id":")" + std::to_string(i) + R"(","username":"user)" +
+                std::to_string(i) + R"(","elo":1500})";
+    }
+    body += "]";
+    {
+        LoopbackServer server(http_response("200 OK", body));
+        std::atomic<bool> cancel{false};  // present but never set
+        std::vector<net::DmUser> users = net::fetch_users(server.url(), &cancel);
+        REQUIRE(users.size() == 5000);
+        CHECK(users.front().id == "0");
+        CHECK(users.back().username == "user4999");
+    }
+    {
+        LoopbackServer server(http_response("404 Not Found", ""));
+        CHECK_THROWS_WITH_AS((void)net::fetch_users(server.url()),
+                             "leaderboard returned HTTP 404", std::runtime_error);
+    }
 }

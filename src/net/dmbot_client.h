@@ -58,9 +58,9 @@ struct DmScore {
 
 // Both throw std::runtime_error on any transport/HTTP/parse failure; the
 // message is user-facing (the picker and report modals surface it verbatim).
-// `cancel`, when non-null and set mid-transfer, aborts with a "cancelled"
-// error (checked between read chunks; a cold-start connect can't be
-// interrupted until the timeout).
+// `cancel`, when non-null and set at any point (resolving, connecting,
+// waiting on a cold start, reading), aborts with a "cancelled" error within
+// about 50 ms.
 std::vector<DmUser> fetch_users(const std::string& api_base = kDefaultApiBase,
                                 const std::atomic<bool>* cancel = nullptr);
 

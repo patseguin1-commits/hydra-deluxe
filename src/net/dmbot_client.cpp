@@ -35,14 +35,105 @@ struct Handle {
     explicit operator bool() const { return h != nullptr; }
 };
 
-[[noreturn]] void fail(const std::string& what) {
-    throw std::runtime_error(what + " (error " + std::to_string(GetLastError()) + ")");
+[[noreturn]] void fail(const std::string& what, DWORD error = GetLastError()) {
+    throw std::runtime_error(what + " (error " + std::to_string(error) + ")");
+}
+
+bool cancelled(const std::atomic<bool>* cancel) { return cancel && cancel->load(); }
+
+// Why async: a synchronous WinHTTP call can't be interrupted. Microsoft forbids
+// closing a handle while another thread is inside a synchronous call on it (a
+// race that can crash; WinHTTP may reuse the handle value), and cancelling by
+// closing the handle is documented only for asynchronous requests:
+//   https://learn.microsoft.com/en-us/windows/win32/winhttp/concurrency-in-winhttp
+//   https://learn.microsoft.com/en-us/windows/win32/api/winhttp/nf-winhttp-winhttpclosehandle
+// So each step starts asynchronously and the calling thread waits for it,
+// polling `cancel`. On cancel that same thread closes the request handle; no
+// WinHTTP call of ours is in progress then, which is what the docs require.
+
+// What the status callback reports back to the waiting thread. WinHTTP calls
+// on its own threads; SetEvent/WaitForSingleObject order the field writes.
+struct AsyncState {
+    HANDLE done = CreateEventW(nullptr, FALSE, FALSE, nullptr);   // a step finished
+    HANDLE closed = CreateEventW(nullptr, TRUE, FALSE, nullptr);  // HANDLE_CLOSING arrived
+    DWORD error = 0;  // nonzero when the step failed
+    DWORD bytes = 0;  // DATA_AVAILABLE / READ_COMPLETE byte count
+    AsyncState() = default;
+    ~AsyncState() {
+        if (done) CloseHandle(done);
+        if (closed) CloseHandle(closed);
+    }
+    AsyncState(const AsyncState&) = delete;
+    AsyncState& operator=(const AsyncState&) = delete;
+};
+
+void CALLBACK on_status(HINTERNET, DWORD_PTR context, DWORD status, LPVOID info,
+                        DWORD info_len) {
+    auto* st = reinterpret_cast<AsyncState*>(context);
+    if (!st) return;
+    switch (status) {
+    case WINHTTP_CALLBACK_STATUS_SENDREQUEST_COMPLETE:
+    case WINHTTP_CALLBACK_STATUS_HEADERS_AVAILABLE:
+        st->error = 0;
+        SetEvent(st->done);
+        break;
+    case WINHTTP_CALLBACK_STATUS_DATA_AVAILABLE:
+        st->error = 0;
+        st->bytes = *static_cast<const DWORD*>(info);
+        SetEvent(st->done);
+        break;
+    case WINHTTP_CALLBACK_STATUS_READ_COMPLETE:
+        st->error = 0;
+        st->bytes = info_len;
+        SetEvent(st->done);
+        break;
+    case WINHTTP_CALLBACK_STATUS_REQUEST_ERROR:
+        st->error = static_cast<const WINHTTP_ASYNC_RESULT*>(info)->dwError;
+        SetEvent(st->done);
+        break;
+    case WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING:
+        SetEvent(st->closed);
+        break;
+    default:
+        break;
+    }
+}
+
+// The async request handle, closed in exactly one place. Closing cancels any
+// pending step; once the callback is registered, the destructor then waits for
+// HANDLE_CLOSING, the last callback WinHTTP makes for the handle, so no
+// callback can touch the AsyncState (or a read buffer) after it is gone.
+struct AsyncRequest {
+    HINTERNET h = nullptr;
+    AsyncState* st = nullptr;  // set once the callback is registered
+    AsyncRequest() = default;
+    ~AsyncRequest() {
+        if (!h) return;
+        WinHttpCloseHandle(h);
+        if (st) WaitForSingleObject(st->closed, INFINITE);
+    }
+    AsyncRequest(const AsyncRequest&) = delete;
+    AsyncRequest& operator=(const AsyncRequest&) = delete;
+};
+
+// Wait for the step just started, checking `cancel` every 50 ms. On cancel,
+// throw; unwinding runs ~AsyncRequest, which closes the handle and so cancels
+// the step. A cancel that lands just as the step fails still reads "cancelled".
+void await_step(AsyncState& st, const std::atomic<bool>* cancel, const char* what) {
+    while (WaitForSingleObject(st.done, 50) == WAIT_TIMEOUT)
+        if (cancelled(cancel)) throw std::runtime_error("cancelled");
+    if (st.error) {
+        if (cancelled(cancel)) throw std::runtime_error("cancelled");
+        fail(what, st.error);
+    }
 }
 
 // GET `url` and return the response body as UTF-8 bytes. Throws with a
-// user-facing message on any transport error or a non-200 status. Checks
-// `cancel` between read chunks.
+// user-facing message on any transport error or a non-200 status, or
+// "cancelled" within about 50 ms of `cancel` being set.
 std::string http_get(const std::string& url, const std::atomic<bool>* cancel) {
+    if (cancelled(cancel)) throw std::runtime_error("cancelled");
+
     std::wstring wurl = hydra::utf8_to_wide(url);
 
     URL_COMPONENTS uc{};
@@ -63,7 +154,8 @@ std::string http_get(const std::string& url, const std::atomic<bool>* cancel) {
     // or missing ones with a 403 before the request ever reaches the API.
     Handle session(WinHttpOpen(L"Hydra/" HYDRA_VERSION_W,
                                WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
-                               WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
+                               WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS,
+                               WINHTTP_FLAG_ASYNC));
     if (!session) fail("could not start the network session");
 
     // Generous receive timeout: the render.com backend cold-starts after idle
@@ -74,16 +166,39 @@ std::string http_get(const std::string& url, const std::atomic<bool>* cancel) {
     Handle connect(WinHttpConnect(session.h, host.c_str(), uc.nPort, 0));
     if (!connect) fail("could not connect to the leaderboard");
 
-    Handle request(WinHttpOpenRequest(connect.h, L"GET", path.c_str(), nullptr,
-                                      WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
-                                      secure ? WINHTTP_FLAG_SECURE : 0));
-    if (!request) fail("could not build the request");
+    // Declared before `request` so both outlive it: its destructor waits out
+    // the last callback, and a cancelled read may still be writing into `body`.
+    AsyncState st;
+    if (!st.done || !st.closed) fail("could not start the network session");
+    std::string body;
+
+    AsyncRequest request;
+    request.h = WinHttpOpenRequest(connect.h, L"GET", path.c_str(), nullptr,
+                                   WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                   secure ? WINHTTP_FLAG_SECURE : 0);
+    if (!request.h) fail("could not build the request");
+
+    // Context first, callback second: once the callback is in, HANDLE_CLOSING
+    // is guaranteed (it needs a non-null context), so the destructor may wait.
+    DWORD_PTR context = reinterpret_cast<DWORD_PTR>(&st);
+    if (!WinHttpSetOption(request.h, WINHTTP_OPTION_CONTEXT_VALUE, &context, sizeof(context)))
+        fail("could not build the request");
+    if (WinHttpSetStatusCallback(request.h, on_status,
+                                 WINHTTP_CALLBACK_FLAG_ALL_COMPLETIONS |
+                                     WINHTTP_CALLBACK_FLAG_HANDLES,
+                                 0) == WINHTTP_INVALID_STATUS_CALLBACK)
+        fail("could not build the request");
+    request.st = &st;
 
     if (!WinHttpSendRequest(request.h, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0))
+                            WINHTTP_NO_REQUEST_DATA, 0, 0, context))
         fail("could not send the request");
+    await_step(st, cancel, "could not send the request");
+
+    if (cancelled(cancel)) throw std::runtime_error("cancelled");
     if (!WinHttpReceiveResponse(request.h, nullptr))
         fail("no response from the leaderboard");
+    await_step(st, cancel, "no response from the leaderboard");
 
     DWORD status = 0, size = sizeof(status);
     if (!WinHttpQueryHeaders(request.h,
@@ -94,17 +209,20 @@ std::string http_get(const std::string& url, const std::atomic<bool>* cancel) {
     if (status != 200)
         throw std::runtime_error("leaderboard returned HTTP " + std::to_string(status));
 
-    std::string body;
+    // In async mode the byte counts arrive through the callback, so the out
+    // parameters are null (as the docs require).
     for (;;) {
-        if (cancel && cancel->load()) throw std::runtime_error("cancelled");
-        DWORD avail = 0;
-        if (!WinHttpQueryDataAvailable(request.h, &avail)) fail("could not read the response");
+        if (cancelled(cancel)) throw std::runtime_error("cancelled");
+        if (!WinHttpQueryDataAvailable(request.h, nullptr)) fail("could not read the response");
+        await_step(st, cancel, "could not read the response");
+        DWORD avail = st.bytes;
         if (avail == 0) break;
         size_t at = body.size();
         body.resize(at + avail);
-        DWORD read = 0;
-        if (!WinHttpReadData(request.h, &body[at], avail, &read)) fail("could not read the response");
-        body.resize(at + read);
+        if (!WinHttpReadData(request.h, &body[at], avail, nullptr))
+            fail("could not read the response");
+        await_step(st, cancel, "could not read the response");
+        body.resize(at + st.bytes);
     }
     return body;
 }
