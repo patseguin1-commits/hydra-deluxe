@@ -6,6 +6,7 @@
 #endif
 #include <windows.h>
 
+#include "app/display_format.h"  // format_ms_spaced
 #include "app/library_query.h"  // strip_rich_tags
 #include "app/path_view.h"
 #include "core/model.h"
@@ -125,9 +126,8 @@ void render_headline(AppState& app) {
             facts += " \xC2\xB7 hardest squeeze";
             ImGui::TextUnformatted(facts.c_str());
             ImGui::SameLine();
-            char ms[32];
-            std::snprintf(ms, sizeof(ms), "%.1f ms", *summary.hardest_ms);
-            ImGui::TextColored(kWarningColor, "%s", ms);
+            ImGui::TextColored(kWarningColor, "%s",
+                               app::format_ms_spaced(*summary.hardest_ms).c_str());
         } else {
             facts += " \xC2\xB7 no squeezes";
             ImGui::TextUnformatted(facts.c_str());
@@ -257,11 +257,11 @@ void render_song_panel(AppState& app) {
         !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
         app.show_details = false;
 
-    // Ctrl+C copies the selected path -- unless a text input has focus.
+    // Ctrl+C copies the selected path -- unless a text input has focus. Same
+    // call as the Copy path button, so it flashes "Copied!" too.
     if (selected_path && !ImGui::GetIO().WantTextInput &&
         ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_C))
-        ImGui::SetClipboardText(
-            selected_path->pathstring_verbose(app.viewed.record->multsqueezes).c_str());
+        detail::copy_selected_path(app);
 
     render_panel_header(app);
     if (!app.selected) return;
@@ -281,8 +281,12 @@ void render_song_panel(AppState& app) {
             ImGui::EndTabItem();
         }
 
+        // "Show in Preview >" on an activation row asks for the Preview tab;
+        // the tab consumes the jump once it draws.
+        const ImGuiTabItemFlags preview_flags =
+            app.details_ui.paths_tab.ui().preview_jump ? ImGuiTabItemFlags_SetSelected : 0;
         bool preview_shown = false;
-        if (ImGui::BeginTabItem("Preview")) {
+        if (ImGui::BeginTabItem("Preview", nullptr, preview_flags)) {
             preview_shown = true;
             detail::render_preview_panel(app, selected_path);
             ImGui::EndTabItem();

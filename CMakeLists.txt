@@ -266,6 +266,7 @@ add_library(hydra_ui STATIC
     src/ui/stars_tab.cpp
     src/ui/library_dialogs.cpp
     src/ui/library_jobs.cpp
+    src/ui/library_model.cpp
     src/ui/library_table.cpp
     src/ui/library_toolbar.cpp
     src/ui/settings_bar.cpp
@@ -404,6 +405,7 @@ add_executable(hydra_tests
     tests/test_fill_report.cpp
     tests/test_app_state.cpp
     tests/test_song_panel_state.cpp
+    tests/test_library_model.cpp
     tests/test_app_shell.cpp
     tests/test_preview_controller.cpp
     tests/test_utf8_paths.cpp

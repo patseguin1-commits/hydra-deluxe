@@ -304,6 +304,25 @@ TEST_CASE("build_highway_draws: ghost shrinks 70% and overlays; accent overlays"
     CHECK(cyms[0]->lo[0] == doctest::Approx(0.5f));
 }
 
+TEST_CASE("build_highway_draws: a ghost kick keeps full width and overlays") {
+    // Hydra departs from Onyx here: Onyx shrinks every ghost to 70%, but a
+    // shrunken kick reads as a bar that stops short of the highway edge.
+    PreviewConfig cfg;
+    PreviewScene scene;
+    scene.notes = {note(1100.0, PreviewLane::Kick, false, true)};
+    TrackState st = build_track_state(scene, TrackStateOptions{});
+    std::vector<DrawCommand> cmds = build_highway_draws(st, cfg, 1.0, 1.0);
+    std::vector<const DrawCommand*> kicks = of_mesh(cmds, MeshId::Kick);
+    REQUIRE(kicks.size() == 1);
+    CHECK(kicks[0]->lo[0] == doctest::Approx(-1.0f));
+    CHECK(kicks[0]->hi[0] == doctest::Approx(1.0f));
+    CHECK(kicks[0]->lo[1] == doctest::Approx(-2.0f));
+    CHECK(kicks[0]->hi[1] == doctest::Approx(0.0f));
+    CHECK(kicks[0]->material.kind == MaterialKind::TextureOverlay);
+    CHECK(kicks[0]->material.texture == TextureId::LongKick);
+    CHECK(kicks[0]->material.overlay == TextureId::OverlayGhost);
+}
+
 TEST_CASE("build_highway_draws: hit flash and target glow after a note passes") {
     PreviewConfig cfg;
     PreviewScene scene;

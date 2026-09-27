@@ -28,6 +28,7 @@
 #include "ui/dynamics_load_job.h"
 #include "ui/generation.h"
 #include "ui/library_jobs.h"
+#include "ui/library_model.h"
 
 struct ID3D11Device;
 struct ID3D11DeviceContext;
@@ -39,21 +40,6 @@ class PreviewController;
 // The settings struct itself lives in app/config.h (shared with the CLI
 // exes).
 using Settings = app::Settings;
-
-// One page of the library table, plus enough to know if there's more.
-struct LibraryPage {
-    // The "Best Path" cell's state, resolved once per page refresh — querying
-    // the store per visible row per frame contended the store's mutex with
-    // batch workers thousands of times a second.
-    struct RowSummary {
-        store::RecordStatus state = store::RecordStatus::NotAnalyzed;
-        std::string bestpath;  // set when state == Ready
-    };
-
-    std::vector<store::ChartLibraryEntry> rows;
-    std::vector<RowSummary> summaries;  // parallel to `rows`
-    int64_t total_count = 0;
-};
 
 // Per-frame UI state of the Song Details modal. Owned here, not as statics in
 // the draw code: a static outlives this AppState (the UI test runner builds one
@@ -105,11 +91,23 @@ struct LibraryViewState {
     double status_shown_at = -1.0;
     // The folder waiting on the "Remove folder?" confirm.
     std::optional<size_t> confirm_remove;
-    // The search box's text, whether it was filled from `search` yet, and
-    // when it was last typed in (the library re-queries 0.25 s after).
+    // The search box's text and whether it was filled from `search` yet.
+    // Typing is applied at most every 150 ms: `search_pending` holds an edit
+    // not applied yet, `search_applied_at` when the last one was.
     char search_buf[256] = "";
     bool search_synced = false;
-    double search_edited_at = -1.0;
+    bool search_pending = false;
+    double search_applied_at = -1.0;
+    // Whether the table's sort was read from its header yet. The ImGui
+    // context outlives an AppState (the GUI tests build one per test), so a
+    // fresh model reads the header's current sort on its first frame.
+    bool sort_synced = false;
+    // The panel state the table last fitted its Charter and Folder columns
+    // to; unset = fit them on the next frame.
+    std::optional<bool> columns_for_panel;
+    // The selection (notespath) the table last scrolled to, so it scrolls
+    // only when the selection changes (the panel's Previous/Next song).
+    std::string scrolled_to;
     // The dmleaderboards picker's name filter.
     char dm_filter[128] = "";
     // Whether the path report file exists, as of the last look.
@@ -148,22 +146,37 @@ public:
     std::string rules_error;
     bool analysis_blocked() const { return !rules_error.empty(); }
 
-    // Library browsing.
-    std::string search;              // empty = no filter
-    int table_viewpage = 0;
+    // Library browsing: every scanned chart in memory, with its stored
+    // summary, filtered by the search and the status chip and sorted by the
+    // table (ui/library_model.h).
+    LibraryModel library;
+    std::string search;          // the applied search text; empty = no filter
+    int64_t library_total = 0;   // every chart, for "5 of 97 charts"
+    // Applies a search at once (the box throttles its own calls).
+    void set_search(std::string text);
+    // Re-reads every chart and summary: at startup and after a scan.
+    void reload_library();
+    // Re-reads every row's summary: after a settings change or a batch step.
+    void refresh_library_summaries();
+    // Re-reads one chart's summary: after one song's analysis is stored.
+    void refresh_library_row(const std::string& md5);
+    // Once per frame, from the library pane: reloads after a scan finishes,
+    // and re-reads summaries while a batch runs -- at most once a second, and
+    // only when the batch stored something since the last look.
+    void tick_library(double now);
 
-    // How many library rows fit the current window height. Recomputed by
-    // library_view each frame from the available content region (rather than
-    // a fixed constant) so a taller window shows more rows instead of
-    // leaving blank space below a fixed-size table, and a shorter one still
-    // fits without clipping. set_rows_per_page() re-queries the current page
-    // only when the count actually changes.
-    int rows_per_page = 15;
-    void set_rows_per_page(int rows);
-
-    LibraryPage current_page;
-    int64_t library_total = 0;  // unfiltered count, for the "Library (N charts)" title
-    void refresh_page();  // re-queries current_page + library_total from `store`
+    // The rows on screen, in order, as indices into library.rows().
+    const std::vector<size_t>& library_view_order() const { return library.order(); }
+    size_t library_shown_count() const { return library.order().size(); }
+    // The row at position `view_index` of library_view_order().
+    const LibraryRow& library_row_at(size_t view_index) const {
+        return library.rows()[library.order()[view_index]];
+    }
+    // How many charts the search matches (the "All" chip's count): the N of
+    // "Analyze search (N)...".
+    size_t library_match_count() const { return library.counts().all; }
+    // Those charts, in table order: what "Analyze search (N)..." analyzes.
+    std::vector<store::ChartLibraryEntry> library_matches() const;
 
     // Selection / details modal.
     std::optional<store::ChartLibraryEntry> selected;
@@ -367,8 +380,11 @@ private:
     void save_settings();
     // The refresh half of commit_settings.
     void apply_settings();
-    // Re-reads each row's Best Path summary for the current page only.
-    void refresh_summaries();
+    // tick_library's memory: whether the current scan's result was read
+    // yet, and the batch's stored count and time at the last summary read.
+    bool scan_reloaded_ = true;
+    int batch_seen_completed_ = 0;
+    double batch_refreshed_at_ = -1.0;
 
     // The number boxes step through settings one value at a time, and each
     // step used to decode the chart's record again. `viewed_key_` is what

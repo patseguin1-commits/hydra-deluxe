@@ -73,7 +73,7 @@ void test_preview(ImGuiTestContext* ctx) {
 void test_analyze_on_preview(ImGuiTestContext* ctx) {
     Harness& h = harness(ctx);
     if (!open_preview(ctx)) return;
-    ctx->ItemClick("**/Analyze paths!");
+    ctx->ItemClick(analyze_button_ref(h).c_str());
     IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
     IM_CHECK(h.app->viewed.record.has_value());
     IM_CHECK(!h.app->viewed.record->paths.empty());
@@ -120,7 +120,7 @@ void test_preview_path_overlay(ImGuiTestContext* ctx) {
     if (ctx->IsError()) return;
     open_details(ctx, 0);
     if (ctx->IsError()) return;
-    ctx->ItemClick("**/Analyze paths!");
+    ctx->ItemClick(analyze_button_ref(h).c_str());
     IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
     IM_CHECK(h.app->viewed.record.has_value());
 
@@ -215,7 +215,7 @@ void test_preview_controls(ImGuiTestContext* ctx) {
 
     // Analyze from the Preview tab, then visit Paths and come back so the
     // overlay (and with it the score) is rebuilt from the new record's path.
-    ctx->ItemClick("**/Analyze paths!");
+    ctx->ItemClick(analyze_button_ref(h).c_str());
     IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
     IM_CHECK(h.app->viewed.record.has_value());
     ctx->ItemClick("##DetailsTabs/Paths");
@@ -275,7 +275,7 @@ void test_preview_drain_box(ImGuiTestContext* ctx) {
 
     // Analyze, then visit Paths and come back so the overlay is rebuilt from
     // the new record's path (as preview-controls does).
-    ctx->ItemClick("**/Analyze paths!");
+    ctx->ItemClick(analyze_button_ref(h).c_str());
     IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
     IM_CHECK(h.app->viewed.record.has_value());
     ctx->ItemClick("##DetailsTabs/Paths");
@@ -324,15 +324,26 @@ struct DisplayWidth {
 };
 
 // The Preview's text boxes shrink to sit beside the highway in a narrow
-// window and keep their size in a normal one. The Song Details modal follows
-// the display size, so narrowing the display narrows the Preview.
+// panel and keep their size in a wide one. The song panel shares the window
+// with the library, so at the harness's 1280 px the default split already
+// shrinks them a little; with the library dragged to its narrowest they are
+// full size, and a 640 px display shrinks them more.
 void test_preview_overlay_fit(ImGuiTestContext* ctx) {
     Harness& h = harness(ctx);
     if (!open_preview(ctx)) return;
     auto& pc = *h.app->preview;
 
     ctx->Yield(3);
-    IM_CHECK_EQ(pc.overlay_scale(), 1.0f);  // the default display: full size
+    const float split_scale = pc.overlay_scale();
+    IM_CHECK(split_scale <= 1.0f);
+    IM_CHECK(split_scale >= hydra::render::kOverlayMinScale);
+
+    // The library at its narrowest (what dragging its edge left does): the
+    // split puts back library_w the next time the panel opens.
+    h.app->library_ui.library_w = 1.0f;
+    h.app->library_ui.panel_was_open = false;
+    ctx->Yield(5);
+    IM_CHECK_EQ(pc.overlay_scale(), 1.0f);  // a wide panel: full size
     IM_CHECK(screenshot(ctx, "overlay-fit-wide.png"));
 
     DisplayWidth narrow(h, 640);
@@ -456,30 +467,6 @@ void test_layout_drift(ImGuiTestContext* ctx) {
     // Play/Pause swap must not shift the scrubber either.
     IM_CHECK_FLOAT_NEAR_EQ(ctx->ItemInfo("**/##scrub").RectFull.Min.x, scrub0.x, 0.01f);
     (void)play0;
-}
-
-// File-local copies of uitest_details.cpp's two helpers, for this wave only:
-// Task 9 moves them into uitest_harness.{h,cpp} and updates them for the song
-// panel. Delete these two copies when Task 9 merges (the calls below keep the
-// same names and arguments).
-void open_titled(ImGuiTestContext* ctx, const std::string& search, const std::string& title) {
-    Harness& h = harness(ctx);
-    h.app->search = search;
-    h.app->refresh_page();
-    ctx->Yield(2);
-    size_t idx = h.app->current_page.rows.size();
-    for (size_t i = 0; i < h.app->current_page.rows.size(); ++i)
-        if (h.app->current_page.rows[i].title == title) idx = i;
-    IM_CHECK(idx < h.app->current_page.rows.size());
-    open_details(ctx, idx);
-}
-
-void analyze_open_song(ImGuiTestContext* ctx) {
-    Harness& h = harness(ctx);
-    ctx->ItemClick("##DetailsTabs/Paths");
-    ctx->ItemClick("**/Analyze paths!");
-    IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
-    IM_CHECK(h.app->viewed.status == hydra::store::RecordStatus::Ready);
 }
 
 // Burnout analyzed, its Preview open with the optimal path's overlay loaded.

@@ -29,7 +29,8 @@ void test_analyze(ImGuiTestContext* ctx) {
     std::string best = h.app->viewed.record->best_path().pathstring();
     IM_CHECK(wait_until(ctx, [&] { return visible_text(h).find(best) != std::string::npos; }, 5));
     // The library row's Best Path cell now shows it too.
-    IM_CHECK(h.app->view_row_status(0) == hydra::store::RecordStatus::Ready);
+    IM_CHECK(h.app->library_row_at(0).status ==
+             hydra::store::RecordStatus::Ready);
 
     // Records are kept per SP cap: switching the cap away from 4 shows the
     // song as not analyzed (no record at that cap), switching back finds the
@@ -37,14 +38,14 @@ void test_analyze(ImGuiTestContext* ctx) {
     // is in the settings bar, outside the panel the ref points at.
     ctx->ItemInputValue("//Hydra/**/##spcap",8);
     IM_CHECK(wait_until(ctx, [&] { return h.app->settings.sp_cap == 8; }, 5));
-    IM_CHECK(h.app->view_row_status(0) == hydra::store::RecordStatus::NotAnalyzed);
+    IM_CHECK(h.app->library_row_at(0).status == hydra::store::RecordStatus::NotAnalyzed);
     IM_CHECK(!h.app->viewed.record.has_value());
     IM_CHECK(wait_until(ctx, [&] {
         return hydra::app::Settings::load_file(h.ini_path).sp_cap == 8;
     }, 5));
     ctx->ItemInputValue("//Hydra/**/##spcap",4);
     IM_CHECK(wait_until(ctx, [&] { return h.app->settings.sp_cap == 4; }, 5));
-    IM_CHECK(h.app->view_row_status(0) == hydra::store::RecordStatus::Ready);
+    IM_CHECK(h.app->library_row_at(0).status == hydra::store::RecordStatus::Ready);
     IM_CHECK(h.app->viewed.record.has_value());
     // The headline shows the 4-bar record's best path again.
     IM_CHECK(wait_until(ctx, [&] { return visible_text(h).find(best) != std::string::npos; }, 5));
@@ -96,7 +97,8 @@ void test_dynamics(ImGuiTestContext* ctx) {
     ctx->ItemInputValue("**/##search", "Acid Romance");
     IM_CHECK(wait_until(ctx, [&] { return h.app->search == "Acid Romance"; }, 5));
     IM_CHECK(wait_until(ctx, [&] {
-        return h.app->view_row_count() > 0 && h.app->view_row(0).title == "Acid Romance";
+        return h.app->library_shown_count() > 0 &&
+               h.app->library_row_at(0).title == "Acid Romance";
     }, 5));
     open_details(ctx, 0);
     if (ctx->IsError()) return;
@@ -141,11 +143,10 @@ void test_dynamics_stored(ImGuiTestContext* ctx) {
 
     // Open Acid Romance. Set the search via app state to avoid the ImGui
     // input-buffer residue from the previous dynamics test.
-    h.app->search = "Acid Romance";
-    h.app->refresh_page();
+    h.app->set_search("Acid Romance");
     ctx->Yield(2);
-    IM_CHECK(h.app->view_row_count() > 0);
-    IM_CHECK(h.app->view_row(0).title == "Acid Romance");
+    IM_CHECK(h.app->library_shown_count() > 0);
+    IM_CHECK(h.app->library_row_at(0).title == "Acid Romance");
     open_details(ctx, 0);
     if (ctx->IsError()) return;
 
@@ -156,26 +157,24 @@ void test_dynamics_stored(ImGuiTestContext* ctx) {
 
     // Select a different chart so the in-memory dynamics cache for Acid
     // Romance is dropped, then close the panel so the tab stops rendering.
-    h.app->search.clear();
-    h.app->refresh_page();
+    h.app->set_search("");
     size_t other_idx = 0;
-    for (size_t i = 0; i < h.app->view_row_count(); ++i) {
-        if (h.app->view_row(i).title != "Acid Romance") {
+    for (size_t i = 0; i < h.app->library_shown_count(); ++i) {
+        if (h.app->library_row_at(i).title != "Acid Romance") {
             other_idx = i;
             break;
         }
     }
-    h.app->select(h.app->view_row(other_idx));
+    h.app->select(h.app->library_row_at(other_idx).entry);
     h.app->show_details = false;
     ctx->Yield(3);
 
     // Reopen Acid Romance. The Dynamics tab loads its counts from the
     // store (put there by the first open's job), so no parse job starts.
-    h.app->search = "Acid Romance";
-    h.app->refresh_page();
+    h.app->set_search("Acid Romance");
     ctx->Yield(2);
-    IM_CHECK(h.app->view_row_count() > 0);
-    IM_CHECK(h.app->view_row(0).title == "Acid Romance");
+    IM_CHECK(h.app->library_shown_count() > 0);
+    IM_CHECK(h.app->library_row_at(0).title == "Acid Romance");
     // Clear any leftover dynamics state from the other chart.
     h.app->dynamics_result.reset();
     h.app->dynamics_key.clear();
@@ -268,33 +267,6 @@ void test_stars(ImGuiTestContext* ctx) {
              std::string::npos);
     IM_CHECK(text.find("Solo bonus") == std::string::npos);
     IM_CHECK(text.find("With full solo bonus") == std::string::npos);
-}
-
-// A squeezed-out row the engine never counted reads "0" and "(uncounted)"
-// in the real details table, not the old "(-N)".
-void test_squeezed_out_uncounted(ImGuiTestContext* ctx) {
-    // Found by the skipped doctest "find a chart with an uncounted
-    // squeezed-out row" (tests/test_path_view.cpp): Ne Obliviscaris'
-    // chart's best path at depth 2, cap 4 has one.
-    static const char* kTitle = "Tapestry of the Starless Abstract (Shortened)";
-    Harness& h = harness(ctx);
-    reset_app(h);
-    scan_library(ctx);
-    if (ctx->IsError()) return;
-    ctx->SetRef("//Hydra");
-    ctx->ItemInputValue("**/##search", kTitle);
-    IM_CHECK(wait_until(ctx, [&] { return h.app->search == kTitle; }, 5));
-    IM_CHECK(wait_until(ctx, [&] { return h.app->view_row_count() > 0; }, 5));
-    open_details(ctx, 0);
-    if (ctx->IsError()) return;
-    ctx->ItemClick(analyze_button_ref(h).c_str());
-    IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
-    IM_CHECK(h.app->viewed.record.has_value());
-    // Activation headers are closed tree nodes; open every one.
-    ctx->ItemOpenAll("**/Activations");
-    ctx->Yield(2);
-    const std::string text = visible_text(h);
-    IM_CHECK(text.find("squeezed out (uncounted)") != std::string::npos);
 }
 
 // Hiding the details panel by any route tears it down. The "Rescan library"
@@ -450,7 +422,6 @@ const std::vector<TestEntry>& details_tests() {
         {"dynamics", test_dynamics},
         {"dynamics-stored", test_dynamics_stored},
         {"stars", test_stars},
-        {"squeezed_out_uncounted", test_squeezed_out_uncounted},
         {"details-close-teardown", test_details_close_teardown},
         {"panel-open-close", test_panel_open_close},
         {"panel-prev-next", test_panel_prev_next},

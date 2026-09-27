@@ -12,40 +12,11 @@
 #include "app/path_view.h"
 #include "core/model.h"
 #include "ui/app_state.h"
+#include "ui/preview_controller.h"
 
 namespace uitest {
 
 namespace {
-
-// ---- T10 local copies: delete this block at the wave-3 merge ---------------
-// Task 9 moves open_titled and analyze_open_song into uitest_harness.{h,cpp}
-// and rewrites them for the song panel. This branch forks before that, where
-// both are still file-local in uitest_details.cpp, so these are copies of the
-// pre-panel versions. Once the block is gone, the calls below resolve to Task
-// 9's shared helpers of the same names.
-
-// Narrow the library with `search`, then open the row titled `title`.
-void open_titled(ImGuiTestContext* ctx, const std::string& search, const std::string& title) {
-    Harness& h = harness(ctx);
-    h.app->search = search;
-    h.app->refresh_page();
-    ctx->Yield(2);
-    size_t idx = h.app->current_page.rows.size();
-    for (size_t i = 0; i < h.app->current_page.rows.size(); ++i)
-        if (h.app->current_page.rows[i].title == title) idx = i;
-    IM_CHECK(idx < h.app->current_page.rows.size());
-    open_details(ctx, idx);
-}
-
-// Analyze the open song from the Paths tab and wait for a Ready record.
-void analyze_open_song(ImGuiTestContext* ctx) {
-    Harness& h = harness(ctx);
-    ctx->ItemClick("##DetailsTabs/Paths");
-    ctx->ItemClick("**/Analyze paths!");
-    IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
-    IM_CHECK(h.app->viewed.status == hydra::store::RecordStatus::Ready);
-}
-// ---- end of the T10 local copies --------------------------------------------
 
 // Keeps a test off the real Windows clipboard: while alive, ImGui reads and
 // writes text() instead, and the previous handlers come back afterwards.
@@ -143,10 +114,15 @@ void test_paths_rows(ImGuiTestContext* ctx) {
     IM_CHECK(!on_screen(h, "SqOut: Note timing"));
     IM_CHECK(!on_screen(h, "Frontend:"));
 
-    // "Show in Preview" asks the Preview for activation 1 (Task 11 consumes it).
+    // "Show in Preview" asks the Preview for activation 1 (Task 11 consumes it)
+    // and switches to the Preview tab, which starts the Preview.
     ctx->ItemClick("**/Show in Preview >##showact1");
     IM_CHECK(h.app->details_ui.paths_tab.ui().preview_jump == std::optional<size_t>(0));
+    IM_CHECK(wait_until(ctx, [&] { return h.app->preview && h.app->preview->active(); }, 10));
+    IM_CHECK(wait_until(ctx, [&] { return !h.app->preview->loading(); }, 120));
     h.app->details_ui.paths_tab.ui().preview_jump.reset();
+    ctx->ItemClick("##DetailsTabs/Paths");
+    ctx->Yield(2);
 
     ctx->ItemClick("**/##act2");  // opens row 2, closes row 1
     ctx->Yield(2);
@@ -235,6 +211,14 @@ void test_paths_folds_copy(ImGuiTestContext* ctx) {
     ctx->ItemClick("**/Copy path");
     ctx->Yield(2);
     const hydra::HydraRecord& rec = *h.app->viewed.record;
+    IM_CHECK_STR_EQ(FakeClipboard::text().c_str(),
+                    rec.best_path().pathstring_verbose(rec.multsqueezes).c_str());
+    IM_CHECK(on_screen(h, "Copied!"));
+
+    // Ctrl+C goes through the same call: it copies again and still flashes.
+    FakeClipboard::text().clear();
+    ctx->KeyPress(ImGuiMod_Ctrl | ImGuiKey_C);
+    ctx->Yield(2);
     IM_CHECK_STR_EQ(FakeClipboard::text().c_str(),
                     rec.best_path().pathstring_verbose(rec.multsqueezes).c_str());
     IM_CHECK(on_screen(h, "Copied!"));

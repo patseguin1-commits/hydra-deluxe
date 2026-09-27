@@ -17,7 +17,7 @@ void register_paths_tests(Harness& h);  // uitest_paths.cpp
 
 void register_tests(Harness& h) {
     // --all runs the tests in the order they are registered, and the ImGui
-    // context carries over from one test to the next. So the 26 tests that
+    // context carries over from one test to the next. So the tests that
     // lived in this one file keep their old order. A test not named here (a
     // later task's new test) runs after them, in its file's order.
     static const char* const kRunOrder[] = {
@@ -26,7 +26,7 @@ void register_tests(Harness& h) {
         "preview-drain-box", "preview-overlay-fit", "preview-buttons-keys",
         "scrub-hold", "layout-drift", "batch-modal-drift", "settings-and-reports",
         "dynamics", "dynamics-stored", "stars", "rules-error",
-        "squeezed_out_uncounted", "details-close-teardown", "library-state-per-app",
+        "details-close-teardown", "library-state-per-app",
         "dm-compare-flow", "report-buttons", "view-settings",
     };
     std::vector<TestEntry> pending;

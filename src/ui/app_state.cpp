@@ -47,7 +47,7 @@ AppState::AppState(app::Settings initial_settings,
       committed_chartmode_(settings.chartmode_key()),
       committed_cap_(settings.cap_query()),
       committed_lens_(settings.lens()) {
-    refresh_page();
+    reload_library();
 }
 
 // Out-of-line so the unique_ptr<PreviewController> can be a forward declaration
@@ -65,62 +65,69 @@ PreviewController* AppState::preview_controller() {
     return preview.get();
 }
 
-void AppState::refresh_page() {
-    std::optional<std::string> search_opt = search.empty() ? std::nullopt : std::optional(search);
-    current_page.total_count = store->chart_library_count(search_opt);
-
-    // Keep the page in range: a shrinking result set (new search, rescan) or
-    // a taller window (more rows per page) can leave table_viewpage pointing
-    // past the last page, stranding the user on an empty page of "-----".
-    int64_t last_page =
-        std::max<int64_t>(0, (current_page.total_count - 1) / rows_per_page);
-    table_viewpage = std::clamp(table_viewpage, 0, static_cast<int>(last_page));
-
-    current_page.rows =
-        store->list_chart_library(search_opt, table_viewpage * rows_per_page, rows_per_page);
-    refresh_summaries();
-
-    library_total =
-        search.empty() ? current_page.total_count : store->chart_library_count(std::nullopt);
+void AppState::reload_library() {
+    // The whole scan in one read. Every chart is needed anyway: the chips
+    // count them and the search filters them in memory.
+    library.set_charts(store->list_chart_library(std::nullopt, 0, -1));  // -1 = no limit
+    library_total = static_cast<int64_t>(library.rows().size());
+    library.set_query(search);
+    refresh_library_summaries();
 }
 
-void AppState::refresh_summaries() {
-    // Resolve each row's Best Path summary once here instead of per row per
-    // frame in the render loop (a SQLite query at 60fps x 200 rows, on the
-    // render thread, against the same mutex the batch workers hold).
-    // One query for the whole page, not one per row.
-    std::vector<std::string> hashes;
-    hashes.reserve(current_page.rows.size());
-    for (const store::ChartLibraryEntry& row : current_page.rows) hashes.push_back(row.md5);
-    std::vector<store::SummaryLookup> lookups = store->get_summaries(
-        hashes, settings.chartmode_key(), settings.cap_query(), settings.lens());
-    current_page.summaries.clear();
-    current_page.summaries.reserve(lookups.size());
-    for (store::SummaryLookup& summary : lookups) {
-        LibraryPage::RowSummary rs;
-        rs.state = summary.status;
-        rs.bestpath = std::move(summary.bestpath);
-        current_page.summaries.push_back(std::move(rs));
+void AppState::refresh_library_summaries() {
+    // One store call for the whole library (T7 splits it into chunks), on
+    // this thread, never per row per frame: the batch workers share the
+    // store's lock.
+    library.set_summaries(store->get_summaries(library.hashes(), settings.chartmode_key(),
+                                               settings.cap_query(), settings.lens()));
+}
+
+void AppState::refresh_library_row(const std::string& md5) {
+    library.set_summary_for(md5, store->get_summary(settings.record_key(md5)));
+}
+
+void AppState::set_search(std::string text) {
+    search = std::move(text);
+    library.set_query(search);
+}
+
+std::vector<store::ChartLibraryEntry> AppState::library_matches() const {
+    std::vector<store::ChartLibraryEntry> out;
+    const std::vector<size_t> matched = library.matches();
+    out.reserve(matched.size());
+    for (size_t i : matched) out.push_back(library.rows()[i].entry);
+    return out;
+}
+
+void AppState::tick_library(double now) {
+    // A finished scan replaced the chart table: read it once.
+    if (scan_job && !scan_reloaded_ && scan_job->snapshot().finished) {
+        scan_reloaded_ = true;
+        reload_library();
+    }
+    // A batch stores results on its own threads. Re-read the summaries at
+    // most once a second, only when it stored something since the last read,
+    // and once more when it ends so the last results show.
+    if (batch_job) {
+        const BatchJob::Snapshot snap = batch_job->snapshot();
+        if (snap.completed != batch_seen_completed_ &&
+            (snap.finished || now - batch_refreshed_at_ >= 1.0)) {
+            batch_seen_completed_ = snap.completed;
+            batch_refreshed_at_ = now;
+            refresh_library_summaries();
+        }
     }
 }
 
-void AppState::set_rows_per_page(int rows) {
-    if (rows == rows_per_page) return;
-    rows_per_page = rows;
-    refresh_page();
-}
-
-// Over the page the table shows today. T12 re-implements these three over its
-// whole-library model (library_view_order()); every caller stays the same.
-size_t AppState::view_row_count() const { return current_page.rows.size(); }
+// The rows the library table shows, in its current order and filter.
+size_t AppState::view_row_count() const { return library_shown_count(); }
 
 const store::ChartLibraryEntry& AppState::view_row(size_t i) const {
-    return current_page.rows[i];
+    return library_row_at(i).entry;
 }
 
 store::RecordStatus AppState::view_row_status(size_t i) const {
-    return i < current_page.summaries.size() ? current_page.summaries[i].state
-                                             : store::RecordStatus::NotAnalyzed;
+    return library_row_at(i).status;
 }
 
 std::optional<size_t> AppState::relative_row(int delta) const {
@@ -372,6 +379,7 @@ void AppState::reap_dynamics() {
 void AppState::start_scan() {
     if (scan_job && !scan_job->snapshot().finished) return;
     scan_job = std::make_unique<ScanJob>(settings.chartfolders, *store);
+    scan_reloaded_ = false;
     scan_job->start();
 }
 
@@ -385,6 +393,8 @@ void AppState::start_batch(bool redo) {
     batch_job = std::make_unique<BatchJob>(search_opt, settings.batch_run(), *store, redo);
     report_started = false;
     report_outcome_shown = false;
+    batch_seen_completed_ = 0;
+    batch_refreshed_at_ = -1.0;
     batch_job->start();
 }
 
@@ -417,7 +427,7 @@ std::string AppState::store_finished_analysis() {
                                                                as.prodrums));
         parked_lookups_.clear();  // a record just changed
         refresh_viewed_record();
-        refresh_page();  // the library row's Best Path cell is cached per page
+        refresh_library_row(song.md5);  // its row's Best path cell and chip
         return "";
     } catch (const std::exception& e) {
         return "Analyzed, but saving failed. " + app::plain_error(e);
@@ -477,17 +487,13 @@ void AppState::apply_settings() {
     store::CapQuery cap = settings.cap_query();
     store::Lens lens = settings.lens();
     if (chartmode != committed_chartmode_) {
-        // A different chart mode is a different library listing, so the user
-        // starts over at page one.
-        table_viewpage = 0;
-        refresh_page();
+        // A different chart mode asks every chart a different question. The
+        // rows themselves come from the scan and stay; their summaries and
+        // the viewed record are read again.
+        refresh_library_summaries();
         refresh_viewed_record();
     } else if (cap != committed_cap_ || lens != committed_lens_) {
-        // The cap box and the search controls live in the details modal.
-        // Resetting the page here would yank the library out from under a
-        // user who never touched it. The page's rows and counts do not depend
-        // on the cap or lens, so only the Best Path summaries are asked again.
-        refresh_summaries();
+        refresh_library_summaries();
         show_record_for_settings();
     }
     committed_chartmode_ = std::move(chartmode);

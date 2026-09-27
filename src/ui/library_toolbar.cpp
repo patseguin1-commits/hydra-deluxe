@@ -57,12 +57,13 @@ void render_actions_row(AppState& app) {
     char label[96];
     if (searching)
         std::snprintf(label, sizeof(label), "Analyze search (%lld)",
-                      (long long)app.current_page.total_count);
+                      (long long)static_cast<int64_t>(app.library_match_count()));
     else
         std::snprintf(label, sizeof(label), "Analyze library");
     // Nothing to analyze -> disabled, like "Scan library" with no folders
     // (running a batch over 0 charts just failed the report afterwards).
-    int64_t analyzable = searching ? app.current_page.total_count : app.library_total;
+    int64_t analyzable =
+        searching ? static_cast<int64_t>(app.library_match_count()) : app.library_total;
     // A search count can never exceed the library, so this slot fits both labels.
     std::string analyze_widest =
         "Analyze search (" + widest_digits(digit_count(app.library_total)) + ")";

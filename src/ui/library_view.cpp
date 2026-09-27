@@ -15,41 +15,14 @@ namespace hydra::ui {
 
 namespace {
 
-// Today's library block: the title with its counts, the search box, and the
-// table or the empty-library message. T12 replaces this body with its pane.
+// The library pane: heading, search box, chips and table (library_table.cpp),
+// or the empty-library message when nothing is scanned yet.
 void render_library_pane(AppState& app) {
-    // While searching, show the match count against the whole library; the
-    // full total alone above three search results read as a wrong count.
-    char libtitle[96];
-    if (!app.search.empty())
-        std::snprintf(libtitle, sizeof(libtitle), "Library (%lld of %lld chart%s)",
-                      (long long)app.current_page.total_count, (long long)app.library_total,
-                      app.library_total == 1 ? "" : "s");
-    else
-        std::snprintf(libtitle, sizeof(libtitle), "Library (%lld chart%s)",
-                      (long long)app.library_total, app.library_total == 1 ? "" : "s");
-    ImGui::SeparatorText(libtitle);
-    detail::render_search_box(app);
-    ImGui::Spacing();
-
-    // Fill whatever vertical space is left (minus room for the pagination
-    // row) with as many library rows as fit.
-    float footer_h = ImGui::GetFrameHeightWithSpacing();
-    float header_h = ImGui::GetFrameHeightWithSpacing();
-    float row_h = ImGui::GetTextLineHeightWithSpacing();
-    float avail = ImGui::GetContentRegionAvail().y - footer_h - header_h;
-    int visible_rows = std::clamp((int)(avail / row_h), 5, 200);
-    app.set_rows_per_page(visible_rows);
-
-    if (app.current_page.total_count > 0) {
-        detail::render_library_table(app, visible_rows);
-    } else if (app.library_total > 0) {
-        ImGui::TextUnformatted("No charts match your search.");
-    } else {
+    detail::render_library(app);
+    if (app.library_total == 0)
         ImGui::TextUnformatted(
             "No songs scanned. Click \"Manage folders...\" to add your song folder, "
             "then \"Scan library\" to get started!");
-    }
 }
 
 // The library and, when a song is open, the song panel beside it. The
