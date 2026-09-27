@@ -260,7 +260,10 @@ add_library(hydra_ui STATIC
     src/ui/paths_tab.cpp
     src/ui/preview_tab.cpp
     src/ui/stars_tab.cpp
+    src/ui/library_dialogs.cpp
     src/ui/library_jobs.cpp
+    src/ui/library_table.cpp
+    src/ui/library_toolbar.cpp
     src/ui/library_view.cpp
     src/ui/preview_controller.cpp
     src/ui/dynamics_load_job.cpp
