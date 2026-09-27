@@ -483,6 +483,35 @@ TEST_CASE("build_time_box: a mid-measure meter change follows the engine") {
     CHECK(bars[3] == 4800);
 }
 
+TEST_CASE("build_time_box: the time signature in force, as the chart wrote it") {
+    // 120 BPM, 480 ticks per quarter. 6/8 from tick 1920 (2000 ms), then 3/4
+    // from tick 3360 (3500 ms). Both are 1440 ticks a measure, so only the
+    // stored signature tells them apart.
+    Song song(480);
+    song.bpm_changes[0] = 120.0;
+    song.tpm_changes[1920] = 1440;
+    song.timesig_changes[1920] = {6, 8};
+    song.tpm_changes[3360] = 1440;
+    song.timesig_changes[3360] = {3, 4};
+    song.build_timing();
+    {
+        Chord c;
+        c.add_note(NoteColor::Red);
+        SongTimestamp ts;
+        ts.timecode = song.timecode(4800);
+        ts.chord = std::move(c);
+        song.sequence.push_back(std::move(ts));
+    }
+    PreviewScene scene = build_preview_scene(song, nullptr);
+
+    CHECK(build_time_box(scene, 0.0, 5000.0).time_sig == "Time signature: 4/4");
+    CHECK(build_time_box(scene, 1999.0, 5000.0).time_sig == "Time signature: 4/4");
+    CHECK(build_time_box(scene, 2000.0, 5000.0).time_sig == "Time signature: 6/8");
+    CHECK(build_time_box(scene, 3500.0, 5000.0).time_sig == "Time signature: 3/4");
+    // A scene built from nothing reads the chart default.
+    CHECK(build_time_box(PreviewScene{}, 0.0, 0.0).time_sig == "Time signature: 4/4");
+}
+
 TEST_CASE("build_preview_scene: no path means no overlay") {
     Song song = make_hand_song();
     PreviewScene scene = build_preview_scene(song, nullptr);

@@ -15,6 +15,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "core/model.h"
@@ -89,6 +90,7 @@ class Song {
 public:
     explicit Song(int64_t resolution) : tick_resolution_(resolution) {
         tpm_changes[0] = resolution * 4;
+        timesig_changes[0] = {4, 4};
     }
 
     int64_t tick_resolution() const { return tick_resolution_; }
@@ -97,6 +99,11 @@ public:
     // parsing. std::map keeps them sorted, which the timing indexes rely on.
     std::map<int64_t, int64_t> tpm_changes;
     std::map<int64_t, double> bpm_changes;
+    // The chart's own time signatures, tick -> (numerator, denominator),
+    // recorded by the same parser call that writes tpm_changes. Display only
+    // (the Preview's time box): the engine reads tpm_changes, and a length
+    // alone cannot tell 6/8 from 3/4.
+    std::map<int64_t, std::pair<int, int>> timesig_changes;
 
     std::vector<SongTimestamp> sequence;
     std::vector<std::string> features;

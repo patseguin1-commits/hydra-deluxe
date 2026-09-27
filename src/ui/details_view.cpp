@@ -726,14 +726,16 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
 
         // The time box, drawn over the image the way Onyx draws its own
         // (top-left, monospace, on a translucent dark panel): time / length,
-        // [measure:beat:tick] for both, BPM, and the practice section. The
-        // section line is absent on charts that have no sections.
+        // [measure:beat:tick] for both, BPM, the time signature, and the
+        // practice section. The section line is absent on charts that have no
+        // sections.
         hydra::app::PreviewTimeBox box = pc->time_box();
-        const char* lines[4];
+        const char* lines[5];
         int line_count = 0;
         lines[line_count++] = box.timestamp.c_str();
         lines[line_count++] = box.measure_beat.c_str();
         lines[line_count++] = box.bpm.c_str();
+        lines[line_count++] = box.time_sig.c_str();
         if (!box.section.empty()) lines[line_count++] = box.section.c_str();
         ImFont* font = g_mono_font ? g_mono_font : ImGui::GetFont();
         const render::PreviewConfig& pcfg = pc->preview_config();

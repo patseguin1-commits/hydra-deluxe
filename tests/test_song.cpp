@@ -217,6 +217,33 @@ TEST_CASE(".chart: the note on the solo end tick is in the solo") {
     CHECK_FALSE(song.sequence[3].flag_solo);
 }
 
+// The parser keeps each time signature as the chart wrote it, beside the
+// measure length the engine reads. The length alone cannot tell 6/8 from 3/4.
+TEST_CASE(".chart: time signatures are kept as written") {
+    const std::string text =
+        "[Song]\n{\n  Resolution = 192\n}\n"
+        "[SyncTrack]\n{\n"
+        "  0 = TS 4\n  0 = B 120000\n"
+        "  768 = TS 6 3\n"
+        "  1344 = TS 3\n"
+        "}\n"
+        "[ExpertDrums]\n{\n  0 = N 0 0\n  1536 = N 1 0\n}\n";
+    const std::vector<uint8_t> data(text.begin(), text.end());
+    Song song = load_songbytes_chart(data, true, true);
+
+    // 6/8 and 3/4 are both 576 ticks at 192 per quarter note.
+    CHECK(song.tpm_changes.at(768) == 576);
+    CHECK(song.tpm_changes.at(1344) == 576);
+    CHECK(song.timesig_changes.at(0) == std::make_pair(4, 4));
+    CHECK(song.timesig_changes.at(768) == std::make_pair(6, 8));
+    CHECK(song.timesig_changes.at(1344) == std::make_pair(3, 4));
+
+    // A chart with no signature at all reads the default, 4/4 from tick 0.
+    Song blank(480);
+    CHECK(blank.timesig_changes.size() == 1);
+    CHECK(blank.timesig_changes.at(0) == std::make_pair(4, 4));
+}
+
 // In a .mid the solo is a held marker note (103); its note-off tick is where
 // the marker stops covering, so a note on that tick is outside the solo.
 TEST_CASE(".mid: the note on the solo marker's note-off tick is outside the solo") {

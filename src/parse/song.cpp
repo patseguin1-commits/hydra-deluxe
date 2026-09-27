@@ -113,10 +113,12 @@ bool fill_lands_on_chord(const Song& song, int64_t fill_end_tick, int64_t tick,
 // The parser handlers MIDI and .chart share. Each parser decides when to
 // call them (its own event phases); what they do to the Song lives here once.
 
-// A time signature: ticks per measure = resolution * 4 * num / den.
+// A time signature: ticks per measure = resolution * 4 * num / den. The
+// signature itself is kept too, for display.
 void apply_timesig(Song& song, int64_t tick, int numerator, int denominator) {
     song.tpm_changes[tick] = song.tick_resolution() * static_cast<int64_t>(numerator) * 4 /
                              static_cast<int64_t>(denominator);
+    song.timesig_changes[tick] = {numerator, denominator};
 }
 
 // A fill ending: the last chord becomes an activation chord whose fill began
