@@ -108,9 +108,16 @@ std::string render_page(const char* page_template, std::string data_json,
 
 namespace {
 
-const char* const kHead = R"frag(<meta charset="utf-8">
+// The doctype puts browsers in standards mode (without it they fall back to
+// quirks mode); lang tells screen readers which voice to read in.
+const char* const kHead = R"frag(<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 )frag";
+
+const char* const kEnd = "</body>\n</html>\n";
 
 }  // namespace
 
@@ -120,12 +127,13 @@ const char* const kReportCss = R"css(:root {
   --surface: #ffffff;
   --raised: #f2f0ec;
   --ink: #15171d;
-  --muted: #6a6e79;
+  --muted: #5f636d;
   --rule: #e3e1db;
   --sp: #b07d0a;
   --sp-soft: #f6e7c2;
-  --t0: #2c7a5e; --t1: #9a7a1e; --t2: #b85f2c; --t3: #b23c3c; --t4: #8e3070; --t5: #5b3fa8;
-  --tn: #9aa0ab;
+  --t0: #2c7a5e; --t1: #85690f; --t2: #a0501f; --t3: #b23c3c; --t4: #8e3070; --t5: #5b3fa8;
+  --tn: #646873;
+  --idxw: 64px;  /* the "#" column's width; the song column sticks just right of it */
   --shadow: 0 1px 2px rgba(20,22,28,.06), 0 8px 24px rgba(20,22,28,.05);
 }
 @media (prefers-color-scheme: dark) {
@@ -134,7 +142,7 @@ const char* const kReportCss = R"css(:root {
     --ink: #e9e7e2; --muted: #8f95a1; --rule: #282d39;
     --sp: #f0b429; --sp-soft: #3a2e12;
     --t0: #4fbf94; --t1: #e0b13f; --t2: #f0894e; --t3: #f2686b; --t4: #e07ac0; --t5: #a78bfa;
-    --tn: #5c626e;
+    --tn: #949aa6;
     --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
   }
 }
@@ -189,14 +197,17 @@ input:focus-visible, select:focus-visible, th:focus-visible, button:focus-visibl
 .toggle { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); cursor: pointer; user-select: none; }
 .count { color: var(--muted); font-size: 13px; margin-left: auto; }
 
+/* The wrapper scrolls both ways and has a height, so it is the header's
+   sticky container. With only a sideways scroll it never scrolled down, and
+   the header scrolled away with the page. */
 .tablewrap {
-  overflow-x: auto; background: var(--surface);
+  overflow: auto; max-height: 80vh; background: var(--surface);
   border: 1px solid var(--rule); border-radius: 10px; box-shadow: var(--shadow);
   /* Always show the horizontal bar: the numeric columns live off to the
      right, and a scroller you cannot see is a scroller nobody uses. */
   scrollbar-color: var(--muted) transparent;
 }
-.tablewrap::-webkit-scrollbar { height: 12px; }
+.tablewrap::-webkit-scrollbar { height: 12px; width: 12px; }
 .tablewrap::-webkit-scrollbar-thumb { background: var(--rule); border-radius: 6px; }
 .tablewrap::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 table { border-collapse: separate; border-spacing: 0; width: 100%; }
@@ -218,10 +229,19 @@ tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover td { background: var(--raised); }
 tbody tr.best td:first-child { box-shadow: inset 3px 0 0 var(--sp); }
 
-/* Keep the song visible while reading the numbers off to the right. */
+/* The "#" column numbers the rows in the current sort. It isn't a sort key. */
+th.idx, td.idx { width: var(--idxw); min-width: var(--idxw); max-width: var(--idxw); color: var(--muted); }
+thead th.idx { cursor: default; }
+thead th.idx:hover { color: var(--muted); background: var(--raised); }
+
+/* Keep the row number and the song visible while reading the numbers off to
+   the right. */
 thead th:first-child { left: 0; z-index: 4; }
-tbody td:first-child { position: sticky; left: 0; z-index: 1; background: var(--surface); }
-tbody tr:hover td:first-child { background: var(--raised); }
+thead th:nth-child(2) { left: var(--idxw); z-index: 4; }
+tbody td:first-child, tbody td:nth-child(2) { position: sticky; z-index: 1; background: var(--surface); }
+tbody td:first-child { left: 0; }
+tbody td:nth-child(2) { left: var(--idxw); }
+tbody tr:hover td:first-child, tbody tr:hover td:nth-child(2) { background: var(--raised); }
 
 /* Every text column is capped. Left to size themselves, a full-discography
    path string (hundreds of activations) or a charter credit carrying Clone
@@ -251,7 +271,7 @@ td.path { max-width: 230px; }
 }
 .t0{color:var(--t0)} .t1{color:var(--t1)} .t2{color:var(--t2)}
 .t3{color:var(--t3)} .t4{color:var(--t4)} .t5{color:var(--t5)} .tn{color:var(--tn); border-color:transparent}
-.s-matched{color:var(--t0)} .s-above{color:var(--t1)} .s-unmatched{color:var(--tn); border-color:transparent}
+.s-matched{color:var(--t0)} .s-above{color:var(--t1)} .s-notanalyzed{color:var(--muted)} .s-unmatched{color:var(--tn); border-color:transparent}
 /* "1.1 higher" is the interesting, rare case, so it gets the strong green;
    "1.0 higher" (the common drop) is red, ties are neutral, and the two
    one-sided statuses are muted so they read as missing data, not a result. */
@@ -259,6 +279,32 @@ td.path { max-width: 230px; }
 
 .empty { padding: 40px; text-align: center; color: var(--muted); }
 footer { color: var(--muted); font-size: 12px; }
+footer p { margin: 0 0 8px; }
+.legend { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0; }
+.legend dt { font-weight: 600; color: var(--ink); }
+.legend dd { margin: 0; }
+
+/* Paper: light colours whatever the screen theme, no controls, the whole
+   table (no inner scroller), the header repeated on every page, and rows
+   kept whole. */
+@media print {
+  :root {
+    color-scheme: light;
+    --paper: #ffffff; --surface: #ffffff; --raised: #f2f0ec;
+    --ink: #000000; --muted: #4a4d55; --rule: #c9c6bf;
+    --sp: #8f6508;
+    --t0: #2c7a5e; --t1: #85690f; --t2: #a0501f; --t3: #b23c3c; --t4: #8e3070; --t5: #5b3fa8;
+    --tn: #646873;
+    --shadow: none;
+  }
+  .controls { display: none; }
+  .wrap { max-width: none; padding: 0; }
+  .tablewrap { overflow: visible; max-height: none; border: 0; }
+  thead { display: table-header-group; }
+  thead th, tbody td:first-child, tbody td:nth-child(2) { position: static; }
+  tbody tr { break-inside: avoid; }
+  td.trunc, .song { max-width: none; white-space: normal; }
+}
 )css";
 
 const char* const kReportJsHead = R"js(<script id="data" type="application/json">__DATA__</script>
@@ -295,7 +341,7 @@ function render() {
     return dir * (x - y);
   });
 
-  document.querySelectorAll('#head th').forEach((th, i) => {
+  document.querySelectorAll('#head th.sortable').forEach((th, i) => {
     const c = COLS[i];
     if (c.k === sortKey) th.setAttribute('aria-sort', dir === 1 ? 'ascending' : 'descending');
     else th.removeAttribute('aria-sort');
@@ -309,10 +355,17 @@ function render() {
   body.textContent = '';
   const frag = document.createDocumentFragment();
 
+  let n = 0;
   for (const r of rows) {
     const tr = document.createElement('tr');
     const rowCls = PAGE.rowClass ? PAGE.rowClass(r) : '';
     if (rowCls) tr.className = rowCls;
+
+    // The "#" column: the row's place in the current sort and filter.
+    const idx = document.createElement('td');
+    idx.className = 'idx num';
+    idx.textContent = (++n).toLocaleString();
+    tr.appendChild(idx);
 
     // A cell is [class, text], or [chip class, text, 'chip'] for a coloured
     // pill such as the timing tier or a status.
@@ -382,12 +435,23 @@ sortby.addEventListener('change', () => {
 sortdir.addEventListener('click', () => setSort(sortKey, -sortDir));
 
 const head = document.getElementById('head');
+{
+  // Row numbers: not a sort key, so no arrow and no tab stop.
+  const th = document.createElement('th');
+  th.className = 'idx num';
+  th.scope = 'col';
+  th.textContent = '#';
+  th.title = 'Row number in the current sort';
+  head.appendChild(th);
+}
 COLS.forEach(c => {
   const th = document.createElement('th');
   th.textContent = c.t;
   th.tabIndex = 0;
-  th.title = 'Sort by ' + c.t;
-  if (c.num) th.className = 'num';
+  th.scope = 'col';
+  // A column with a definition shows it on hover; every column says it sorts.
+  th.title = (c.d ? c.t + ': ' + c.d + '\n' : '') + 'Click to sort by ' + c.t + '.';
+  th.className = c.num ? 'sortable num' : 'sortable';
   const arrow = document.createElement('span');
   arrow.className = 'arrow';
   th.appendChild(arrow);
@@ -401,6 +465,19 @@ COLS.forEach(c => {
   });
   head.appendChild(th);
 });
+
+// The footer legend: every column that carries a definition, in table order.
+const legend = document.getElementById('legend');
+if (legend) {
+  for (const c of COLS) {
+    if (!c.d) continue;
+    const dt = document.createElement('dt');
+    dt.textContent = c.t;
+    const dd = document.createElement('dd');
+    dd.textContent = c.d;
+    legend.append(dt, dd);
+  }
+}
 
 for (const [id, ev] of PAGE.controls)
   document.getElementById(id).addEventListener(ev, render);
@@ -418,11 +495,12 @@ std::string page_template(const char* title, const char* body, const char* page_
     page += title;
     page += "</title>\n<style>\n";
     page += kReportCss;
-    page += "</style>\n\n";
+    page += "</style>\n</head>\n<body>\n";
     page += body;
     page += kReportJsHead;
     page += page_js;
     page += kReportJs;
+    page += kEnd;
     return page;
 }
 

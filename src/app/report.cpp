@@ -7,6 +7,7 @@
 #include <cstring>
 #include <filesystem>
 #include <unordered_set>
+#include <unordered_map>
 
 #include "app/display_format.h"
 #include "app/html_page.h"
@@ -39,8 +40,8 @@ const char* const kBody = R"page(<div class="wrap">
       <select id="sortby"></select>
       <button id="sortdir" type="button" title="Switch between highest-first and lowest-first"></button>
     </span>
-    <input type="search" id="q" placeholder="Search song, artist, charter, or path notation">
-    <select id="tier">
+    <input type="search" id="q" aria-label="Search paths" placeholder="Search song, artist, charter, or path notation">
+    <select id="tier" aria-label="Timing tier">
       <option value="">All timing tiers</option>
     </select>
     <label class="toggle"><input type="checkbox" id="bestonly" checked> Best path only</label>
@@ -55,7 +56,10 @@ const char* const kBody = R"page(<div class="wrap">
     <div class="empty" id="empty">Reading paths&hellip;</div>
   </div>
 
-  <footer>__FOOTER__</footer>
+  <footer>
+    <p>__FOOTER__</p>
+    <dl class="legend" id="legend"></dl>
+  </footer>
 </div>
 
 )page";
@@ -65,15 +69,21 @@ const char* const kBody = R"page(<div class="wrap">
 // rows were labeled with.
 const char* const kPageJs = R"page(const BEYOND = Math.max(...DATA.tiers.filter(t => t.cutoff !== null).map(t => t.cutoff));
 
+// One name per tier, for both the dropdown and the chips, so a row's chip
+// reads the same words as the filter that finds it.
+function tierLabel(name) {
+  return name === 'Beyond' ? 'Beyond ' + BEYOND + ' ms'
+       : name === 'None' ? 'No squeezes'
+       : name;
+}
+
 // The tier dropdown mirrors the bands the rows were labeled with.
 {
   const sel = document.getElementById('tier');
   for (const t of DATA.tiers) {
     const o = document.createElement('option');
     o.value = t.name;
-    o.textContent = t.name === 'Beyond' ? 'Beyond ' + BEYOND + ' ms'
-                  : t.name === 'None' ? 'No squeezes'
-                  : t.name;
+    o.textContent = tierLabel(t.name);
     sel.appendChild(o);
   }
 }
@@ -87,18 +97,18 @@ const PAGE = {
     {k:'song',    t:'Song',     num:false},
     {k:'artist',  t:'Artist',   num:false},
     {k:'charter', t:'Charter',  num:false},
-    {k:'mode',    t:'Mode',     num:false},
-    {k:'path',    t:'Path',     num:false},
-    {k:'score',   t:'Score',    num:true},
-    {k:'acts',    t:'Acts',     num:true},
-    {k:'skip',    t:'Max skip', num:true},
-    {k:'ms',      t:'Hardest ms', num:true},
-    {k:'tier',    t:'Timing',   num:false},
-    {k:'efill',   t:'Cal fill', num:true},
-    {k:'mult',    t:'Avg mult', num:true},
-    {k:'sqin',    t:'SqIn',     num:true},
-    {k:'sqout',   t:'SqOut',    num:true},
-    {k:'notes',   t:'Notes',    num:true},
+    {k:'mode',    t:'Mode',     num:false, d:'The difficulty and drum options the path was found for.'},
+    {k:'path',    t:'Path',     num:false, d:'The path in path notation: one entry per activation, with its skip count and squeeze symbols.'},
+    {k:'score',   t:'Score',    num:true,  d:'The total score the path reaches.'},
+    {k:'acts',    t:'Acts',     num:true,  d:'Activations: how many times the path uses Star Power.'},
+    {k:'skip',    t:'Max skip', num:true,  d:'The most fills any one activation passes over before activating.'},
+    {k:'ms',      t:'Hardest ms', num:true, d:'The hardest squeeze or calibration fill the path needs, in raw ms. A dash means it needs none.'},
+    {k:'tier',    t:'Timing',   num:false, d:'How hard Hardest ms is, in bands of your hit window. Beyond means at least twice the hit window.'},
+    {k:'efill',   t:'Cal fill (ms)', num:true, d:'The hardest calibration fill (E0) on the path: how many ms early you must hit to summon the fill. Negative means slack. A dash means the path has none.'},
+    {k:'mult',    t:'Avg multiplier', num:true, d:'Points per note on average: the score without solo bonuses divided by the base score (every note at 1x).'},
+    {k:'sqin',    t:'SqIn',     num:true,  d:'SP phrase notes squeezed into an active Star Power window (+ in the path).'},
+    {k:'sqout',   t:'SqOut',    num:true,  d:'SP phrase notes squeezed out of an active Star Power window (- in the path).'},
+    {k:'notes',   t:'Notes',    num:true,  d:'Notes in the chart.'},
   ],
   controls: [['q', 'input'], ['tier', 'change'], ['bestonly', 'change']],
   filter(q) {
@@ -122,7 +132,7 @@ const PAGE = {
     ['num', r.acts],
     ['num', r.skip],
     ['num', fmtMs(r.ms)],
-    ['chip ' + r.tok, r.tier, 'chip'],
+    ['chip ' + r.tok, tierLabel(r.tier), 'chip'],
     ['num', fmtMs(r.efill)],
     ['num', r.mult.toFixed(3)],
     ['num', r.sqin],
@@ -130,13 +140,12 @@ const PAGE = {
     ['num', fmt(r.notes)],
   ],
   stats(rows) {
-    const best = rows.filter(r => r.rank === 1);
     const withMs = rows.filter(r => r.ms !== null && r.ms !== undefined);
     const tightest = withMs.length ? Math.max(...withMs.map(r => r.ms)) : null;
     const maxSkip = rows.length ? Math.max(...rows.map(r => r.skip)) : 0;
     const beyond = rows.filter(r => r.ms !== null && r.ms >= BEYOND).length;
     return [
-      ['Charts', new Set(best.map(r => r.song + r.artist)).size.toLocaleString()],
+      ['Charts', new Set(rows.map(r => r.c)).size.toLocaleString()],
       ['Paths shown', rows.length.toLocaleString()],
       ['Tightest squeeze', tightest === null ? DASH : tightest.toFixed(1) + ' ms'],
       ['Past ' + BEYOND + ' ms', beyond.toLocaleString()],
@@ -202,6 +211,10 @@ std::string plain(const std::string& text) {
     }
 
     return trim(out);
+}
+
+std::string counted(int64_t n, const char* one, const char* many) {
+    return group_thousands(n) + " " + (n == 1 ? one : many);
 }
 
 std::pair<std::string, std::string> tier_for(const std::optional<double>& ms,
@@ -314,12 +327,19 @@ std::string build_html(const std::vector<ReportRow>& rows, const std::string& su
         }
     }
     data += "],\"rows\":[";
+    // A small number per chart, in order of first appearance: the Charts
+    // tile counts distinct charts by it, the way the subtitle counts chart
+    // hashes, without the 32-character hash on every row.
+    std::unordered_map<std::string, int> chart_ids;
     bool first_row = true;
     for (const ReportRow& r : rows) {
         if (!first_row) data.push_back(',');
         first_row = false;
+        const int chart_id =
+            chart_ids.emplace(r.hyhash, static_cast<int>(chart_ids.size())).first->second;
 
-        data += "{\"song\":";
+        data += "{\"c\":" + std::to_string(chart_id);
+        data += ",\"song\":";
         json_escape_into(data, r.song);
         data += ",\"artist\":";
         json_escape_into(data, r.artist);
@@ -378,8 +398,9 @@ GeneratedReport generate_report(store::RecordStore& store,
     std::string cap_label = options.cap.exact
                                 ? "SP cap " + std::to_string(*options.cap.exact) + " bars"
                                 : "SP cap Auto";
-    std::string subtitle = group_thousands(out.records) + " records across " +
-                           group_thousands(out.songs) + " songs — " + shown + " — " + cap_label;
+    std::string subtitle = counted(out.records, "record", "records") + " across " +
+                           counted(out.songs, "chart", "charts") + " — " + shown + " — " +
+                           cap_label;
     std::string dbname =
         std::filesystem::u8path(options.db_path).filename().u8string();
     std::string footer = "Generated from " + dbname +
