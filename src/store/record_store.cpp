@@ -6,6 +6,7 @@
 #include <map>
 #include <stdexcept>
 
+#include "core/stars.h"
 #include "store/serialize.h"
 #include "store/stored_versions.h"
 
@@ -147,6 +148,8 @@ void bind_summary(sqlite3_stmt* s, int first_idx, const PathSummary& sum) {
     else sqlite3_bind_null(s, first_idx + 7);
     if (sum.pathcount) sqlite3_bind_int(s, first_idx + 8, *sum.pathcount);
     else sqlite3_bind_null(s, first_idx + 8);
+    if (sum.stars) sqlite3_bind_int(s, first_idx + 9, *sum.stars);
+    else sqlite3_bind_null(s, first_idx + 9);
 }
 
 PathSummary read_summary(sqlite3_stmt* s, int first_idx) {
@@ -160,6 +163,7 @@ PathSummary read_summary(sqlite3_stmt* s, int first_idx) {
     if (auto v = column_opt_i64(s, first_idx + 6)) sum.sqin_count = static_cast<int>(*v);
     if (auto v = column_opt_i64(s, first_idx + 7)) sum.sqout_count = static_cast<int>(*v);
     if (auto v = column_opt_i64(s, first_idx + 8)) sum.pathcount = static_cast<int>(*v);
+    if (auto v = column_opt_i64(s, first_idx + 9)) sum.stars = static_cast<int>(*v);
     return sum;
 }
 
@@ -208,12 +212,18 @@ constexpr const char* kResultsColumnDefs =
     "  sqin_count  INTEGER,"
     "  sqout_count INTEGER,"
     "  pathcount   INTEGER,"
+    "  stars       INTEGER,"
     "  UNIQUE (hyhash, chartmode, sp_cap, ms_enabled, ms_value, depth_mode, depth_value)";
 
 // The summary columns, in the order bind_summary/read_summary use.
 constexpr const char* kSummaryColumnList =
     "score, actcount, maxskip, hardest_ms, avgmult, notecount, sqin_count, "
-    "sqout_count, pathcount";
+    "sqout_count, pathcount, stars";
+
+// SQLite refuses a statement with more than 32,766 bound values (the vendored
+// 3.46's SQLITE_MAX_VARIABLE_NUMBER). get_summaries sends a whole library's
+// hashes, so it sends them this many at a time.
+constexpr size_t kHashesPerQuery = 10000;
 
 // ---- which row answers a lookup -------------------------------------------
 //
@@ -469,6 +479,7 @@ PathSummary summarize_path(const Path& path) {
     s.notecount = path.notecount;
     s.sqin_count = sqin;
     s.sqout_count = sqout;
+    s.stars = path_stars(path);
     return s;
 }
 
@@ -575,6 +586,9 @@ RecordStore::RecordStore(const std::string& dbpath, core::RulesStamp rules_finge
     // rebuild_chart_library empties the table rather than recreating it, so
     // the column is added here, once.
     if (!has_column("charts", "sig")) exec("ALTER TABLE charts ADD COLUMN sig TEXT");
+    // A songmeta table from before stored lengths. Old rows read NULL until
+    // their chart is analyzed again.
+    if (!has_column("songmeta", "length_ms")) exec("ALTER TABLE songmeta ADD COLUMN length_ms REAL");
     // The library page sorts by name (list_chart_library's ORDER BY name).
     exec("CREATE INDEX IF NOT EXISTS charts_by_name ON charts (name)");
     // Schema 2 = results keyed by the full settings, with shared paths. A
@@ -582,6 +596,12 @@ RecordStore::RecordStore(const std::string& dbpath, core::RulesStamp rules_finge
     // Nothing reads it (user decision 2026-09-26), so its charts read Not
     // analyzed until they are analyzed again.
     create_result_tables();
+    // A results table from before the stars summary has no column for it.
+    // Its Ready rows are filled now, from their stored paths; nothing is
+    // analyzed again. A row that isn't Ready (another build, other rules) is
+    // left alone and filled on a later open once it reads Ready.
+    if (!has_column("results", "stars")) exec("ALTER TABLE results ADD COLUMN stars INTEGER");
+    fill_missing_stars();
     exec("PRAGMA user_version = 2");
 }
 
@@ -661,10 +681,13 @@ void RecordStore::save_analysis(const std::string& hyhash, const std::string& re
                                 const Song& song, const PreparedRow& row,
                                 const std::optional<DynamicsEntry>& dynamics) {
     const std::vector<uint8_t> tempomap = encode_tempomap(song);  // not a sqlite call
+    const std::optional<double> length_ms =
+        song.sequence.empty() ? std::nullopt
+                              : std::optional<double>(song.sequence.back().timecode.ms());
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     exec("BEGIN");
     try {
-        upsert_song(hyhash, ref_name, ref_artist, ref_charter, tempomap);
+        upsert_song(hyhash, ref_name, ref_artist, ref_charter, tempomap, length_ms);
         write_row(row);
         if (dynamics) {
             // Best effort, inside the same transaction: a failed count write
@@ -778,27 +801,36 @@ void RecordStore::add_song(const std::string& hyhash, const std::string& ref_nam
                            const Song& song) {
     // Encoded before the lock: the lock covers sqlite calls only.
     const std::vector<uint8_t> tempomap = encode_tempomap(song);
+    const std::optional<double> length_ms =
+        song.sequence.empty() ? std::nullopt
+                              : std::optional<double>(song.sequence.back().timecode.ms());
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    upsert_song(hyhash, ref_name, ref_artist, ref_charter, tempomap);
+    upsert_song(hyhash, ref_name, ref_artist, ref_charter, tempomap, length_ms);
 }
 
 void RecordStore::upsert_song(const std::string& hyhash, const std::string& ref_name,
                               const std::string& ref_artist, const std::string& ref_charter,
-                              const std::vector<uint8_t>& tempomap) {
+                              const std::vector<uint8_t>& tempomap,
+                              std::optional<double> length_ms) {
     // A chart already registered takes the names this call carries. They
     // come from the scan, so a fixed song.ini reaches the reports on the next
     // analysis (user decision 2026-09-26). The tempo map is keyed by the same
-    // content hash, so it cannot have changed and is left alone.
+    // content hash, so it cannot have changed and is left alone. The length
+    // is written on update too: a new analysis may be of another difficulty,
+    // with a different last note.
     Stmt s = prepare(db_,
-        "INSERT INTO songmeta (hyhash, ref_name, ref_artist, ref_charter, tempomap) "
-        "VALUES (?,?,?,?,?) "
+        "INSERT INTO songmeta (hyhash, ref_name, ref_artist, ref_charter, tempomap, length_ms) "
+        "VALUES (?,?,?,?,?,?) "
         "ON CONFLICT(hyhash) DO UPDATE SET ref_name = excluded.ref_name, "
-        "ref_artist = excluded.ref_artist, ref_charter = excluded.ref_charter");
+        "ref_artist = excluded.ref_artist, ref_charter = excluded.ref_charter, "
+        "length_ms = COALESCE(excluded.length_ms, songmeta.length_ms)");
     bind_text(s, 1, hyhash);
     bind_text(s, 2, ref_name);
     bind_text(s, 3, ref_artist);
     bind_text(s, 4, ref_charter);
     bind_blob(s, 5, tempomap);
+    if (length_ms) sqlite3_bind_double(s, 6, *length_ms);
+    else sqlite3_bind_null(s, 6);
     if (sqlite3_step(s) != SQLITE_DONE)
         throw std::runtime_error(std::string("add_song failed: ") + sqlite3_errmsg(db_));
 }
@@ -880,7 +912,7 @@ void RecordStore::write_row(const PreparedRow& row) {
             (std::string("INSERT INTO results "
                          "(hyhash, chartmode, hyversion, sp_cap, ms_enabled, ms_value,"
                          " depth_mode, depth_value, bestpath, structure, ") +
-             kSummaryColumnList + ") VALUES (?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?)")
+             kSummaryColumnList + ") VALUES (?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?)")
                 .c_str());
         bind_text(s, 1, row.hyhash);
         bind_text(s, 2, row.chartmode);
@@ -943,41 +975,56 @@ std::vector<SummaryLookup> RecordStore::get_summaries(const std::vector<std::str
     std::vector<SummaryLookup> out(hyhashes.size());
     if (hyhashes.empty()) return out;
 
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
-    std::string sql =
-        "SELECT hyhash, hyversion, bestpath, result_id, substr(structure,1,12)"
-        " FROM results WHERE chartmode=? AND hyhash IN (";
-    for (size_t i = 0; i < hyhashes.size(); ++i) sql += i ? ",?" : "?";
-    sql += ")";
-    append_candidate_filter(sql, "", cap);
-    Stmt s = prepare(db_, sql.c_str());
-    int idx = 1;
-    bind_text(s, idx++, chartmode);
-    for (const std::string& h : hyhashes) bind_text(s, idx++, h);
-    bind_candidate_filter(s, idx, cap, lens);
+    // Each chart is asked about once, however many folders list it. A chart's
+    // rows all come back in its own chunk, so one picker sees every
+    // candidate a chart has.
+    std::vector<std::string> distinct(hyhashes);
+    std::sort(distinct.begin(), distinct.end());
+    distinct.erase(std::unique(distinct.begin(), distinct.end()), distinct.end());
 
+    struct Offered {
+        std::string hyhash;
+        std::string bestpath;
+        PathSummary summary;
+    };
     WinnerPicker picker;
-    std::vector<std::pair<std::string, std::string>> offered;  // hyhash, bestpath
-    while (sqlite3_step(s) == SQLITE_ROW) {
-        std::string hyhash = column_text(s, 0);
-        picker.offer(hyhash, chartmode,
-                     rank_row(column_text(s, 1), column_blob(s, 4),
-                              sqlite3_column_int64(s, 3), rules_fingerprint_));
-        offered.emplace_back(std::move(hyhash), column_text(s, 2));
+    std::vector<Offered> offered;
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        for (size_t first = 0; first < distinct.size(); first += kHashesPerQuery) {
+            const size_t n = std::min(kHashesPerQuery, distinct.size() - first);
+            std::string sql =
+                std::string("SELECT hyhash, hyversion, bestpath, result_id, substr(structure,1,12), ") +
+                kSummaryColumnList + " FROM results WHERE chartmode=? AND hyhash IN (" +
+                placeholders(n) + ")";
+            append_candidate_filter(sql, "", cap);
+            Stmt s = prepare(db_, sql.c_str());
+            int idx = 1;
+            bind_text(s, idx++, chartmode);
+            for (size_t i = 0; i < n; ++i) bind_text(s, idx++, distinct[first + i]);
+            bind_candidate_filter(s, idx, cap, lens);
+            while (sqlite3_step(s) == SQLITE_ROW) {
+                std::string hyhash = column_text(s, 0);
+                picker.offer(hyhash, chartmode,
+                             rank_row(column_text(s, 1), column_blob(s, 4),
+                                      sqlite3_column_int64(s, 3), rules_fingerprint_));
+                offered.push_back({std::move(hyhash), column_text(s, 2), read_summary(s, 5)});
+            }
+        }
     }
 
-    // One answer per chart, then handed to every position that asked for it
-    // (a page can list one chart twice, from two folders). A stale winner is
-    // reported as Stale, not hidden: the library's status column has to tell
-    // "analyzed by another build" apart from "never analyzed".
+    // One answer per chart, then handed to every position that asked for it.
+    // A stale winner is reported as Stale, not hidden: the library has to
+    // tell "analyzed by another build" apart from "never analyzed".
     const std::vector<bool> won = picker.winners();
     std::unordered_map<std::string, SummaryLookup> by_hash;
     for (size_t i = 0; i < offered.size(); ++i) {
         if (!won[i]) continue;
-        SummaryLookup& answer = by_hash[offered[i].first];
+        SummaryLookup& answer = by_hash[offered[i].hyhash];
         if (picker.rank(i).ready()) {
             answer.status = RecordStatus::Ready;
-            answer.bestpath = offered[i].second;
+            answer.bestpath = std::move(offered[i].bestpath);
+            answer.summary = offered[i].summary;
         } else {
             answer.status = RecordStatus::Stale;
         }
@@ -993,7 +1040,7 @@ RecordLookup RecordStore::get_record(const RecordKey& key) {
     RecordLookup out;
     std::vector<uint8_t> structure;
     std::unordered_map<std::string, std::vector<uint8_t>> nodes;
-    std::optional<std::vector<uint8_t>> tempomap;
+    std::optional<SongMetaRead> songmeta;
     {
         // The lock covers the reads and nothing else. The winning row, the
         // nodes it names and the song's tempo map are all read under this one
@@ -1045,7 +1092,7 @@ RecordLookup RecordStore::get_record(const RecordKey& key) {
         }
         structure = std::move(best.structure);
         nodes = load_nodes(best.result_id);
-        tempomap = read_tempomap(key.hyhash);
+        songmeta = read_tempomap(key.hyhash);
     }
 
     out.status = RecordStatus::Ready;
@@ -1056,27 +1103,28 @@ RecordLookup RecordStore::get_record(const RecordKey& key) {
         });
     // The tempomap is decoded once, here, and handed back with the record --
     // the display layer needs the same timing and must not query for it again.
-    if (tempomap) {
-        out.timing = decode_tempomap(*tempomap);
+    if (songmeta) {
+        out.timing = decode_tempomap(songmeta->tempomap);
         restore_timecodes(record, *out.timing);
+        out.song_length_ms = songmeta->length_ms;
     }
     out.record = std::move(record);
     return out;
 }
 
-std::optional<std::vector<uint8_t>> RecordStore::read_tempomap(const std::string& hyhash) {
+std::optional<RecordStore::SongMetaRead> RecordStore::read_tempomap(const std::string& hyhash) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    Stmt s = prepare(db_, "SELECT tempomap FROM songmeta WHERE hyhash=?");
+    Stmt s = prepare(db_, "SELECT tempomap, length_ms FROM songmeta WHERE hyhash=?");
     bind_text(s, 1, hyhash);
     if (sqlite3_step(s) != SQLITE_ROW) return std::nullopt;
-    return column_blob(s, 0);
+    return SongMetaRead{column_blob(s, 0), column_opt_f64(s, 1)};
 }
 
 std::optional<SongTiming> RecordStore::get_timing(const std::string& hyhash) {
     // Read under the lock, decoded outside it.
-    const std::optional<std::vector<uint8_t>> blob = read_tempomap(hyhash);
-    if (!blob) return std::nullopt;
-    return decode_tempomap(*blob);
+    const std::optional<SongMetaRead> meta = read_tempomap(hyhash);
+    if (!meta) return std::nullopt;
+    return decode_tempomap(meta->tempomap);
 }
 
 bool RecordStore::has_record(const RecordKey& key) {
@@ -1281,7 +1329,7 @@ int RecordStore::reindex() {
         Stmt nodes_stmt = prepare(db_, kLoadNodesSql);
         Stmt update = prepare(db_,
             "UPDATE results SET score=?,actcount=?,maxskip=?,hardest_ms=?,avgmult=?,"
-            "notecount=?,sqin_count=?,sqout_count=?,pathcount=? WHERE result_id=?");
+            "notecount=?,sqin_count=?,sqout_count=?,pathcount=?,stars=? WHERE result_id=?");
         int done = 0;
         for (const Row& row : rows) {
             // A stale row gets empty summaries: its stored bytes are not this
@@ -1300,13 +1348,73 @@ int RecordStore::reindex() {
             }
             ResetOnExit reset{update};
             bind_summary(update, 1, summary);
-            sqlite3_bind_int64(update, 10, row.result_id);
+            sqlite3_bind_int64(update, 11, row.result_id);
             if (sqlite3_step(update) != SQLITE_DONE)
                 throw std::runtime_error(std::string("reindex failed: ") + sqlite3_errmsg(db_));
             ++done;
         }
         exec("COMMIT");
         return done;
+    } catch (...) {
+        rollback_if_open(db_);
+        throw;
+    }
+}
+
+int RecordStore::fill_missing_stars() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+    // Rows with a score but no stars: written before the column existed. Only
+    // Ready rows are filled. The rest are skipped, never blanked -- reindex
+    // blanks a Stale row's summaries, and under a bad hydra_rules.ini every
+    // row reads Stale, so reusing it here would wipe the whole library's
+    // scores on one bad start.
+    std::vector<int64_t> ids;
+    {
+        Stmt s = prepare(db_, "SELECT result_id, hyversion, substr(structure,1,12) FROM results"
+                              " WHERE stars IS NULL AND score IS NOT NULL ORDER BY result_id");
+        while (sqlite3_step(s) == SQLITE_ROW) {
+            const int64_t id = sqlite3_column_int64(s, 0);
+            if (rank_row(column_text(s, 1), column_blob(s, 2), id, rules_fingerprint_).ready())
+                ids.push_back(id);
+        }
+    }
+    if (ids.empty()) return 0;
+
+    // One transaction, each statement compiled once, as in reindex. Only the
+    // stars column is written: every other summary stays byte for byte.
+    exec("BEGIN");
+    try {
+        Stmt structure_stmt = prepare(db_, "SELECT structure FROM results WHERE result_id=?");
+        Stmt nodes_stmt = prepare(db_, kLoadNodesSql);
+        Stmt update = prepare(db_, "UPDATE results SET stars=? WHERE result_id=?");
+        int filled = 0;
+        for (int64_t id : ids) {
+            std::vector<uint8_t> structure;
+            {
+                ResetOnExit reset{structure_stmt};
+                sqlite3_bind_int64(structure_stmt, 1, id);
+                if (sqlite3_step(structure_stmt) != SQLITE_ROW) continue;
+                structure = column_blob(structure_stmt, 0);
+            }
+            const std::unordered_map<std::string, std::vector<uint8_t>> nodes =
+                load_nodes(nodes_stmt, id);
+            const PathSummary summary = summarize_record(rebuild_record(
+                structure, [&nodes](const std::string& hash) -> const std::vector<uint8_t>* {
+                    auto it = nodes.find(hash);
+                    return it == nodes.end() ? nullptr : &it->second;
+                }));
+            ResetOnExit reset{update};
+            if (summary.stars) sqlite3_bind_int(update, 1, *summary.stars);
+            else sqlite3_bind_null(update, 1);
+            sqlite3_bind_int64(update, 2, id);
+            if (sqlite3_step(update) != SQLITE_DONE)
+                throw std::runtime_error(std::string("fill_missing_stars failed: ") +
+                                         sqlite3_errmsg(db_));
+            ++filled;
+        }
+        exec("COMMIT");
+        return filled;
     } catch (...) {
         rollback_if_open(db_);
         throw;
@@ -1321,7 +1429,7 @@ std::vector<RecordListing> RecordStore::list_records(
     std::string sql =
         "SELECT s.hyhash, s.ref_name, s.ref_artist, s.ref_charter, r.chartmode, r.bestpath, "
         "r.score, r.actcount, r.maxskip, r.hardest_ms, r.avgmult, r.notecount, "
-        "r.sqin_count, r.sqout_count, r.pathcount, r.sp_cap, "
+        "r.sqin_count, r.sqout_count, r.pathcount, r.stars, r.sp_cap, "
         "r.hyversion, r.result_id, substr(r.structure,1,12) "
         "FROM results r JOIN songmeta s ON s.hyhash = r.hyhash WHERE 1=1";
     if (chartmode) sql += " AND r.chartmode = ?";
@@ -1353,10 +1461,10 @@ std::vector<RecordListing> RecordStore::list_records(
         listing.chartmode = column_text(s, 4);
         listing.bestpath = column_text(s, 5);
         listing.summary = read_summary(s, 6);
-        listing.sp_cap = sqlite3_column_int(s, 15);
+        listing.sp_cap = sqlite3_column_int(s, 16);
         picker.offer(listing.hyhash, listing.chartmode,
-                     rank_row(column_text(s, 16), column_blob(s, 18),
-                              sqlite3_column_int64(s, 17), rules_fingerprint_));
+                     rank_row(column_text(s, 17), column_blob(s, 19),
+                              sqlite3_column_int64(s, 18), rules_fingerprint_));
         candidates.push_back(std::move(listing));
     }
 

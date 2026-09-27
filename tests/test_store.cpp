@@ -28,6 +28,7 @@
 #include "core/model.h"
 #include "core/rules.h"
 #include "core/squeeze_rating.h"
+#include "core/stars.h"
 #include "core/winstr.h"
 #include "corpus_util.h"
 #include "parse/song.h"
@@ -76,6 +77,7 @@ std::string diff_summary(const PathSummary& a, const PathSummary& b) {
     if (a.sqin_count != b.sqin_count) return "sqin_count";
     if (a.sqout_count != b.sqout_count) return "sqout_count";
     if (a.pathcount != b.pathcount) return "pathcount";
+    if (a.stars != b.stars) return "stars";
     return "";
 }
 
@@ -1602,4 +1604,175 @@ TEST_CASE("editing the Auto ladder marks only Auto runs Stale") {
     }
     std::error_code ec;
     std::filesystem::remove(std::filesystem::u8path(db), ec);
+}
+
+// ---- library summaries (interface redesign, Task 7) ------------------------
+
+TEST_CASE("a saved result stores its best path's star count") {
+    RecordStore store(":memory:");
+    for (const char* h : {"ready", "stale"})
+        store.add_song(h, h, "Artist", "Charter", fixture().song);
+    store.add_record(RecordKey{"ready", "mode", CapQuery::at(4)}, at_cap(4));
+    PreparedRow stale = prepare_row(RecordKey{"stale", "mode", CapQuery::at(4)}, at_cap(4));
+    stale.hyversion = "0.0.0";
+    store.add_row(stale);
+
+    const Path& best = fixture().record.best_path();
+    const PathSummary expected = summarize_record(fixture().record);
+    REQUIRE(expected.stars.has_value());
+    CHECK(*expected.stars == path_stars(best));
+
+    auto check = [&] {
+        const std::vector<SummaryLookup> got =
+            store.get_summaries({"ready", "stale", "none"}, "mode", CapQuery::at(4), Lens{});
+        REQUIRE(got.size() == 3);
+        CHECK(got[0].status == RecordStatus::Ready);
+        CHECK(got[0].summary.score == best.totalscore());
+        CHECK(got[0].summary.hardest_ms == expected.hardest_ms);
+        CHECK(got[0].summary.stars == expected.stars);
+        CHECK(diff_summary(got[0].summary, expected) == "");
+        // Only a Ready answer carries a summary.
+        CHECK(got[1].status == RecordStatus::Stale);
+        CHECK_FALSE(got[1].summary.score.has_value());
+        CHECK(got[2].status == RecordStatus::NotAnalyzed);
+        CHECK_FALSE(got[2].summary.stars.has_value());
+
+        const std::vector<RecordListing> listing =
+            store.list_records(std::nullopt, CapQuery::at(4), Lens{}, SortColumn::Score, true);
+        REQUIRE(listing.size() == 1);
+        CHECK(listing[0].summary.stars == expected.stars);
+        CHECK(listing[0].sp_cap == 4);
+    };
+    check();
+    // reindex rewrites every summary column, stars included.
+    store.reindex();
+    check();
+}
+
+TEST_CASE("get_summaries answers a whole library in chunks") {
+    // SQLite refuses more than 32,766 bound values in one statement. The
+    // library asks about every chart at once, so the store must split it.
+    RecordStore store(":memory:");
+    store.add_song("ready", "ready", "Artist", "Charter", fixture().song);
+    store.add_record(RecordKey{"ready", "mode", CapQuery::at(4)}, at_cap(4));
+
+    std::vector<std::string> hashes;
+    for (int i = 0; i < 20000; ++i) {
+        char h[16];
+        std::snprintf(h, sizeof(h), "fake%05d", i);
+        hashes.emplace_back(h);
+    }
+    // The real chart at the start, the middle and the end, so it lands in
+    // more than one chunk's position.
+    for (size_t at : {size_t{0}, size_t{10000}, size_t{19999}}) hashes[at] = "ready";
+
+    const auto t0 = std::chrono::steady_clock::now();
+    const std::vector<SummaryLookup> got =
+        store.get_summaries(hashes, "mode", CapQuery::at(4), Lens{});
+    const double ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    MESSAGE("get_summaries on 20,000 hashes: " << ms << " ms");
+
+    REQUIRE(got.size() == hashes.size());
+    int ready = 0;
+    for (size_t i = 0; i < got.size(); ++i) {
+        if (hashes[i] == "ready") {
+            CHECK(got[i].status == RecordStatus::Ready);
+            CHECK(got[i].summary.stars.has_value());
+            ++ready;
+        } else if (got[i].status != RecordStatus::NotAnalyzed) {
+            FAIL("fake hash " << hashes[i] << " read as analyzed");
+        }
+    }
+    CHECK(ready == 3);
+}
+
+TEST_CASE("a database from before the stars column gets its stars filled on open") {
+    const std::string path = temp_db("stars_fill");
+    std::remove(path.c_str());
+    {
+        RecordStore seed(path);
+        for (const char* h : {"ready", "stale"})
+            seed.add_song(h, h, "Artist", "Charter", fixture().song);
+        seed.add_record(RecordKey{"ready", "mode", CapQuery::at(4)}, at_cap(4));
+        PreparedRow old = prepare_row(RecordKey{"stale", "mode", CapQuery::at(4)}, at_cap(4));
+        old.hyversion = "0.0.0";
+        seed.add_row(old);
+    }
+    // What the previous Hydra wrote: the same table with no stars column.
+    exec_on_file(path, "ALTER TABLE results DROP COLUMN stars");
+
+    const int expected = path_stars(fixture().record.best_path());
+    {
+        RecordStore store(path);
+        const std::vector<SummaryLookup> got =
+            store.get_summaries({"ready", "stale"}, "mode", CapQuery::at(4), Lens{});
+        CHECK(got[0].summary.stars == expected);
+        CHECK(got[1].status == RecordStatus::Stale);
+    }
+    CHECK(scalar(path, "SELECT stars FROM results WHERE hyhash='ready'") == expected);
+    // The Stale row is left exactly as it was: no stars, and its other
+    // summaries kept rather than blanked.
+    CHECK(scalar(path, "SELECT COUNT(*) FROM results WHERE hyhash='stale'"
+                       " AND stars IS NULL AND score IS NOT NULL") == 1);
+    // A second open finds nothing left to fill and changes nothing.
+    { RecordStore again(path); }
+    CHECK(scalar(path, "SELECT stars FROM results WHERE hyhash='ready'") == expected);
+    std::remove(path.c_str());
+}
+
+TEST_CASE("under rules that make every row Stale, the stars fill changes nothing") {
+    // A bad hydra_rules.ini opens the store under RulesStamp::none(), where
+    // every row reads Stale. The fill must not blank or skip-mark anything:
+    // once the rules are fixed, the next open fills the row.
+    const std::string path = temp_db("stars_badrules");
+    std::remove(path.c_str());
+    {
+        RecordStore seed(path);
+        seed.add_song("h", "h", "Artist", "Charter", fixture().song);
+        seed.add_record(RecordKey{"h", "mode", CapQuery::at(4)}, at_cap(4));
+    }
+    exec_on_file(path, "ALTER TABLE results DROP COLUMN stars");
+    const int64_t score = fixture().record.best_path().totalscore();
+
+    { RecordStore bad(path, core::RulesStamp::none()); }
+    CHECK(scalar(path, "SELECT COUNT(*) FROM results WHERE stars IS NULL") == 1);
+    CHECK(scalar(path, "SELECT score FROM results WHERE hyhash='h'") == score);
+
+    { RecordStore good(path); }
+    CHECK(scalar(path, "SELECT stars FROM results WHERE hyhash='h'") ==
+          path_stars(fixture().record.best_path()));
+    CHECK(scalar(path, "SELECT score FROM results WHERE hyhash='h'") == score);
+    std::remove(path.c_str());
+}
+
+TEST_CASE("a stored song keeps its length, and an old songmeta row reads none") {
+    // RecordStore has no raw-SQL test hook, so this uses a file database and
+    // nulls the column on a second connection, as the stars-fill case does.
+    const Song& song = fixture().song;
+    REQUIRE_FALSE(song.sequence.empty());
+    const double expected = song.sequence.back().timecode.ms();
+
+    const std::string path = temp_db("song_length");
+    std::remove(path.c_str());
+    const RecordKey key{"h", "mode", CapQuery::at(4)};
+    {
+        RecordStore store(path);
+        store.add_song("h", "Song", "Artist", "Charter", song);
+        store.add_record(key, at_cap(4));
+        const RecordLookup got = store.get_record(key);
+        REQUIRE(got.status == RecordStatus::Ready);
+        REQUIRE(got.song_length_ms.has_value());
+        CHECK(*got.song_length_ms == doctest::Approx(expected));
+    }
+
+    // A row written before the column existed reads no length.
+    exec_on_file(path, "UPDATE songmeta SET length_ms = NULL WHERE hyhash = 'h'");
+    {
+        RecordStore store(path);
+        const RecordLookup got = store.get_record(key);
+        REQUIRE(got.status == RecordStatus::Ready);
+        CHECK_FALSE(got.song_length_ms.has_value());
+    }
+    std::remove(path.c_str());
 }

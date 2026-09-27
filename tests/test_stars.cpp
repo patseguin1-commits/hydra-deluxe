@@ -134,3 +134,47 @@ TEST_CASE("stars: the base score is the sum of every note's basescore, on every 
     MESSAGE("87: paths checked (variants and all-0 paths included): " << checked);
     CHECK(checked > 1);
 }
+
+TEST_CASE("stars: path_stars counts cutoffs reached without the solo bonus") {
+    // Base 1300, so the cutoffs are 130, 650, 1300, 2600, 3640, 4680, 5720
+    // (the star_cutoffs case above).
+    Path path;
+    path.score_base = 1000;
+    path.score_ghosts = 100;
+    path.score_accents = 200;
+    const StarCutoffs sc = star_cutoffs(path);
+
+    CHECK(stars_for_score(sc, 0) == 0);
+    CHECK(stars_for_score(sc, 129) == 0);
+    CHECK(stars_for_score(sc, 130) == 1);    // a cutoff counts when reached
+    CHECK(stars_for_score(sc, 4679) == 5);
+    CHECK(stars_for_score(sc, 4680) == 6);
+    CHECK(stars_for_score(sc, 5720) == 7);
+    CHECK(stars_for_score(sc, 1000000) == 7);  // the game stops at 7
+
+    // 1300 base + 3380 combo = 4680 without the solo bonus: 6 stars. A solo
+    // bonus big enough to pass the 7-star cutoff doesn't count.
+    path.score_combo = 3380;
+    path.score_solo = 2000;
+    CHECK(path.totalscore() == 6680);
+    CHECK(path_stars(path) == 6);
+    path.score_combo = 3379;
+    CHECK(path_stars(path) == 5);
+}
+
+TEST_CASE("stars: Burnout's optimal path earns 7 stars") {
+    // Green Day - Burnout at Expert, Pro Drums, 2x Bass, cap 4: optimal
+    // 378,315 against a 7-star cutoff of 335,500 (the plan's reference data).
+    const std::string chart = corpus::root() +
+        "/common/Summer Blast _25 Setlist/Tier 4/Green Day - Burnout/notes.mid";
+    app::AnalysisSettings settings;
+    settings.depth_mode = DepthMode::Scores;
+    settings.depth_value = 2;
+    settings.ms_filter = 10.0;
+    const HydraRecord& record = corpus::analyzed(chart, settings);
+    REQUIRE(!record.paths.empty());
+    const Path& best = record.best_path();
+    CHECK(best.totalscore() == 378315);
+    CHECK(star_cutoffs(best).cutoffs[kMaxStars - 1] == 335500);
+    CHECK(path_stars(best) == 7);
+}
