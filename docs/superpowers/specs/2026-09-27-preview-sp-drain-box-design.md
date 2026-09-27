@@ -141,3 +141,75 @@ The test harness always draws at 1280×800, so a narrower window can only be
 checked by eye in the real app. If the box covers the highway there, it moves
 to the top-right corner beside the top of the gauge, where the highway is
 narrowest. It does not shrink.
+
+## Revision after the first look (2026-09-27)
+
+The user ran the first version on "One [Metallica]" (Periphery) and asked for
+three changes. This section replaces the parts above that it contradicts.
+
+### "full meter" snaps
+
+"full meter" glided while the playhead moved. It measured a full meter forward
+from the playhead, so it counted every time signature change inside the next
+eight measures. That chart has twenty. The user wants the box to report the
+section the playhead is in and jump when the section changes.
+
+"full meter X s" is now the meter's cap times the bar time in force at the
+playhead. That's the same `kMeasuresPerSpBar * ms_per_measure_at(now_tick)`
+the rate line reads, times `scene.sp_meter.cap`. Both lines jump together, at
+the exact tick of a tempo or time signature change. The box no longer calls
+`plusmeasure`. "empties in" is unchanged. It still counts down from the stored
+end, because that is time passing.
+
+### A time signature line in the time box
+
+The time box gets a new line under BPM: "Time signature: 6/4". It shows the
+signature in force at the playhead's tick, exactly as the chart wrote it, and
+4/4 before any.
+
+The parser used to keep only each signature's measure length in ticks. That
+can't tell 6/8 from 3/4, because both are 1440 ticks at 480 per quarter note.
+So `Song` gets `timesig_changes`, tick to (numerator, denominator). The same
+`apply_timesig` call that writes `tpm_changes` records it, so the two can't
+disagree. The engine still reads only `tpm_changes`. The Preview re-parses the
+chart when it loads, so nothing stored in the database changes.
+
+### The boxes scale to fit beside the highway, and the drain box moves top-right
+
+In a narrow window the drain box sat on the highway. The highway doesn't shrink
+when the window narrows. Its size follows the preview's height, because the
+renderer makes the track min(height, width × 1.17) tall, and the preview is
+always wider than that. So narrowing the window only removes the empty space
+at the highway's sides.
+
+Now all three text boxes share one scale, fitted so they sit beside the highway:
+
+- The time box and score box stay top-left.
+- The drain box moves to the top-right, just left of the gauge, level with the
+  gauge's top. At the bottom-right the highway is at its widest, and at the
+  user's width the box would have needed 50%.
+- The scale is 1 (today's size) whenever there's room. It shrinks just enough
+  in a narrow window, and never goes below 60% (`kOverlayMinScale`). Below
+  that the text stops being readable, so the boxes overlap instead.
+- The gauge keeps its size.
+
+Where the highway sits on screen comes from the renderer's own camera. The
+highway's outer edges are its two railings, which are straight lines, so each
+edge is found by projecting two railing corners through the same camera the
+renderer draws with. The track height is worked out in one place and shared by
+the renderer and this layout, so the two can't disagree. The fit checks each
+box at its lowest row, where the highway is widest within the box. That row is
+measured at full size, so a shrunken box is only further clear.
+
+### Testing the revision
+
+- Unit tests cover the snapping "full meter".
+- The parser keeps 6/8 and 3/4 apart.
+- The time box line reads the signature in force.
+- The projected highway edges pass through the projected railing corners, stay
+  symmetric, and keep their size when only the width changes.
+- The fitted scale is 1 with room, floors at 60%, never falls as the image
+  widens, and clears the highway exactly whenever it's between the two.
+- A GUI test narrows the harness's display, checks the scale drops below 1 but
+  not below 60%, and saves a screenshot.
+- The user then looks again in the real app.
