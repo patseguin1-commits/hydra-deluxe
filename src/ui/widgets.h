@@ -11,6 +11,7 @@
 #ifndef HYDRA_UI_WIDGETS_H
 #define HYDRA_UI_WIDGETS_H
 
+#include <algorithm>
 #include <cfloat>
 #include <cstdio>
 #include <string>
@@ -26,6 +27,15 @@ namespace hydra::ui {
 // conditions still call IsItemHovered/SetTooltip directly.
 inline void hint(const char* text) {
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+        ImGui::SetTooltip("%s", text);
+}
+
+// The "(?)" marker after a setting's label: dimmed, with the explanation on
+// hover. Hovers even inside a disabled (locked) group.
+inline void help_marker(const char* text) {
+    ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("%s", text);
 }
 
@@ -121,11 +131,13 @@ inline void overflow_tooltip(const char* text) {
 // TextUnformatted that ellipsizes at the available width instead of clipping
 // mid-glyph, with the full text in a tooltip when it didn't fit. Uses the
 // current font and text color, so callers can Push either around it.
-inline void text_ellipsized(const char* text) {
+// `max_width` caps the space the text may take, for text that shares its
+// line with right-aligned buttons (the song panel's title).
+inline void text_ellipsized(const char* text, float max_width = FLT_MAX) {
     ImGuiWindow* window = ImGui::GetCurrentWindow();
     if (window->SkipItems) return;
 
-    float avail = ImGui::GetContentRegionAvail().x;
+    float avail = std::min(ImGui::GetContentRegionAvail().x, max_width);
     ImVec2 text_size = ImGui::CalcTextSize(text);
 
     if (text_size.x <= avail) {

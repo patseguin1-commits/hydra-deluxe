@@ -268,6 +268,7 @@ add_library(hydra_ui STATIC
     src/ui/library_jobs.cpp
     src/ui/library_table.cpp
     src/ui/library_toolbar.cpp
+    src/ui/settings_bar.cpp
     src/ui/library_view.cpp
     src/ui/preview_controller.cpp
     src/ui/dynamics_load_job.cpp
@@ -364,6 +365,7 @@ add_executable(hydra_tests
     tests/test_model.cpp
     tests/test_squeeze_rating.cpp
     tests/test_stars.cpp
+    tests/test_theme.cpp
     tests/test_path_view.cpp
     tests/test_preview_view.cpp
     tests/test_preview_source.cpp
@@ -400,6 +402,7 @@ add_executable(hydra_tests
     tests/test_fill_deadline.cpp
     tests/test_fill_report.cpp
     tests/test_app_state.cpp
+    tests/test_song_panel_state.cpp
     tests/test_app_shell.cpp
     tests/test_preview_controller.cpp
     tests/test_utf8_paths.cpp

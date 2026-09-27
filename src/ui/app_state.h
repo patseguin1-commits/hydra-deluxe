@@ -11,6 +11,7 @@
 #ifndef HYDRA_UI_APP_STATE_H
 #define HYDRA_UI_APP_STATE_H
 
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <string>
@@ -60,7 +61,8 @@ struct LibraryPage {
 // itself (1.5.1 SP-cap crash). Everything in here is derived from, and must be
 // re-synced against, the AppState fields it mirrors.
 struct DetailsViewState {
-    // Tracks show_details' false->true edge, which is what opens the popup.
+    // show_details as of the last tick(); its true->false edge runs
+    // close_details() once, whatever closed the panel.
     bool prev_open = false;
     // Points into `viewed`'s record; valid only for record_watcher's generation.
     const Path* selected_path = nullptr;
@@ -113,6 +115,12 @@ struct LibraryViewState {
     // Whether the path report file exists, as of the last look.
     bool report_exists = false;
     double report_checked_at = -1.0;  // -1 = look now
+    // The library's width beside the panel, in pixels, as the user last left
+    // it this session; -1 = not measured yet. The child's own .ini entry
+    // holds it across runs, but a full-width frame while the panel is closed
+    // overwrites the live size, so the split puts this back on reopen.
+    float library_w = -1.0f;
+    bool panel_was_open = false;
 };
 
 // What the app reads before it opens the store: the settings, with
@@ -162,12 +170,32 @@ public:
     bool show_details = false;
     void select(const store::ChartLibraryEntry& entry);
 
-    // Everything that must stop when the Song Details window closes. It runs
-    // once, on the window's open-to-closed edge, whatever closed it: the X,
-    // the Rescan library button, or a new selection. An unfinished analysis
-    // is cancelled, the Preview stops and lets go of its audio device, a
-    // finished Dynamics count is kept and an unfinished one is cancelled.
-    // Safe to call when already closed.
+    // Whether the song panel is showing. Code outside the panel reads this,
+    // not show_details (which the X, Escape and the tests write).
+    bool details_open() const { return show_details; }
+
+    // The rows the library currently shows, in order. Next / previous and
+    // the GUI tests walk these. (T12 re-implements the three over its
+    // in-memory model and library_view_order(); callers don't change.)
+    size_t view_row_count() const;
+    const store::ChartLibraryEntry& view_row(size_t i) const;
+    store::RecordStatus view_row_status(size_t i) const;
+
+    // Opens the next (delta 1) or previous (delta -1) row of the current
+    // view. Never wraps, and does nothing when the open song isn't in the view.
+    void select_relative(int delta);
+    bool can_select_relative(int delta) const;
+
+    // The best path's stored facts for the open song (stars, hardest squeeze),
+    // read with the record. Empty unless `viewed` is Ready.
+    store::PathSummary viewed_summary;
+
+    // Everything that must stop when the song panel closes. It runs once, on
+    // the panel's open-to-closed edge (tick() watches it), whatever closed
+    // it: the X, Escape, the Rescan library button, or a new selection. The
+    // Preview stops and lets go of its audio device, a finished Dynamics count
+    // is kept and an unfinished one is cancelled. A running analysis is NOT
+    // cancelled: it finishes and is stored (tick()). Safe to call when closed.
     void close_details();
 
     // Whether the selected chart's file exists, as of the last look; looks
@@ -233,6 +261,21 @@ public:
     // "already stored" flag stale, silently discarding the finished analysis.
     Generation analyze_generation;
     std::unique_ptr<ReportJob> report_job;
+
+    // True while a single-song analysis or a batch is running. While either
+    // runs, the settings bar is locked: a result is filed under the settings
+    // it ran with, so changing them mid-run used to hide the result it made.
+    bool analyze_running() const;
+    bool batch_running() const;
+    bool settings_locked() const { return analyze_running() || batch_running(); }
+    // True when the analyze job belongs to the song the open panel shows, so
+    // the panel is where its progress and errors appear.
+    bool analyze_job_shown() const;
+
+    // Once per frame, before any view draws (run_frame). Owns the panel's
+    // closing edge, storing and reaping the analyze job, and storing a
+    // finished Dynamics count. `now` is ImGui::GetTime() in the app.
+    void tick(double now);
 
     // Whether this batch run has already kicked off its path report — one
     // report per run, however long the finished modal stays open.
@@ -302,6 +345,14 @@ public:
 
 private:
     explicit AppState(StartupSettings start);
+
+    // The analyze job's lifecycle: store a finished result, reap the job.
+    // Moved out of the details view's draw code; tick() calls it every frame.
+    void update_analyze_job(double now);
+    // The row index select_relative would open, if there is one.
+    std::optional<size_t> relative_row(int delta) const;
+    // Re-reads viewed_summary for the open song under the current settings.
+    void refresh_viewed_summary();
     ID3D11Device* render_device_ = nullptr;
     ID3D11DeviceContext* render_context_ = nullptr;
 

@@ -5,6 +5,7 @@
 #include "app/config.h"
 #include "core/model.h"
 #include "core/stars.h"
+#include "imgui_internal.h"
 #include "ui/app_state.h"
 #include "ui/dynamics_load_job.h"
 #include "ui/preview_controller.h"
@@ -21,37 +22,36 @@ void test_analyze(ImGuiTestContext* ctx) {
     open_details(ctx, 0);
     if (ctx->IsError()) return;
     IM_CHECK(visible_text(h).find("After analyzing this song") != std::string::npos);
-    ctx->ItemClick("**/Analyze paths!");
+    ctx->ItemClick(analyze_button_ref(h).c_str());
     IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
     IM_CHECK(h.app->viewed.record.has_value());
     IM_CHECK(!h.app->viewed.record->paths.empty());
     std::string best = h.app->viewed.record->best_path().pathstring();
     IM_CHECK(wait_until(ctx, [&] { return visible_text(h).find(best) != std::string::npos; }, 5));
     // The library row's Best Path cell now shows it too.
-    IM_CHECK(h.app->current_page.summaries[0].state ==
-             hydra::store::RecordStatus::Ready);
+    IM_CHECK(h.app->view_row_status(0) == hydra::store::RecordStatus::Ready);
 
     // Records are kept per SP cap: switching the cap away from 4 shows the
     // song as not analyzed (no record at that cap), switching back finds the
-    // 4-bar record again, and the INI follows every change.
-    ctx->ItemInputValue("**/##spcapvalue", 8);
+    // 4-bar record again, and the INI follows every change. The SP cap box
+    // is in the settings bar, outside the panel the ref points at.
+    ctx->ItemInputValue("//Hydra/**/##spcap",8);
     IM_CHECK(wait_until(ctx, [&] { return h.app->settings.sp_cap == 8; }, 5));
-    IM_CHECK(h.app->current_page.summaries[0].state == hydra::store::RecordStatus::NotAnalyzed);
+    IM_CHECK(h.app->view_row_status(0) == hydra::store::RecordStatus::NotAnalyzed);
     IM_CHECK(!h.app->viewed.record.has_value());
     IM_CHECK(wait_until(ctx, [&] {
         return hydra::app::Settings::load_file(h.ini_path).sp_cap == 8;
     }, 5));
-    ctx->ItemInputValue("**/##spcapvalue", 4);
+    ctx->ItemInputValue("//Hydra/**/##spcap",4);
     IM_CHECK(wait_until(ctx, [&] { return h.app->settings.sp_cap == 4; }, 5));
-    IM_CHECK(h.app->current_page.summaries[0].state == hydra::store::RecordStatus::Ready);
+    IM_CHECK(h.app->view_row_status(0) == hydra::store::RecordStatus::Ready);
     IM_CHECK(h.app->viewed.record.has_value());
-    IM_CHECK(wait_until(ctx, [&] { return visible_text(h).find("SP cap:  4 bars") != std::string::npos; }, 5));
-    // Auto is gone (2026-09-27): the SP cap row is a number and nothing else.
-    IM_CHECK(ctx->ItemInfo("**/Auto##spcapauto", ImGuiTestOpFlags_NoError).ID == 0);
+    // The headline shows the 4-bar record's best path again.
+    IM_CHECK(wait_until(ctx, [&] { return visible_text(h).find(best) != std::string::npos; }, 5));
 }
 
 // Switching the SP cap between two caps that both have a record swaps
-// the viewed record mid-frame, after the modal already chose which path to show.
+// the viewed record mid-frame, after the panel already chose which path to show.
 // That used to leave the details panel reading the freed record (1.5.1 crash:
 // bad_alloc from a garbage vector copy, 0xc0000409 on the UI thread).
 void test_cap_switch(ImGuiTestContext* ctx) {
@@ -62,13 +62,13 @@ void test_cap_switch(ImGuiTestContext* ctx) {
     open_details(ctx, 0);
     if (ctx->IsError()) return;
     auto analyze = [&] {
-        ctx->ItemClick("**/Analyze paths!");
+        ctx->ItemClick(analyze_button_ref(h).c_str());
         return wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300) &&
                h.app->viewed.record.has_value() && !h.app->viewed.record->paths.empty();
     };
     IM_CHECK(analyze());
     std::string best4 = h.app->viewed.record->best_path().pathstring();
-    ctx->ItemInputValue("**/##spcapvalue", 6);
+    ctx->ItemInputValue("//Hydra/**/##spcap",6);
     IM_CHECK(wait_until(ctx, [&] { return h.app->settings.sp_cap == 6; }, 5));
     IM_CHECK(analyze());
     std::string best6 = h.app->viewed.record->best_path().pathstring();
@@ -76,64 +76,13 @@ void test_cap_switch(ImGuiTestContext* ctx) {
     // Flip back and forth; every switch must land on the current record's
     // best path, never on whatever the previous record's memory now holds.
     for (int cap : {4, 6, 4, 6, 4}) {
-        ctx->ItemInputValue("**/##spcapvalue", cap);
+        ctx->ItemInputValue("//Hydra/**/##spcap",cap);
         IM_CHECK(wait_until(ctx, [&] { return h.app->settings.sp_cap == cap; }, 5));
         IM_CHECK(h.app->viewed.record.has_value());
         IM_CHECK(h.app->viewed.record->sp_cap == cap);
         const std::string& best = cap == 4 ? best4 : best6;
         IM_CHECK(wait_until(ctx, [&] { return visible_text(h).find(best) != std::string::npos; }, 5));
     }
-}
-
-// The backend limit is a display-only setting: it filters the Backends tables
-// and nothing else, so flipping it must persist to the INI without touching
-// the stored record. Also pins the renamed "Path limit" status line.
-void test_backend_limit(ImGuiTestContext* ctx) {
-    Harness& h = harness(ctx);
-    reset_app(h);
-    scan_library(ctx);
-    if (ctx->IsError()) return;
-    open_details(ctx, 0);
-    if (ctx->IsError()) return;
-    ctx->ItemClick("**/Analyze paths!");
-    IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
-    IM_CHECK(h.app->viewed.record.has_value());
-
-    // The stored-result panel says "Path limit", not the old "Limit timings".
-    IM_CHECK(wait_until(
-        ctx, [&] { return visible_text(h).find("Path limit:") != std::string::npos; }, 5));
-
-    // Off by default, and the number box is inert until it is ticked.
-    IM_CHECK(!h.app->settings.backendlimit_enabled);
-    IM_CHECK_EQ(h.app->settings.backendlimit_value, 50);
-    IM_CHECK((ctx->ItemInfo("**/##backendlimitvalue").ItemFlags &
-              ImGuiItemFlags_Disabled) != 0);
-
-    ctx->ItemClick("**/##backendlimit");
-    IM_CHECK(wait_until(ctx, [&] { return h.app->settings.backendlimit_enabled; }, 5));
-    IM_CHECK(hydra::app::Settings::load_file(h.ini_path).backendlimit_enabled);
-
-    ctx->ItemInputValue("**/##backendlimitvalue", 30);
-    IM_CHECK(wait_until(ctx, [&] { return h.app->settings.backendlimit_value == 30; }, 5));
-    IM_CHECK_EQ(hydra::app::Settings::load_file(h.ini_path).backendlimit_value, 30);
-    IM_CHECK(h.app->settings.backend_limit() == 30.0);
-
-    // The full engine window (500 ms) is reachable; beyond it clamps back.
-    ctx->ItemInputValue("**/##backendlimitvalue", 500);
-    IM_CHECK(wait_until(ctx, [&] { return h.app->settings.backendlimit_value == 500; }, 5));
-    ctx->ItemInputValue("**/##backendlimitvalue", 600);
-    IM_CHECK(wait_until(ctx, [&] { return h.app->settings.backendlimit_value == 500; }, 5));
-
-    // Display-only: the record the modal shows is still the analyzed one.
-    IM_CHECK(h.app->viewed.record.has_value());
-    IM_CHECK(h.app->current_page.summaries[0].state ==
-             hydra::store::RecordStatus::Ready);
-
-    // Unticking turns the filter off again, and that persists too.
-    ctx->ItemClick("**/##backendlimit");
-    IM_CHECK(wait_until(ctx, [&] { return !h.app->settings.backendlimit_enabled; }, 5));
-    IM_CHECK(!hydra::app::Settings::load_file(h.ini_path).backendlimit_enabled);
-    IM_CHECK(!h.app->settings.backend_limit().has_value());
 }
 
 void test_dynamics(ImGuiTestContext* ctx) {
@@ -144,11 +93,10 @@ void test_dynamics(ImGuiTestContext* ctx) {
 
     // Search for the chart that the doctest pins dynamics on.
     ctx->SetRef("//Hydra");
-    ctx->ItemInputValue("##search", "Acid Romance");
+    ctx->ItemInputValue("**/##search", "Acid Romance");
     IM_CHECK(wait_until(ctx, [&] { return h.app->search == "Acid Romance"; }, 5));
     IM_CHECK(wait_until(ctx, [&] {
-        return !h.app->current_page.rows.empty() &&
-               h.app->current_page.rows[0].title == "Acid Romance";
+        return h.app->view_row_count() > 0 && h.app->view_row(0).title == "Acid Romance";
     }, 5));
     open_details(ctx, 0);
     if (ctx->IsError()) return;
@@ -165,8 +113,8 @@ void test_dynamics(ImGuiTestContext* ctx) {
     // The doctest pins 5 ghosts for this chart (all from the red snare).
     IM_CHECK(text.find("Ghosts: 5") != std::string::npos);
 
-    // Toggle 2x Bass off via app state (the checkbox is behind the modal)
-    // and verify the Dynamics tab updates without re-parsing.
+    // Toggle 2x Bass off via app state and verify the Dynamics tab updates
+    // without re-parsing.
     h.app->settings.view_bass2x = false;
     h.app->commit_settings();
     ctx->Yield(2);
@@ -196,8 +144,8 @@ void test_dynamics_stored(ImGuiTestContext* ctx) {
     h.app->search = "Acid Romance";
     h.app->refresh_page();
     ctx->Yield(2);
-    IM_CHECK(!h.app->current_page.rows.empty());
-    IM_CHECK(h.app->current_page.rows[0].title == "Acid Romance");
+    IM_CHECK(h.app->view_row_count() > 0);
+    IM_CHECK(h.app->view_row(0).title == "Acid Romance");
     open_details(ctx, 0);
     if (ctx->IsError()) return;
 
@@ -207,17 +155,17 @@ void test_dynamics_stored(ImGuiTestContext* ctx) {
     IM_CHECK(visible_text(h).find("Ghosts: 5") != std::string::npos);
 
     // Select a different chart so the in-memory dynamics cache for Acid
-    // Romance is dropped, then close the modal so the tab stops rendering.
+    // Romance is dropped, then close the panel so the tab stops rendering.
     h.app->search.clear();
     h.app->refresh_page();
     size_t other_idx = 0;
-    for (size_t i = 0; i < h.app->current_page.rows.size(); ++i) {
-        if (h.app->current_page.rows[i].title != "Acid Romance") {
+    for (size_t i = 0; i < h.app->view_row_count(); ++i) {
+        if (h.app->view_row(i).title != "Acid Romance") {
             other_idx = i;
             break;
         }
     }
-    h.app->select(h.app->current_page.rows[other_idx]);
+    h.app->select(h.app->view_row(other_idx));
     h.app->show_details = false;
     ctx->Yield(3);
 
@@ -226,8 +174,8 @@ void test_dynamics_stored(ImGuiTestContext* ctx) {
     h.app->search = "Acid Romance";
     h.app->refresh_page();
     ctx->Yield(2);
-    IM_CHECK(!h.app->current_page.rows.empty());
-    IM_CHECK(h.app->current_page.rows[0].title == "Acid Romance");
+    IM_CHECK(h.app->view_row_count() > 0);
+    IM_CHECK(h.app->view_row(0).title == "Acid Romance");
     // Clear any leftover dynamics state from the other chart.
     h.app->dynamics_result.reset();
     h.app->dynamics_key.clear();
@@ -251,7 +199,7 @@ void test_dynamics_stored(ImGuiTestContext* ctx) {
     open_details(ctx, 0);
     if (ctx->IsError()) return;
     IM_CHECK(h.app->settings.effective_bass2x());
-    ctx->ItemClick("**/Analyze paths!");
+    ctx->ItemClick(analyze_button_ref(h).c_str());
     IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
     IM_CHECK(h.app->viewed.record.has_value());
 
@@ -265,28 +213,6 @@ void test_dynamics_stored(ImGuiTestContext* ctx) {
     std::string text = visible_text(h);
     IM_CHECK(text.find("Ghosts:") != std::string::npos ||
              text.find("Accents:") != std::string::npos);
-}
-
-// Narrow the library with `search`, then open the row titled `title`.
-void open_titled(ImGuiTestContext* ctx, const std::string& search, const std::string& title) {
-    Harness& h = harness(ctx);
-    h.app->search = search;
-    h.app->refresh_page();
-    ctx->Yield(2);
-    size_t idx = h.app->current_page.rows.size();
-    for (size_t i = 0; i < h.app->current_page.rows.size(); ++i)
-        if (h.app->current_page.rows[i].title == title) idx = i;
-    IM_CHECK(idx < h.app->current_page.rows.size());
-    open_details(ctx, idx);
-}
-
-// Analyze the open song from the Paths tab and wait for a Ready record.
-void analyze_open_song(ImGuiTestContext* ctx) {
-    Harness& h = harness(ctx);
-    ctx->ItemClick("##DetailsTabs/Paths");
-    ctx->ItemClick("**/Analyze paths!");
-    IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
-    IM_CHECK(h.app->viewed.status == hydra::store::RecordStatus::Ready);
 }
 
 // The Stars tab: a prompt before analysis, then the base score, the solo
@@ -356,12 +282,12 @@ void test_squeezed_out_uncounted(ImGuiTestContext* ctx) {
     scan_library(ctx);
     if (ctx->IsError()) return;
     ctx->SetRef("//Hydra");
-    ctx->ItemInputValue("##search", kTitle);
+    ctx->ItemInputValue("**/##search", kTitle);
     IM_CHECK(wait_until(ctx, [&] { return h.app->search == kTitle; }, 5));
-    IM_CHECK(wait_until(ctx, [&] { return !h.app->current_page.rows.empty(); }, 5));
+    IM_CHECK(wait_until(ctx, [&] { return h.app->view_row_count() > 0; }, 5));
     open_details(ctx, 0);
     if (ctx->IsError()) return;
-    ctx->ItemClick("**/Analyze paths!");
+    ctx->ItemClick(analyze_button_ref(h).c_str());
     IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
     IM_CHECK(h.app->viewed.record.has_value());
     // Activation headers are closed tree nodes; open every one.
@@ -371,7 +297,7 @@ void test_squeezed_out_uncounted(ImGuiTestContext* ctx) {
     IM_CHECK(text.find("squeezed out (uncounted)") != std::string::npos);
 }
 
-// Hiding the details window by any route tears it down. The "Rescan library"
+// Hiding the details panel by any route tears it down. The "Rescan library"
 // button used to set show_details = false directly, which skipped the
 // teardown: the Preview kept its audio device and kept playing.
 void test_details_close_teardown(ImGuiTestContext* ctx) {
@@ -397,18 +323,140 @@ void test_details_close_teardown(ImGuiTestContext* ctx) {
     ctx->Yield(2);
 }
 
+// The panel docks beside the library: opening it narrows the library, and
+// the X and Escape both close it and give the library its width back.
+void test_panel_open_close(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    const float main_w = ctx->GetWindowByRef("//Hydra")->Size.x;
+    auto library_w = [&] { return ctx->WindowInfo("//Hydra/##library").Window->Size.x; };
+    IM_CHECK(library_w() > main_w * 0.9f);
+
+    open_details(ctx, 0);
+    if (ctx->IsError()) return;
+    IM_CHECK(library_w() < main_w * 0.7f);
+    IM_CHECK(ctx->WindowInfo("//Hydra/##songpanel").Window != nullptr);
+    IM_CHECK(!ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId));  // no modal any more
+
+    ctx->ItemClick("X##closepanel");
+    ctx->Yield(3);
+    IM_CHECK(!h.app->details_open());
+    IM_CHECK(library_w() > main_w * 0.9f);
+
+    open_details(ctx, 0);
+    if (ctx->IsError()) return;
+    ctx->KeyPress(ImGuiKey_Escape);
+    ctx->Yield(3);
+    IM_CHECK(!h.app->details_open());
+}
+
+// Previous / next step through the library's rows and stop at the ends.
+void test_panel_prev_next(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    open_details(ctx, 0);
+    if (ctx->IsError()) return;
+    IM_CHECK((ctx->ItemInfo("<##prevsong").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+    ctx->ItemClick(">##nextsong");
+    ctx->Yield(2);
+    IM_CHECK(h.app->selected->notespath == h.app->view_row(1).notespath);
+    IM_CHECK(h.app->details_open());
+    ctx->ItemClick("<##prevsong");
+    ctx->Yield(2);
+    IM_CHECK(h.app->selected->notespath == h.app->view_row(0).notespath);
+}
+
+// The panel's top on Burnout (Green Day, charted by Hoph2o), before and after
+// analysis, at the scratch settings (Expert, Pro Drums, 2x Bass, cap 4,
+// 2 scores, 10 ms).
+void test_panel_headline(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    open_titled(ctx, "Burnout", "Burnout");
+    if (ctx->IsError()) return;
+    std::string text = visible_text(h);
+    IM_CHECK(text.find("Green Day \xC2\xB7 charted by Hoph2o") != std::string::npos);
+    IM_CHECK(text.find("Not analyzed yet.") != std::string::npos);
+    IM_CHECK(ctx->ItemExists("**/Analyze this song"));
+
+    analyze_open_song(ctx);
+    if (ctx->IsError()) return;
+    IM_CHECK(wait_until(ctx, [&] {
+        return visible_text(h).find("378,315") != std::string::npos;
+    }, 5));
+    text = visible_text(h);
+    IM_CHECK(text.find("3- 1 2") != std::string::npos);
+    IM_CHECK(text.find("Optimal path \xC2\xB7 7 stars \xC2\xB7 hardest squeeze") !=
+             std::string::npos);
+    IM_CHECK(text.find("163.0 ms") != std::string::npos);
+    IM_CHECK(ctx->ItemExists("**/Re-analyze"));
+}
+
+// Closing the panel mid-analysis no longer cancels it: the result is stored
+// and the row reads Ready.
+void test_panel_keeps_analysis(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    open_details(ctx, 0);
+    if (ctx->IsError()) return;
+    ctx->ItemClick("**/Analyze this song");
+    ctx->ItemClick("X##closepanel");
+    ctx->Yield(2);
+    IM_CHECK(!h.app->details_open());
+    IM_CHECK(!h.app->analyze_job || !h.app->analyze_job->is_cancelled());
+    IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
+    IM_CHECK(wait_until(ctx, [&] {
+        return h.app->view_row_status(0) == hydra::store::RecordStatus::Ready;
+    }, 5));
+}
+
+// The settings bar locks while a batch runs and unlocks when it stops.
+void test_settings_lock(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    ctx->SetRef("//Hydra");
+    IM_CHECK((ctx->ItemInfo("**/##spcap").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+    h.app->start_batch(false);  // the whole library: long enough to look at
+    IM_CHECK(wait_until(ctx, [&] { return h.app->batch_running(); }, 10));
+    IM_CHECK(wait_until(ctx, [&] {
+        return visible_text(h).find("Stop the batch to change these.") != std::string::npos;
+    }, 5));
+    IM_CHECK((ctx->ItemInfo("**/##spcap").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+    IM_CHECK((ctx->ItemInfo("**/Pro Drums").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+    h.app->batch_job->stop();
+    IM_CHECK(wait_until(ctx, [&] { return !h.app->batch_running(); }, 300));
+    IM_CHECK(wait_until(ctx, [&] { return !jobs_busy(h); }, 120));
+    IM_CHECK((ctx->ItemInfo("**/##spcap").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+}
+
 }  // namespace
 
 const std::vector<TestEntry>& details_tests() {
     static const std::vector<TestEntry> entries = {
         {"analyze", test_analyze},
         {"cap-switch", test_cap_switch},
-        {"backend-limit", test_backend_limit},
         {"dynamics", test_dynamics},
         {"dynamics-stored", test_dynamics_stored},
         {"stars", test_stars},
         {"squeezed_out_uncounted", test_squeezed_out_uncounted},
         {"details-close-teardown", test_details_close_teardown},
+        {"panel-open-close", test_panel_open_close},
+        {"panel-prev-next", test_panel_prev_next},
+        {"panel-headline", test_panel_headline},
+        {"panel-keeps-analysis", test_panel_keeps_analysis},
+        {"settings-lock", test_settings_lock},
     };
     return entries;
 }

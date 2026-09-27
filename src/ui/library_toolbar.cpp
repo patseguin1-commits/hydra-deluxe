@@ -1,5 +1,6 @@
 #include "ui/library_parts.h"
 
+#include "app/report_files.h"
 #include "imgui.h"
 #include "ui/fonts.h"
 #include "ui/generation.h"
@@ -45,8 +46,7 @@ void render_actions_row(AppState& app) {
 
     bool can_scan = !app.settings.chartfolders.empty();
     begin_disabled_button(!can_scan);
-    const float scan_w = std::max(button_slot_width("Refresh scan"), button_slot_width("Scan charts"));
-    if (button_in_slot(app.settings.is_rescan ? "Refresh scan" : "Scan charts", scan_w)) {
+    if (ImGui::Button("Scan library")) {
         app.start_scan();
         ImGui::OpenPopup("Scanning charts");
     }
@@ -60,7 +60,7 @@ void render_actions_row(AppState& app) {
                       (long long)app.current_page.total_count);
     else
         std::snprintf(label, sizeof(label), "Analyze library");
-    // Nothing to analyze -> disabled, like "Scan charts" with no folders
+    // Nothing to analyze -> disabled, like "Scan library" with no folders
     // (running a batch over 0 charts just failed the report afterwards).
     int64_t analyzable = searching ? app.current_page.total_count : app.library_total;
     // A search count can never exceed the library, so this slot fits both labels.
@@ -108,6 +108,19 @@ void render_actions_row(AppState& app) {
     }
     hint("Compare a dmleaderboards.com player's scores against your library");
 
+    // A way back into the last batch's HTML report. While a report job is
+    // still building, the slot shows a greyed "Building path report..." button.
+    if (app.report_job && !app.report_job->finished()) {
+        ImGui::SameLine();
+        begin_disabled_button(true);
+        ImGui::Button("Building path report...");
+        end_disabled_button(true);
+    } else if (app.report_file_shown(ImGui::GetTime())) {
+        ImGui::SameLine();
+        if (ImGui::Button("Open path report") && !app::open_report_in_browser())
+            app.set_status("The path report could not be opened.");
+    }
+
     render_status_line(app, /*same_line=*/true);
     // A bad rules file is not a passing message: it stays on screen, under
     // the action row, for as long as analysis is off.
@@ -120,46 +133,6 @@ void render_actions_row(AppState& app) {
         ImGui::PopTextWrapPos();
     }
     render_folder_manager(app);
-}
-
-void render_view_controls(AppState& app) {
-    ImGui::TextUnformatted("View:");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(px(90));
-    const char* difficulty_names[std::size(kAllDifficulties)];
-    for (size_t i = 0; i < std::size(kAllDifficulties); ++i)
-        difficulty_names[i] = difficulty_name(kAllDifficulties[i]);
-    int difficulty_idx = static_cast<int>(app.settings.difficulty());
-    if (ImGui::Combo("##difficulty", &difficulty_idx, difficulty_names,
-                     IM_ARRAYSIZE(difficulty_names))) {
-        app.settings.view_difficulty = difficulty_names[difficulty_idx];
-        // A different difficulty is a different chartmode, so commit_settings
-        // resets the page, re-reads the library and rewrites the INI.
-        app.commit_settings();
-    }
-    hint("Which charted difficulty to analyze, path and preview");
-
-    ImGui::SameLine();
-    if (ImGui::Checkbox("Pro Drums", &app.settings.view_prodrums)) app.commit_settings();
-    ImGui::SameLine();
-
-    // A second kick pedal only exists in Expert charting, so off Expert the
-    // box reads unchecked and is visibly disabled. The stored view_bass2x is
-    // left alone: BeginDisabled swallows the click, so nothing commits, and
-    // returning to Expert brings the user's own setting back.
-    const bool expert = app.settings.difficulty() == Difficulty::Expert;
-    bool bass2x_shown = app.settings.effective_bass2x();
-    begin_disabled_checkbox(!expert);
-    if (ImGui::Checkbox("2x Bass", &bass2x_shown)) {
-        app.settings.view_bass2x = bass2x_shown;
-        app.commit_settings();
-    }
-    end_disabled_checkbox(!expert);
-    // hint() can't be used here: ImGui does not report a disabled item as
-    // hovered unless asked, so the tooltip would never appear.
-    if (!expert && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal |
-                                        ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("2x Bass is an Expert-only charting concept.");
 }
 
 }  // namespace hydra::ui::detail

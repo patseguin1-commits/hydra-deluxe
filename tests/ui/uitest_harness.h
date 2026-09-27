@@ -143,8 +143,17 @@ const std::vector<TestEntry>& batch_report_tests();  // uitest_batch_reports.cpp
 // Steps most tests start with (defined in uitest_harness.cpp).
 // Scan testdata/input through the UI and land on the populated library.
 void scan_library(ImGuiTestContext* ctx);
-// Click library row `index`, wait for Song Details, and land on its Paths tab.
+// Point the ref at the song panel child (//Hydra/##songpanel).
+void set_panel_ref(ImGuiTestContext* ctx);
+// Click row `index` of the library view, wait for the song panel, point the
+// ref at it, and land on its Paths tab.
 void open_details(ImGuiTestContext* ctx, size_t index);
+// Type `search` into the library's search box, then open the row titled `title`.
+void open_titled(ImGuiTestContext* ctx, const std::string& search, const std::string& title);
+// "**/Analyze this song" before a result, "**/Re-analyze" after.
+std::string analyze_button_ref(Harness& h);
+// Analyze the open song from the panel and wait for a Ready record.
+void analyze_open_song(ImGuiTestContext* ctx);
 // Fresh app, scan, open chart 0's Preview and wait for the load. False on error.
 bool open_preview(ImGuiTestContext* ctx);
 
