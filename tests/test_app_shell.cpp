@@ -130,6 +130,46 @@ TEST_CASE("app_shell: hydra_ui.ini remembers the window placement") {
     std::filesystem::remove_all(dir);
 }
 
+TEST_CASE("app_shell: the [Hydra][Layout] text round-trips and refuses junk") {
+    CHECK(hydra::ui::format_layout(0.35f) == "LibraryShare=0.3500\n");
+    float share = hydra::ui::kDefaultLibraryShare;
+    hydra::ui::parse_layout_line("LibraryShare=0.3500", share);
+    CHECK(share == doctest::Approx(0.35f));
+    // Anything else leaves the share alone.
+    for (const char* line : {"LibraryShare=abc", "LibraryShare=0", "LibraryShare=1",
+                             "LibraryShare=1.5", "LibraryShare=-0.2", "LibraryShare=0.3x",
+                             "LibraryShare=", "Colour=blue"})
+        hydra::ui::parse_layout_line(line, share);
+    CHECK(share == doctest::Approx(0.35f));
+}
+
+TEST_CASE("app_shell: hydra_ui.ini remembers the library split, not the child's own width") {
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / "hydra_app_shell_split_test";
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path ini = dir / "hydra_ui.ini";
+    {
+        // What the bug left: the library child at the largest split, no share.
+        std::ofstream f(ini);
+        f << "[Window][Hydra/##library_06E76512]\nSize=2064,1313\n\n";
+    }
+    hydra::ui::setup_imgui(test_options(ini.string()));
+    CHECK(hydra::ui::library_share() == doctest::Approx(hydra::ui::kDefaultLibraryShare));
+    hydra::ui::remember_library_share(0.25f);
+    hydra::ui::shutdown_imgui();  // DestroyContext writes the ini
+
+    hydra::ui::setup_imgui(test_options(ini.string()));
+    CHECK(hydra::ui::library_share() == doctest::Approx(0.25f));
+    hydra::ui::shutdown_imgui();
+
+    std::ifstream f(ini);
+    std::stringstream text;
+    text << f.rdbuf();
+    CHECK(text.str().find("[Hydra][Layout]\nLibraryShare=0.2500\n") != std::string::npos);
+    f.close();
+    std::filesystem::remove_all(dir);
+}
+
 TEST_CASE("app_shell: set_ui_scale rescales sizes, fonts and px() together") {
     hydra::ui::setup_imgui(test_options("-"));
     const float before = ImGui::GetStyle().FramePadding.x;

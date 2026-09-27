@@ -339,8 +339,8 @@ void test_preview_overlay_fit(ImGuiTestContext* ctx) {
     IM_CHECK(split_scale >= hydra::render::kOverlayMinScale);
 
     // The library at its narrowest (what dragging its edge left does): the
-    // split puts back library_w the next time the panel opens.
-    h.app->library_ui.library_w = 1.0f;
+    // split sets its width from the share the next time the panel opens.
+    hydra::ui::remember_library_share(0.01f);
     h.app->library_ui.panel_was_open = false;
     ctx->Yield(5);
     IM_CHECK_EQ(pc.overlay_scale(), 1.0f);  // a wide panel: full size

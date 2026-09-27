@@ -3,6 +3,7 @@
 // table and its limit, the two folds under the list, and Copy path. Labels are
 // the plan's label contract (docs/superpowers/plans/2026-09-27-ui-redesign.md).
 
+#include <cstring>
 #include <optional>
 #include <string>
 
@@ -11,7 +12,10 @@
 #include "app/config.h"
 #include "app/path_view.h"
 #include "core/model.h"
+#include "imgui_internal.h"
 #include "ui/app_state.h"
+#include "ui/details_view.h"
+#include "ui/fonts.h"  // px()
 #include "ui/preview_controller.h"
 
 namespace uitest {
@@ -251,6 +255,40 @@ void test_paths_uncounted(ImGuiTestContext* ctx) {
                           "note under Star Power"));
 }
 
+// A window drawn this frame whose name holds `part` (child names are mangled).
+ImGuiWindow* window_named(const char* part) {
+    for (ImGuiWindow* w : ImGui::GetCurrentContext()->Windows)
+        if (w->WasActive && std::strstr(w->Name, part)) return w;
+    return nullptr;
+}
+
+// At the panel's narrowest the Paths tab still fits: with every row, a
+// backend table and "Copied!" showing, nothing in the right column runs past
+// its edge, and the path list keeps its 240 px.
+void test_paths_fit_narrow(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_burnout(ctx)) return;
+    FakeClipboard clipboard;
+    hydra::ui::remember_library_share(0.99f);  // the library as wide as it goes
+    h.app->library_ui.panel_was_open = false;   // the split sets its width next frame
+    ctx->Yield(3);
+    ImGuiWindow* panel = ctx->WindowInfo("//Hydra/##songpanel").Window;
+    IM_CHECK_FLOAT_NEAR_EQ(panel->Size.x, hydra::ui::px(hydra::ui::kMinSongPanelW), 1.0f);
+
+    ctx->ItemClick("**/Expand all");
+    ctx->Yield(1);
+    ctx->ItemClick("**/Backend timings##act1");
+    ctx->ItemClick("**/Copy path");
+    ctx->Yield(2);
+    IM_CHECK(on_screen(h, "Copied!"));
+    ImGuiWindow* details = window_named("##pathdetails");
+    ImGuiWindow* list = window_named("##pathlist");
+    IM_CHECK(details != nullptr && list != nullptr);
+    if (ctx->IsError()) return;
+    IM_CHECK_LE(details->ContentSize.x, details->ContentRegionRect.GetWidth() + 0.5f);
+    IM_CHECK_FLOAT_NEAR_EQ(list->Size.x, hydra::ui::px(hydra::ui::kMinPathListW), 0.5f);
+}
+
 }  // namespace
 
 // Registers this file's tests; register_tests() (uitest_tests.cpp) calls it.
@@ -265,6 +303,7 @@ void register_paths_tests(Harness& h) {
         {"paths-backend-timings", test_paths_backend_timings},
         {"paths-folds-copy", test_paths_folds_copy},
         {"paths-uncounted", test_paths_uncounted},
+        {"paths-fit-narrow", test_paths_fit_narrow},
     };
     for (const Entry& e : entries) {
         ImGuiTest* t = IM_REGISTER_TEST(h.engine, "hydra", e.name);

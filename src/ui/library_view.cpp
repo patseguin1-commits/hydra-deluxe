@@ -9,7 +9,10 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
 #include <cstdio>
+
+#include "ui/app_shell.h"
 
 namespace hydra::ui {
 
@@ -24,30 +27,45 @@ void render_library_pane(AppState& app) {
 }
 
 // The library and, when a song is open, the song panel beside it. The
-// library's right edge drags (ImGuiChildFlags_ResizeX, width saved in
-// hydra_ui.ini); with no song open the library takes the full width.
+// library's right edge drags (ImGuiChildFlags_ResizeX); with no song open the
+// library takes the full width.
+//
+// The split is kept as the library's share of the width, in hydra_ui.ini's
+// [Hydra][Layout] section, and only a drag changes it. The child itself
+// saves nothing (NoSavedSettings): ImGui would save the full width of the
+// frames with no song open, clamp it to the largest split on the next open,
+// and so squeeze every later panel down to its minimum.
 void render_library_and_panel(AppState& app) {
     LibraryViewState& ui = app.library_ui;
     const bool panel = app.details_open();
     const float avail_w = ImGui::GetContentRegionAvail().x;
     const float min_library = px(320.0f);
-    const float min_panel = px(480.0f);
     if (panel) {
-        const float max_library = std::max(min_library, avail_w - min_panel);
+        const float max_library = std::max(min_library, avail_w - px(kMinSongPanelW));
         ImGui::SetNextWindowSizeConstraints(ImVec2(min_library, 0.0f),
                                             ImVec2(max_library, FLT_MAX));
-        // Reopening: the full-width frames while closed replaced the live
-        // width, so put back the one the user left.
-        if (!ui.panel_was_open && ui.library_w > 0.0f)
-            ImGui::SetNextWindowSize(
-                ImVec2(std::clamp(ui.library_w, min_library, max_library), 0.0f),
-                ImGuiCond_Always);
-        ImGui::BeginChild("##library", ImVec2(avail_w * 0.4f, 0.0f), ImGuiChildFlags_ResizeX);
-        ui.library_w = ImGui::GetWindowWidth();
+        // Set the width from the share when the panel opens or the room
+        // changes. Setting it turns the drag off for that one frame (ImGui
+        // drops ResizeX under a SetNextWindowSize), so only then.
+        // A new UI scale moves the minimums, so it counts as a change too.
+        const bool set_width = !ui.panel_was_open || ui.split_set_for_w != avail_w ||
+                               ui.split_set_for_px != px(1.0f);
+        if (set_width) {
+            const float want = std::clamp(library_share() * avail_w, min_library, max_library);
+            ImGui::SetNextWindowSize(ImVec2(want, 0.0f), ImGuiCond_Always);
+            ui.split_set_for_w = avail_w;
+            ui.split_set_for_px = px(1.0f);
+        }
+        ImGui::BeginChild("##library", ImVec2(avail_w * kDefaultLibraryShare, 0.0f),
+                          ImGuiChildFlags_ResizeX, ImGuiWindowFlags_NoSavedSettings);
+        const float w = ImGui::GetWindowWidth();
+        // Any other change of width is the user dragging the edge.
+        if (!set_width && std::fabs(w - ui.library_w) > 0.5f && avail_w > 0.0f)
+            remember_library_share(w / avail_w);
+        ui.library_w = w;
     } else {
-        // No resize flag: ImGui marks this frame's size NoSavedSettings, so
-        // the saved split survives a session that ends with the panel shut.
-        ImGui::BeginChild("##library", ImVec2(0.0f, 0.0f));
+        ImGui::BeginChild("##library", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None,
+                          ImGuiWindowFlags_NoSavedSettings);
     }
     ui.panel_was_open = panel;
     render_library_pane(app);

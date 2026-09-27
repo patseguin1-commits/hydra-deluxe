@@ -20,6 +20,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"  // RenderArrow
 #include "ui/app_state.h"
+#include "ui/details_view.h"
 #include "ui/fonts.h"
 #include "ui/theme.h"
 #include "ui/widgets.h"
@@ -401,7 +402,20 @@ void render_path_panel(AppState& app, const Path*& selected_path) {
     const app::PathButtonsView& list =
         cache.buttons(record, generation, app.settings.depth_mode, app.settings.depth_value);
 
-    ImGui::BeginChild("##pathlist", ImVec2(px(240.0f), 0.0f));
+    // The list is as wide as its longest line, when the details keep their
+    // minimum beside it; below that it keeps 240 px and the full title is a
+    // hover away.
+    float widest = 0.0f;
+    ImGui::PushFont(g_mono_font, 0.0f);
+    for (const app::PathButtonView& b : list.buttons)
+        widest = std::max(widest, ImGui::CalcTextSize(b.title.c_str()).x);
+    ImGui::PopFont();
+    for (const app::PathButtonView& b : list.buttons)
+        widest = std::max(widest, ImGui::CalcTextSize(b.detail.c_str()).x);
+    const float list_fit = widest + px(6.0f) * 2.0f + ImGui::GetStyle().ScrollbarSize;
+    const float list_max = ImGui::GetContentRegionAvail().x - px(24.0f) - px(kMinPathDetailsW);
+    const float list_w = std::max(px(kMinPathListW), std::min(list_fit, list_max));
+    ImGui::BeginChild("##pathlist", ImVec2(list_w, 0.0f));
     render_path_list(list, selected_path);
     ImGui::EndChild();
 

@@ -82,6 +82,24 @@ WindowPlacement window_placement();
 // settings: a few seconds later, and again when ImGui shuts down.
 void remember_window_placement(const WindowPlacement& p);
 
+// ---- The library/song-panel split, kept in hydra_ui.ini ---------------
+
+// The library's share of the main window's width while the song panel is
+// open, until the user drags the edge between them.
+inline constexpr float kDefaultLibraryShare = 0.4f;
+
+// The body of the [Hydra][Layout] section: "LibraryShare=<0..1>". Parsing
+// takes one line and ignores lines it doesn't know and shares outside (0, 1).
+std::string format_layout(float library_share);
+void parse_layout_line(std::string_view line, float& library_share);
+
+// The share setup_imgui read from hydra_ui.ini (kDefaultLibraryShare when
+// there was none), updated by every remember_library_share since.
+float library_share();
+// Records a split the user dragged to. It reaches hydra_ui.ini with ImGui's
+// own settings, like the window placement.
+void remember_library_share(float share);
+
 // ---- UI scale ----------------------------------------------------------
 
 // The UI scale for a monitor's DPI: 96 DPI is 1.0. A DPI of 0 reads as 1.0.

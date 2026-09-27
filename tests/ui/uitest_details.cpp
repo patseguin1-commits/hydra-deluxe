@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <string>
 
 #include "uitest_harness.h"
@@ -7,7 +8,9 @@
 #include "core/stars.h"
 #include "imgui_internal.h"
 #include "ui/app_state.h"
+#include "ui/details_view.h"
 #include "ui/dynamics_load_job.h"
+#include "ui/fonts.h"  // px()
 #include "ui/preview_controller.h"
 
 namespace uitest {
@@ -324,6 +327,72 @@ void test_panel_open_close(ImGuiTestContext* ctx) {
     IM_CHECK(!h.app->details_open());
 }
 
+// The split beside the panel. A drag of the library's edge is the only thing
+// that changes it: it survives closing and reopening the panel, and a
+// hydra_ui.ini from before the fix, whose library entry holds the largest
+// split, loses to the [Hydra][Layout] share.
+void test_panel_split(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    auto library = [&] { return ctx->WindowInfo("//Hydra/##library").Window; };
+    auto panel = [&] { return ctx->WindowInfo("//Hydra/##songpanel").Window; };
+    auto close = [&] {
+        ctx->SetRef("//Hydra");
+        ctx->ItemClick("**/X##closepanel");
+        ctx->Yield(3);
+    };
+    auto open = [&] {
+        open_details(ctx, 0);
+        ctx->Yield(2);
+    };
+
+    // Opening: the default share, clamped so the panel keeps its minimum.
+    open_details(ctx, 0);
+    if (ctx->IsError()) return;
+    ctx->Yield(2);
+    const float room = library()->Size.x + panel()->Size.x;
+    const float min_panel = hydra::ui::px(hydra::ui::kMinSongPanelW);
+    // (std::min) in brackets: windows.h, through the harness, defines min.
+    const float opened = (std::min)(hydra::ui::kDefaultLibraryShare * room, room - min_panel);
+    IM_CHECK_FLOAT_NEAR_EQ(library()->Size.x, opened, 1.0f);
+    IM_CHECK_GE(panel()->Size.x, min_panel - 1.0f);
+
+    // Drag the library's right edge 80 px left.
+    ImGuiWindow* lib = library();
+    const ImVec2 edge(lib->Pos.x + lib->Size.x, lib->Pos.y + lib->Size.y * 0.5f);
+    ctx->MouseMoveToPos(edge);
+    ctx->MouseDown(ImGuiMouseButton_Left);
+    ctx->MouseMoveToPos(ImVec2(edge.x - 80.0f, edge.y));
+    ctx->MouseUp(ImGuiMouseButton_Left);
+    ctx->Yield(2);
+    const float dragged = library()->Size.x;
+    IM_CHECK_FLOAT_NEAR_EQ(dragged, opened - 80.0f, 2.0f);
+    IM_CHECK_FLOAT_NEAR_EQ(hydra::ui::library_share(), dragged / room, 0.002f);
+
+    // Closing gives the library the full width; reopening puts the drag back.
+    close();
+    if (ctx->IsError()) return;  // WindowInfo answers null once a test has failed
+    IM_CHECK(library()->Size.x > room * 0.9f);
+    open();
+    if (ctx->IsError()) return;
+    IM_CHECK_FLOAT_NEAR_EQ(library()->Size.x, dragged, 1.0f);
+
+    // An old hydra_ui.ini, read while no song is open (as at startup): the
+    // library child's own entry at a huge width (what the bug saved) and a
+    // share. The share wins.
+    close();
+    if (ctx->IsError()) return;
+    const std::string old_ini = std::string("[Window][") + library()->Name +
+                                "]\nSize=4000,600\n[Hydra][Layout]\nLibraryShare=0.3000\n";
+    ImGui::LoadIniSettingsFromMemory(old_ini.c_str(), old_ini.size());
+    IM_CHECK_FLOAT_NEAR_EQ(hydra::ui::library_share(), 0.3f, 0.0001f);
+    open();
+    if (ctx->IsError()) return;
+    IM_CHECK_FLOAT_NEAR_EQ(library()->Size.x, (std::max)(hydra::ui::px(320.0f), 0.3f * room), 1.0f);
+}
+
 // Previous / next step through the library's rows and stop at the ends.
 void test_panel_prev_next(ImGuiTestContext* ctx) {
     Harness& h = harness(ctx);
@@ -424,6 +493,7 @@ const std::vector<TestEntry>& details_tests() {
         {"stars", test_stars},
         {"details-close-teardown", test_details_close_teardown},
         {"panel-open-close", test_panel_open_close},
+        {"panel-split", test_panel_split},
         {"panel-prev-next", test_panel_prev_next},
         {"panel-headline", test_panel_headline},
         {"panel-keeps-analysis", test_panel_keeps_analysis},

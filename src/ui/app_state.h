@@ -114,11 +114,13 @@ struct LibraryViewState {
     // Whether the path report file exists, as of the last look.
     bool report_exists = false;
     double report_checked_at = -1.0;  // -1 = look now
-    // The library's width beside the panel, in pixels, as the user last left
-    // it this session; -1 = not measured yet. The child's own .ini entry
-    // holds it across runs, but a full-width frame while the panel is closed
-    // overwrites the live size, so the split puts this back on reopen.
+    // The split beside the song panel. The share itself lives in
+    // hydra_ui.ini (library_share() in app_shell.h); these tell a drag apart
+    // from a width the split set: the width the library had last frame, and
+    // the room and UI scale it had when the split last set its width.
     float library_w = -1.0f;
+    float split_set_for_w = -1.0f;
+    float split_set_for_px = -1.0f;
     bool panel_was_open = false;
     // Song folders: a folder was added or removed since the dialog opened,
     // so it offers "Scan now".

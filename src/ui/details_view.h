@@ -10,6 +10,14 @@
 
 namespace hydra::ui {
 
+// Widths at UI scale 1 (pass them through px()). The Paths tab's right
+// column needs kMinPathDetailsW for its widest line, the footer's fold and
+// Copy path buttons; the panel's minimum fits that beside the 240 px path
+// list, the gap between them, the panel's padding and a scroll bar.
+inline constexpr float kMinPathListW = 240.0f;
+inline constexpr float kMinPathDetailsW = 500.0f;
+inline constexpr float kMinSongPanelW = 820.0f;
+
 void render_song_panel(AppState& app);
 
 }  // namespace hydra::ui
