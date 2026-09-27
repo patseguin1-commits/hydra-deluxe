@@ -155,6 +155,7 @@ add_library(hydra_core STATIC
     src/core/scoring.cpp
     src/core/rules.cpp
     src/core/squeeze_rating.cpp
+    src/core/stars.cpp
     src/core/replay.cpp
     src/core/strutil.cpp
     src/core/winstr.cpp
@@ -346,6 +347,7 @@ add_executable(hydra_tests
     tests/test_midi.cpp
     tests/test_model.cpp
     tests/test_squeeze_rating.cpp
+    tests/test_stars.cpp
     tests/test_path_view.cpp
     tests/test_preview_view.cpp
     tests/test_preview_source.cpp

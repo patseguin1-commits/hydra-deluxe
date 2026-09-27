@@ -591,9 +591,13 @@ bool Path::is_allzero() const {
     return true;
 }
 
+int64_t Path::chart_base_score() const {
+    return score_base + score_ghosts + score_accents;
+}
+
 double Path::avg_mult() const {
     int64_t multscore = totalscore() - score_solo;
-    int64_t basescore = score_base + score_ghosts + score_accents;
+    int64_t basescore = chart_base_score();
     if (basescore == 0) return 0.0;
     return static_cast<double>(multscore) / static_cast<double>(basescore);
 }
