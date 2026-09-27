@@ -46,14 +46,8 @@ void test_analyze(ImGuiTestContext* ctx) {
     IM_CHECK(h.app->current_page.summaries[0].state == hydra::store::RecordStatus::Ready);
     IM_CHECK(h.app->viewed.record.has_value());
     IM_CHECK(wait_until(ctx, [&] { return visible_text(h).find("SP cap:  4 bars") != std::string::npos; }, 5));
-    // Auto has nothing above 4 bars to reuse, so it reads as new too.
-    ctx->ItemClick("**/Auto##spcapauto");
-    IM_CHECK(wait_until(ctx, [&] { return !h.app->settings.sp_cap.has_value(); }, 5));
-    IM_CHECK(h.app->current_page.summaries[0].state == hydra::store::RecordStatus::NotAnalyzed);
-    IM_CHECK(!hydra::app::Settings::load_file(h.ini_path).sp_cap.has_value());
-    ctx->ItemClick("**/Auto##spcapauto");
-    IM_CHECK(wait_until(ctx, [&] { return h.app->settings.sp_cap == 4; }, 5));
-    IM_CHECK(h.app->current_page.summaries[0].state == hydra::store::RecordStatus::Ready);
+    // Auto is gone (2026-09-27): the SP cap row is a number and nothing else.
+    IM_CHECK(ctx->ItemInfo("**/Auto##spcapauto", ImGuiTestOpFlags_NoError).ID == 0);
 }
 
 // Switching the SP cap between two caps that both have a record swaps

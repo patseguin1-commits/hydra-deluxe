@@ -197,16 +197,15 @@ TEST_CASE("record_key carries the chartmode, the SP cap and the lens") {
     namespace store = hydra::store;
 
     Settings s;
-    s.sp_cap = std::nullopt;
     s.mslimit_enabled = true;
     s.mslimit_value = 10;
     s.depth_mode = 0;
     s.depth_value = 4;
-    store::RecordKey auto_key = s.record_key("abc");
-    CHECK(auto_key.hyhash == "abc");
-    CHECK(auto_key.chartmode == s.chartmode_key());
-    CHECK(auto_key.cap == store::CapQuery::automatic());
-    CHECK(auto_key.lens == store::Lens::from(10, 0, 4));
+    store::RecordKey default_key = s.record_key("abc");
+    CHECK(default_key.hyhash == "abc");
+    CHECK(default_key.chartmode == s.chartmode_key());
+    CHECK(default_key.cap == store::CapQuery::at(4));
+    CHECK(default_key.lens == store::Lens::from(10, 0, 4));
 
     // A fixed cap asks for exactly that cap, and the chartmode follows the
     // view flags.
@@ -237,7 +236,7 @@ TEST_CASE("batch_run bundles one Settings' chartmode, lens and search settings")
     s.mslimit_enabled = false;
     s.depth_mode = 1;
     s.depth_value = 5000;
-    s.sp_cap = std::nullopt;
+    s.sp_cap = 16;
 
     const hydra::app::BatchRun run = s.batch_run();
     CHECK(run.chartmode == s.chartmode_key());
@@ -247,28 +246,34 @@ TEST_CASE("batch_run bundles one Settings' chartmode, lens and search settings")
     CHECK(!run.settings.ms_filter.has_value());
     CHECK(run.settings.depth_mode == hydra::DepthMode::Points);
     CHECK(run.settings.depth_value == 5000);
-    CHECK(!run.settings.sp_cap.has_value());
+    CHECK(run.settings.sp_cap == 16);
 }
 
-TEST_CASE("sp_cap round-trips as a number or auto; pre-1.6 keys are ignored") {
+TEST_CASE("sp_cap round-trips as a number; auto, zero, junk and pre-1.6 keys read as 4") {
     const std::string path = temp_ini("spcap");
 
-    // Auto writes the word and reads back as nullopt.
-    Settings s;
-    s.sp_cap = std::nullopt;
-    REQUIRE(s.save_file(path));
-    CHECK_FALSE(Settings::load_file(path).sp_cap.has_value());
-    CHECK(Settings::load_file(path).cap_query().is_auto());
-
     // A number reads back as that number, and cap_query asks for it exactly.
+    Settings s;
     s.sp_cap = 64;
     REQUIRE(s.save_file(path));
     CHECK(Settings::load_file(path).sp_cap == 64);
     CHECK(Settings::load_file(path).cap_query().exact == 64);
 
+    // Hydra 1.8.4 wrote "auto" for Auto, which is gone. It reads as Clone
+    // Hero's 4, and saving writes the number back.
+    {
+        std::ofstream f(path, std::ios::trunc);
+        f << "sp_cap=auto\n";
+    }
+    Settings from_auto = Settings::load_file(path);
+    CHECK(from_auto.sp_cap == 4);
+    CHECK(from_auto.cap_query().exact == 4);
+    REQUIRE(from_auto.save_file(path));
+    CHECK(Settings::load_file(path).sp_cap == 4);
+
     // The old Uncapped-edition keys, which the main app also used to write as
-    // "off, 8", must not turn an existing INI into Auto or 8 bars. Garbage and
-    // zero keep the default too.
+    // "off, 8", must not turn an existing INI into 8 bars. Garbage and zero
+    // keep the default too.
     {
         std::ofstream f(path, std::ios::trunc);
         f << "sp_cap_enabled=0\n"
@@ -288,27 +293,20 @@ TEST_CASE("sp_cap round-trips as a number or auto; pre-1.6 keys are ignored") {
     std::remove(path.c_str());
 }
 
-TEST_CASE("to_analysis_settings maps the cap and its Auto budget") {
+TEST_CASE("to_analysis_settings maps the cap") {
     Settings s;
     s.depth_mode = 1;
     s.depth_value = 5000;
     s.mslimit_enabled = true;
     s.mslimit_value = 20;
 
-    // A fixed cap: a single run. The rules still carry the Auto budget; only
-    // an Auto run reads it (analyze_chart).
+    // The cap rides along as it is.
     s.sp_cap = 16;
     AnalysisSettings a = s.to_analysis_settings();
     CHECK(a.depth_mode == hydra::DepthMode::Points);
     CHECK(a.depth_value == 5000);
     CHECK(a.ms_filter == 20.0);
     CHECK(a.sp_cap == 16);
-
-    // Auto: the ladder and its budget come along in the rules.
-    s.sp_cap = std::nullopt;
-    a = s.to_analysis_settings();
-    CHECK_FALSE(a.sp_cap.has_value());
-    CHECK(a.rules.auto_budget_s == s.rules.auto_budget_s);
 
     // Disabled ms limit maps to no filter.
     s.mslimit_enabled = false;

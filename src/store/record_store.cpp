@@ -186,7 +186,7 @@ bool sort_column_is_songmeta(SortColumn c) {
 }
 
 // The results table's columns. result_id is the rowid alias: a bigger one
-// means "written later", which is how Auto picks the newest run.
+// means "written later".
 constexpr const char* kResultsColumnDefs =
     "  result_id   INTEGER PRIMARY KEY,"
     "  hyhash      TEXT NOT NULL,"
@@ -260,14 +260,13 @@ bool layout_is_current(const std::vector<uint8_t>& structure_head) {
 }
 
 // Is this row's stored path tree in a path format this build reads, analyzed
-// under the rules this process runs, as a fixed-cap run or as an Auto run?
-// Takes the whole blob or just the substr(structure,1,12) a query selected.
+// under the rules this process runs? Takes the whole blob or just the
+// substr(structure,1,12) a query selected.
 bool structure_is_current(const std::vector<uint8_t>& structure_head,
                           const core::RulesStamp& rules) {
     if (structure_head.size() < kStructureHeadBytes) return false;
     const uint64_t fingerprint = read_le(structure_head, 4, 8);
-    return layout_is_current(structure_head) &&
-           (fingerprint == rules.fixed || fingerprint == rules.autocap);
+    return layout_is_current(structure_head) && fingerprint == rules.fixed;
 }
 
 // The facts that decide whether a row is readable and how it places among
@@ -318,7 +317,7 @@ StaleReasons stale_reasons(const std::string& hyversion,
 //
 // Built from the same StampRule lists is_current reads, so the two spellings
 // cannot drift: every accepted results version, every accepted path format
-// (the first four structure bytes), and the two rules fingerprints (the next
+// (the first four structure bytes), and the rules fingerprint (the next
 // eight). bind_ready_params binds them in that order and returns the next
 // free index.
 std::string placeholders(size_t n) {
@@ -331,7 +330,7 @@ const std::string& row_ready_sql() {
     static const std::string sql =
         "(hyversion IN (" + placeholders(kResultsStamp.accepted.size()) +
         ") AND substr(structure,1,4) IN (" + placeholders(kPathFormatStamp.accepted.size()) +
-        ") AND substr(structure,5,8) IN (?, ?))";
+        ") AND substr(structure,5,8) = ?)";
     return sql;
 }
 
@@ -339,17 +338,15 @@ int bind_ready_params(sqlite3_stmt* s, int idx, const core::RulesStamp& rules) {
     for (std::string_view v : kResultsStamp.accepted) bind_text(s, idx++, std::string(v));
     for (uint32_t f : kPathFormatStamp.accepted) bind_blob(s, idx++, write_le(f, 4));
     bind_blob(s, idx++, write_le(rules.fixed, 8));
-    bind_blob(s, idx++, write_le(rules.autocap, 8));
     return idx;
 }
 
 // Does `a` beat `b`? This version before another, then this path format
-// before an older one, then the newest write. Newest, not tallest: an Auto
-// run that settles below an older, taller row (a what-if the user typed) is
-// the result the user just asked for, so every lookup must show it. The
-// tallest rule showed the old row forever and "Analyze paths!" could never
-// replace it. Write order is result_id: add_row deletes and re-inserts, so a
-// rewritten row is newest.
+// before an older one, then the newest write. Write order is result_id:
+// add_row deletes and re-inserts, so a rewritten row is newest. Since Auto
+// went (2026-09-27) every lookup names one exact cap and lens, and the
+// results table holds one row per cap and lens, so a chart offers one
+// candidate; the order still decides if that ever changes.
 bool outranks(const Candidate& a, const Candidate& b) {
     if (a.current != b.current) return a.current;
     if (a.format != b.format) return a.format;
@@ -396,16 +393,16 @@ private:
 // Which of them wins is WinnerPicker's decision and not SQL's, so there is
 // deliberately no ORDER BY or LIMIT here. `a` is the table alias, "" or "r.".
 // Appended after a WHERE that already has a term.
-void append_candidate_filter(std::string& sql, const char* a, const CapQuery& cap) {
+void append_candidate_filter(std::string& sql, const char* a,
+                             [[maybe_unused]] const CapQuery& cap) {
     const std::string p = a;
     sql += " AND " + lens_match(a);
-    if (cap.exact) sql += " AND " + p + "sp_cap=?";
-    else sql += " AND " + p + "sp_cap>" + std::to_string(kCloneHeroSpCap);
+    sql += " AND " + p + "sp_cap=?";
 }
-// Binds the lens's four parameters, plus one more for an exact cap.
+// Binds the lens's four parameters, then the cap.
 int bind_candidate_filter(sqlite3_stmt* s, int idx, const CapQuery& cap, const Lens& lens) {
     idx = bind_lens(s, idx, lens);
-    if (cap.exact) sqlite3_bind_int(s, idx++, *cap.exact);
+    sqlite3_bind_int(s, idx++, cap.exact);
     return idx;
 }
 
@@ -421,12 +418,11 @@ void rollback_if_open(sqlite3* db) {
 // or a batch would skip charts whose stored answer came from a different
 // question. has_record and analyzed_hashes share it so the two cannot drift.
 // Binds, from `idx`: the chart mode, the ready parameters, the lens, then an
-// exact cap when there is one.
-std::string analyzed_filter(const CapQuery& cap) {
+// cap.
+std::string analyzed_filter([[maybe_unused]] const CapQuery& cap) {
     std::string sql =
         "chartmode=? AND " + row_ready_sql() + " AND " + lens_match("");
-    if (cap.exact) sql += " AND sp_cap=?";
-    else sql += " AND sp_cap>" + std::to_string(kCloneHeroSpCap);
+    sql += " AND sp_cap=?";
     return sql;
 }
 int bind_analyzed_filter(sqlite3_stmt* s, int idx, const std::string& chartmode,
@@ -435,7 +431,7 @@ int bind_analyzed_filter(sqlite3_stmt* s, int idx, const std::string& chartmode,
     bind_text(s, idx++, chartmode);
     idx = bind_ready_params(s, idx, rules_fingerprint);
     idx = bind_lens(s, idx, lens);
-    if (cap.exact) sqlite3_bind_int(s, idx++, *cap.exact);
+    sqlite3_bind_int(s, idx++, cap.exact);
     return idx;
 }
 
@@ -487,9 +483,9 @@ std::string current_record_version() { return std::string(kResultsStamp.written)
 PreparedRow prepare_row(const RecordKey& key, const HydraRecord& record) {
     if (!record.sp_cap)
         throw std::invalid_argument("prepare_row: record carries no sp_cap");
-    if (key.cap.exact && *key.cap.exact != *record.sp_cap)
+    if (key.cap.exact != *record.sp_cap)
         throw std::invalid_argument("prepare_row: key asks for sp_cap " +
-                                    std::to_string(*key.cap.exact) +
+                                    std::to_string(key.cap.exact) +
                                     " but the record was analyzed at " +
                                     std::to_string(*record.sp_cap));
     // Both sides come from the same int (Settings::mslimit_value, widened to
@@ -582,6 +578,9 @@ RecordStore::RecordStore(const std::string& dbpath, core::RulesStamp rules_finge
     // Nothing reads it (user decision 2026-09-26), so its charts read Not
     // analyzed until they are analyzed again.
     create_result_tables();
+    // Auto was removed (2026-09-27). Its results go the first time this
+    // build opens the file. T7's summary backfill runs after this.
+    delete_auto_results();
     exec("PRAGMA user_version = 2");
 }
 
@@ -862,7 +861,7 @@ void RecordStore::write_row(const PreparedRow& row) {
 
     // (2) The row this one replaces, deleted explicitly rather than by
     //     INSERT OR REPLACE: the refs bookkeeping has to be ours, and the
-    //     re-insert must take a fresh result_id so Auto sees it as newest.
+    //     re-insert must take a fresh result_id so the newest write ranks first.
     purge("hyhash=? AND chartmode=? AND sp_cap=? AND ms_enabled=? AND ms_value=?"
           " AND depth_mode=? AND depth_value=?",
           [&](sqlite3_stmt* s) {
@@ -921,15 +920,71 @@ void RecordStore::write_row(const PreparedRow& row) {
     }
 
     // (4) Whatever the replaced row was the last owner of.
-    {
-        Stmt s = prepare(db_,
-            "DELETE FROM paths WHERE hyhash=? AND chartmode=? AND phash NOT IN"
-            " (SELECT phash FROM path_refs WHERE hyhash=? AND chartmode=?)");
-        bind_text(s, 1, row.hyhash);
-        bind_text(s, 2, row.chartmode);
-        bind_text(s, 3, row.hyhash);
-        bind_text(s, 4, row.chartmode);
-        run(s, "path gc");
+    collect_orphan_paths(row.hyhash, row.chartmode, "add_row");
+}
+
+void RecordStore::collect_orphan_paths(const std::string& hyhash,
+                                       const std::string& chartmode, const char* caller) {
+    Stmt s = prepare(db_,
+        "DELETE FROM paths WHERE hyhash=? AND chartmode=? AND phash NOT IN"
+        " (SELECT phash FROM path_refs WHERE hyhash=? AND chartmode=?)");
+    bind_text(s, 1, hyhash);
+    bind_text(s, 2, chartmode);
+    bind_text(s, 3, hyhash);
+    bind_text(s, 4, chartmode);
+    // Same message as before for write_row: "add_row path gc failed: ...".
+    if (sqlite3_step(s) != SQLITE_DONE)
+        throw std::runtime_error(std::string(caller) + " path gc failed: " +
+                                 sqlite3_errmsg(db_));
+}
+
+namespace {
+// The meta key that marks the Auto results deleted for this file.
+constexpr const char* kAutoResultsDeletedKey = "auto_results_deleted";
+}  // namespace
+
+void RecordStore::delete_auto_results() {
+    // Under RulesStamp::none() (a bad hydra_rules.ini) there is no
+    // fingerprint to look for. Leave the key unset, so the next start with
+    // good rules does it.
+    if (rules_fingerprint_.retired_auto == core::kNoRulesFingerprint) return;
+    if (meta_get(kAutoResultsDeletedKey)) return;
+
+    // An Auto row is known only by the rules fingerprint in bytes 5..12 of
+    // its structure blob (flatten_record writes it right after the format).
+    // Auto rows made under other rules are already Stale; the next write of
+    // their chart purges them (write_row step 1).
+    const std::vector<uint8_t> auto_fp = write_le(rules_fingerprint_.retired_auto, 8);
+    exec("BEGIN");
+    try {
+        // The charts that hold one, so their orphaned paths can be collected.
+        std::vector<std::pair<std::string, std::string>> charts;
+        {
+            Stmt s = prepare(db_,
+                "SELECT DISTINCT hyhash, chartmode FROM results"
+                " WHERE substr(structure,5,8) = ?");
+            bind_blob(s, 1, auto_fp);
+            while (sqlite3_step(s) == SQLITE_ROW)
+                charts.emplace_back(column_text(s, 0), column_text(s, 1));
+        }
+        // Refs first, always: they are what keep a result's paths alive.
+        for (const char* sql :
+             {"DELETE FROM path_refs WHERE result_id IN"
+              " (SELECT result_id FROM results WHERE substr(structure,5,8) = ?)",
+              "DELETE FROM results WHERE substr(structure,5,8) = ?"}) {
+            Stmt s = prepare(db_, sql);
+            bind_blob(s, 1, auto_fp);
+            if (sqlite3_step(s) != SQLITE_DONE)
+                throw std::runtime_error(std::string("deleting Auto results failed: ") +
+                                         sqlite3_errmsg(db_));
+        }
+        for (const auto& [hyhash, chartmode] : charts)
+            collect_orphan_paths(hyhash, chartmode, "Auto cleanup");
+        meta_set(kAutoResultsDeletedKey, "1");
+        exec("COMMIT");
+    } catch (...) {
+        rollback_if_open(db_);
+        throw;
     }
 }
 

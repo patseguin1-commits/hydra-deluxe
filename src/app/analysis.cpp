@@ -540,11 +540,10 @@ void run_batch(const std::vector<ScanItem>& items, const BatchRun& run,
     const AnalysisSettings& settings = run.settings;
     const std::atomic<bool>* cancel = callbacks.cancel;
 
-    // "Already has a result" means a current-version record at the cap this
-    // run would produce (Auto: any record above 4 bars) AND under this run's
-    // ms limit and score range, so stale rows, other caps' rows and other
-    // settings' rows are re-run rather than skipped.
-    const store::CapQuery cap = store::CapQuery::from_setting(settings.sp_cap);
+    // "Already has a result" means a current-version record at exactly this
+    // run's cap AND under this run's ms limit and score range, so stale rows,
+    // other caps' rows and other settings' rows are re-run rather than skipped.
+    const store::CapQuery cap = store::CapQuery::at(settings.sp_cap);
     // One query for the whole library, not one per chart.
     const std::unordered_set<std::string> analyzed =
         redo ? std::unordered_set<std::string>{}

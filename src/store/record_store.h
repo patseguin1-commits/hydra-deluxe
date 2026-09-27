@@ -66,19 +66,12 @@ struct PathSummary {
 PathSummary summarize_path(const Path& path);
 PathSummary summarize_record(const HydraRecord& record);
 
-// Which cap's record a lookup wants. at(N): the record analyzed at exactly N
-// bars. automatic(): the chart's highest cap above Clone Hero's 4 -- what an
-// Auto run would reuse -- preferring current-version rows over stale ones.
+// Which cap's record a lookup wants: at(N), the record analyzed at exactly N
+// bars. (Auto, which asked for "the newest row above 4 bars", was removed
+// on 2026-09-27.)
 struct CapQuery {
-    std::optional<int> exact;
+    int exact = kCloneHeroSpCap;
     static CapQuery at(int cap) { return CapQuery{cap}; }
-    static CapQuery automatic() { return CapQuery{std::nullopt}; }
-    // The user's SP cap setting as a query: a set cap asks for exactly that
-    // one, "Auto" (unset) asks for whatever an Auto run would reuse.
-    static CapQuery from_setting(std::optional<int> sp_cap) {
-        return sp_cap ? at(*sp_cap) : automatic();
-    }
-    bool is_auto() const { return !exact.has_value(); }
     // Spelled out rather than defaulted: this project builds as C++17.
     bool operator==(const CapQuery& other) const { return exact == other.exact; }
     bool operator!=(const CapQuery& other) const { return !(*this == other); }
@@ -118,8 +111,7 @@ struct Lens {
 };
 
 // One result's identity: the chart, the chart mode, the SP cap (ADR-0003) and
-// the lens. `cap` is a query because a caller may ask for "whatever Auto would
-// reuse"; a row itself always has an exact cap.
+// the lens.
 struct RecordKey {
     std::string hyhash;
     std::string chartmode;
@@ -150,11 +142,10 @@ struct PreparedRow {
 };
 
 // Throws std::invalid_argument if the record carries no sp_cap (every
-// analyzer result does), if the key names an exact cap that isn't the cap the
-// record was analyzed at, or if the key's lens has the ms limit on at a value
-// the record wasn't analyzed under -- each mismatch would file the result
-// under settings it doesn't belong to. An automatic key takes whatever cap the
-// record carries.
+// analyzer result does), if the key's cap isn't the cap the record was
+// analyzed at, or if the key's lens has the ms limit on at a value the record
+// wasn't analyzed under -- each mismatch would file the result under settings
+// it doesn't belong to.
 PreparedRow prepare_row(const RecordKey& key, const HydraRecord& record);
 
 // The results version this build stamps on a row and accepts (ADR 0018; not
@@ -251,7 +242,8 @@ public:
     // from Hydra 1.6 or older keeps its old records table, unread: its charts
     // read Not analyzed (user decision 2026-09-26).
     // rules_fingerprint: core::RulesStamp::of() the rules this process runs
-    // under. A row stamped with neither of its two fingerprints reads Stale.
+    // under. A row stamped with any other fingerprint reads Stale. The first
+    // open by this build also deletes the results Auto saved (delete_auto_results).
     // core::RulesStamp::none() (a bad hydra_rules.ini) makes every row Stale.
     explicit RecordStore(const std::string& dbpath,
                          core::RulesStamp rules_fingerprint = core::default_stamp());
@@ -410,9 +402,10 @@ public:
 
 private:
     sqlite3* db_ = nullptr;
-    // The two fingerprints of the rules this process runs under (fixed-cap
-    // and Auto); a row stamped with neither reads Stale. Computed once, when
-    // the store opens.
+    // The fingerprint of the rules this process runs under, and the one an
+    // Auto run under them carried (read only by delete_auto_results). A row
+    // stamped with anything but `fixed` reads Stale. Computed once, when the
+    // store opens.
     core::RulesStamp rules_fingerprint_;
     // The rule: this lock covers sqlite calls and nothing else -- decoding a
     // blob and calling a caller's callback happen outside it. A prepared
@@ -436,6 +429,16 @@ private:
                      const std::string& ref_artist, const std::string& ref_charter,
                      const std::vector<uint8_t>& tempomap);
     void write_row(const PreparedRow& row);
+    // Deletes this chart's path nodes that no result refers to any more:
+    // write_row's last step, and the Auto cleanup's. The caller holds the lock
+    // (or is the constructor) and an open transaction. `caller` names the
+    // operation in the error message.
+    void collect_orphan_paths(const std::string& hyhash, const std::string& chartmode,
+                              const char* caller);
+    // Runs once per database file, when it opens: deletes every result
+    // Hydra 1.8.4's Auto saved (user decision 7, 2026-09-27), then the path
+    // nodes only they used, and marks it done in `meta`.
+    void delete_auto_results();
     void insert_dynamics(const DynamicsKey& key, const std::vector<uint8_t>& blob,
                          int count_version);
     // Every path node one result references, keyed by hash — what

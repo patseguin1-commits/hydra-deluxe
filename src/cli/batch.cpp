@@ -190,8 +190,7 @@ int main() {
         case hydra::DepthMode::Points: depth_name = "points"; break;
     }
     std::printf("Depth      : %s %d\n", depth_name, settings.depth_value);
-    if (settings.sp_cap) std::printf("SP cap     : %d bars\n", *settings.sp_cap);
-    else std::printf("SP cap     : Auto\n");
+    std::printf("SP cap     : %d bars\n", settings.sp_cap);
     if (settings.mslimit_enabled)
         std::printf("Timing cap : %d ms\n", settings.mslimit_value);
     else

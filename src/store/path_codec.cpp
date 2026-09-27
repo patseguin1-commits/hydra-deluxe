@@ -313,7 +313,7 @@ FlatRecord flatten_record(const HydraRecord& record) {
     w.u64(record.rules_fingerprint);
     w.opt_f64(record.ms_limit);
     w.opt_i32(record.sp_cap);
-    w.boolean(record.sp_cap_converged);
+    w.boolean(record.sp_cap_converged);  // always true now; see core/model.h
 
     w.u32(static_cast<uint32_t>(record.multsqueezes.size()));
     for (const MultSqueeze& m : record.multsqueezes) {

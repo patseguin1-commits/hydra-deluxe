@@ -171,7 +171,7 @@ TEST_CASE("run_batch files results under the lens it is given") {
     run_batch({item}, run, store, /*redo=*/false, 1);
 
     const hydra::store::CapQuery cap =
-        hydra::store::CapQuery::from_setting(run.settings.sp_cap);
+        hydra::store::CapQuery::at(run.settings.sp_cap);
     CHECK(store.has_record(hydra::store::RecordKey{item.md5, "lens-test", cap, run.lens}));
 }
 

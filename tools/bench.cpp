@@ -53,7 +53,7 @@ static void folder_breakdown(const std::string& folder, const core::Rules& rules
     gui.rules = rules;
     const app::AnalysisSettings settings = gui.to_analysis_settings();
     std::printf("Settings: the GUI default (SP cap %d, score range %d, %dms limit).\n\n",
-                gui.sp_cap.value_or(-1), gui.depth_value, gui.mslimit_value);
+                gui.sp_cap, gui.depth_value, gui.mslimit_value);
 
     store::RecordStore store(":memory:", core::RulesStamp::of(rules));
 
@@ -84,9 +84,8 @@ static void folder_breakdown(const std::string& folder, const core::Rules& rules
         long long best = rec.paths.empty() ? 0 : rec.best_path().totalscore();
         std::printf("  parse %.2fs | search %.2fs | store %.2fs  => TOTAL %.2fs\n",
                     parse_s, search_s, store_s, parse_s + search_s + store_s);
-        std::printf("  best score %lld | %d paths | sp_cap %d (%s)\n\n", best,
-                    static_cast<int>(rec.all_paths().size()), rec.sp_cap.value_or(-1),
-                    rec.sp_cap_converged ? "settled" : "unsettled");
+        std::printf("  best score %lld | %d paths | sp_cap %d\n\n", best,
+                    static_cast<int>(rec.all_paths().size()), rec.sp_cap.value_or(-1));
         std::fflush(stdout);
     }
 }
@@ -186,16 +185,13 @@ static void corpus_bench() {
     }
     std::printf("Test corpus: %zu charts. Engine = src/search/engine.cpp.\n\n",
                 songs.size());
-    auto bench = [&](const char* name, std::optional<int> cap, int dvalue) {
+    auto bench = [&](const char* name, int cap, int dvalue) {
         SearchSettings settings;
         settings.sp_cap = cap;
         settings.depth_mode = DepthMode::Scores;
         settings.depth_value = dvalue;
         settings.ms_filter = std::nullopt;
         settings.rules = g_rules;
-        // No budget, as before: every Auto rung runs to the end, so the
-        // timing is of the search and not of a wall-clock cut-off.
-        settings.rules.auto_budget_s = std::nullopt;
         double best = 1e30;
         for (int rep = 0; rep < 3; ++rep) {
             auto t0 = clk::now();
@@ -209,7 +205,6 @@ static void corpus_bench() {
         std::printf("  %-16s : %7.2fs (best of 3)\n", name, best);
     };
     bench("cap4 d4", 4, 4);
-    bench("auto d4", std::nullopt, 4);
 }
 
 // Dump a store's charts table as the same JSON shape --dump writes, so two

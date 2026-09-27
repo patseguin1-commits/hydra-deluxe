@@ -168,34 +168,20 @@ void render_controls(AppState& app) {
          "show. Display only: changing it never re-analyzes.");
 
     // The SP meter ceiling in bars: 4 is Clone Hero's rule; other values are
-    // what-ifs. "Auto" raises the ceiling until the score settles. Records are
-    // kept per cap, so changing it re-reads which record this song shows.
+    // what-ifs. Records are kept per cap, so changing it re-reads which record
+    // this song shows.
     {
         ImGui::TextUnformatted("SP cap:");
         ImGui::SameLine(px(100));
-        // The number box keeps its last value while Auto is ticked, so
-        // unticking returns to it.
-        int& last_cap = app.details_ui.last_cap;
-        if (app.settings.sp_cap) last_cap = *app.settings.sp_cap;
-        bool spcap_auto = !app.settings.sp_cap.has_value();
-        begin_disabled_input(spcap_auto);
         ImGui::SetNextItemWidth(px(100));
-        if (ImGui::InputInt("##spcapvalue", &last_cap)) {
-            if (last_cap < 1) last_cap = 1;
-            app.settings.sp_cap = last_cap;
+        if (ImGui::InputInt("##spcapvalue", &app.settings.sp_cap)) {
+            if (app.settings.sp_cap < 1) app.settings.sp_cap = 1;
             app.edit_settings();
         }
         ImGui::SameLine();
         ImGui::TextUnformatted("bars");
-        end_disabled_input(spcap_auto);
-        ImGui::SameLine();
-        if (ImGui::Checkbox("Auto##spcapauto", &spcap_auto)) {
-            app.settings.sp_cap = spcap_auto ? std::nullopt : std::optional<int>(last_cap);
-            app.commit_settings();
-        }
         hint((std::to_string(kCloneHeroSpCap) +
-              " bars is Clone Hero's rule. Higher caps are what-ifs; Auto raises the "
-              "cap until the score stops improving.").c_str());
+              " bars is Clone Hero's rule. Higher caps are what-ifs.").c_str());
     }
 
     ImGui::Spacing();
@@ -291,7 +277,7 @@ void render_analyze_progress(AppState& app) {
                 std::snprintf(overlay, sizeof(overlay), "%.0f%%", f * 100.0f);
                 ImGui::ProgressBar(f, ImVec2(-1.0f, 0.0f), overlay);
             }
-            // An Auto-cap run can take minutes; the user needs an out that
+            // A high-cap run on a big chart can take minutes; the user needs an out that
             // isn't killing the app.
             if (ImGui::Button("Cancel")) job->cancel();
         }

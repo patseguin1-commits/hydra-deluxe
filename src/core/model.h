@@ -457,10 +457,15 @@ struct Path {
 struct HydraRecord {
     std::optional<double> ms_limit;
     std::optional<int> sp_cap;
+    // Always true since Auto went (2026-09-27): Auto was the only search that
+    // could stop before its score settled. Kept because the stored path
+    // structure carries it (store/path_codec.cpp); dropping it would change
+    // the record format.
     bool sp_cap_converged = true;
     // The fingerprint of the rules the search ran under (blob v6, path
-    // structure v4): Rules::fingerprint() for a fixed-cap run,
-    // Rules::auto_fingerprint() for an Auto run. A record built in memory
+    // structure v4): Rules::fingerprint(). Results Hydra 1.8.4's Auto saved
+    // carry Rules::retired_auto_fingerprint() and are deleted when the store
+    // opens (RecordStore::delete_auto_results). A record built in memory
     // starts with the default rules' fixed-cap fingerprint, computed once
     // (core::default_stamp), not once per record decoded; analyze_chart
     // stamps the real one. An older blob reads back core::kNoRulesFingerprint,

@@ -40,12 +40,11 @@ namespace {
 
 // Analyze the first `want` non-empty corpus charts into a fresh in-memory
 // store and return how many records landed.
-int fill_store(store::RecordStore& store, std::optional<int> cap, int want) {
+int fill_store(store::RecordStore& store, int cap, int want) {
     AnalysisSettings settings;
     settings.depth_mode = DepthMode::Scores;
     settings.depth_value = 10;
     settings.sp_cap = cap;
-    settings.rules.auto_budget_s = std::nullopt;
 
     int added = 0;
     for (const std::string& path : corpus::chart_paths()) {
@@ -57,7 +56,7 @@ int fill_store(store::RecordStore& store, std::optional<int> cap, int want) {
             store.add_song(hyhash, "Title " + std::to_string(added), "Artist",
                            "Charter", result.song);
             store.add_record(
-                store::RecordKey{hyhash, "mode", store::CapQuery::from_setting(cap)},
+                store::RecordKey{hyhash, "mode", store::CapQuery::at(cap)},
                 result.record);
             ++added;
         } catch (const std::exception&) {
@@ -67,13 +66,13 @@ int fill_store(store::RecordStore& store, std::optional<int> cap, int want) {
     return added;
 }
 
-void check_cap(std::optional<int> cap) {
+void check_cap(int cap) {
     store::RecordStore store(":memory:");
     const int added = fill_store(store, cap, 5);
     REQUIRE(added > 0);
 
     // One row per shown path, so a record surfaces exactly one rank-1 row.
-    const store::CapQuery query = cap ? store::CapQuery::at(*cap) : store::CapQuery::automatic();
+    const store::CapQuery query = store::CapQuery::at(cap);
     std::vector<report::ReportRow> rows =
         report::collect_rows(store, /*max_paths=*/100, query, store::Lens{});
     int rank1 = 0;
@@ -95,15 +94,13 @@ void check_cap(std::optional<int> cap) {
     for (int i = 0; i < added; ++i)
         CHECK(html.find("Title " + std::to_string(i)) != std::string::npos);
 
-    MESSAGE((cap ? std::to_string(*cap) + " bars" : "auto") << ": " << rows.size()
+    MESSAGE(std::to_string(cap) << " bars: " << rows.size()
             << " rows, " << html.size() << " bytes");
 }
 
 }  // namespace
 
 TEST_CASE("report page embeds every stored record (4 bars)") { check_cap(4); }
-
-TEST_CASE("report page embeds every stored record (Auto)") { check_cap(std::nullopt); }
 
 TEST_CASE("report lists only the wanted cap and names it") {
     store::RecordStore store(":memory:");
@@ -138,14 +135,6 @@ TEST_CASE("report lists only the wanted cap and names it") {
     for (const report::ReportRow& row : report::collect_rows(store, 100, options.cap, options.lens))
         if (row.rank == 1) ++rank1;
     CHECK(rank1 == 1);
-
-    options.cap = store::CapQuery::automatic();
-    report::GeneratedReport automatic = report::generate_report(store, options);
-    CHECK(automatic.html.find("SP cap Auto") != std::string::npos);
-    rank1 = 0;
-    for (const report::ReportRow& row : report::collect_rows(store, 100, options.cap, options.lens))
-        if (row.rank == 1) ++rank1;
-    CHECK(rank1 == 1);
 }
 
 TEST_CASE("collect_rows: a blank or old-placeholder song name reads (unknown)") {
@@ -154,7 +143,6 @@ TEST_CASE("collect_rows: a blank or old-placeholder song name reads (unknown)") 
     settings.depth_mode = DepthMode::Scores;
     settings.depth_value = 10;
     settings.sp_cap = 4;
-    settings.rules.auto_budget_s = std::nullopt;
 
     // songmeta names written before the fallback existed.
     const std::vector<std::string> stored_names = {"", "<unknown title>"};
@@ -167,7 +155,7 @@ TEST_CASE("collect_rows: a blank or old-placeholder song name reads (unknown)") 
             const std::string hyhash = "u" + std::to_string(added);
             store.add_song(hyhash, stored_names[added], "Artist", "Charter", result.song);
             store.add_record(
-                store::RecordKey{hyhash, "mode", store::CapQuery::from_setting(settings.sp_cap)},
+                store::RecordKey{hyhash, "mode", store::CapQuery::at(settings.sp_cap)},
                 result.record);
             ++added;
         } catch (const std::exception&) {
@@ -375,7 +363,6 @@ TEST_CASE("records_by_hash keys every listed record by its lower-case hash") {
     store::RecordStore store(":memory:");
     AnalysisSettings settings;
     settings.depth_value = 0;
-    settings.rules.auto_budget_s = std::nullopt;
     bool added = false;
     for (const std::string& path : corpus::chart_paths()) {
         try {

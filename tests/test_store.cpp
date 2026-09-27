@@ -44,14 +44,14 @@ namespace {
 
 struct Config {
     const char* key;
-    std::optional<int> cap;  // nullopt = Auto
+    int cap;
     DepthMode dmode;
     int dvalue;
     std::optional<double> ms;
 };
 
 // The config matrix the GUI/CLI expose: score depth, points depth, the ms
-// filter, a fixed what-if cap, and Auto.
+// filter, and a fixed what-if cap.
 const std::vector<Config> kMatrix = {
     {"cap4.scores.10", 4, DepthMode::Scores, 10, std::nullopt},
     {"cap4.scores.200", 4, DepthMode::Scores, 200, std::nullopt},
@@ -62,7 +62,6 @@ const std::vector<Config> kMatrix = {
     {"cap4.scores.200.ms5", 4, DepthMode::Scores, 200, 5.0},
     {"cap4.scores.200.ms20", 4, DepthMode::Scores, 200, 20.0},
     {"cap8.scores.200", 8, DepthMode::Scores, 200, std::nullopt},
-    {"auto.scores.200", std::nullopt, DepthMode::Scores, 200, std::nullopt},
 };
 
 // First field where two summaries differ, empty when equal.
@@ -98,9 +97,6 @@ TEST_CASE("records round-trip through RecordStore across the corpus and config m
                 settings.depth_mode = cfg.dmode;
                 settings.depth_value = cfg.dvalue;
                 settings.ms_filter = cfg.ms;
-                // No budget: every Auto rung runs to the end, so the result
-                // never depends on how busy the machine is.
-                settings.rules.auto_budget_s = std::nullopt;
                 record = &corpus::analyzed(path, settings);
             } catch (const ChartFileError&) {
                 continue;  // charts the engine rejects have no row to store
@@ -202,7 +198,6 @@ TEST_CASE("stored transfer scales equal a live recompute after a store round tri
     const std::vector<Config> configs = {
         {"cap4", 4, DepthMode::Scores, 4, std::nullopt},
         {"cap4.ms10", 4, DepthMode::Scores, 4, 10.0},
-        {"auto", std::nullopt, DepthMode::Scores, 4, std::nullopt},
     };
     RecordStore store(":memory:");
     int acts = 0, mismatches = 0;
@@ -219,8 +214,6 @@ TEST_CASE("stored transfer scales equal a live recompute after a store round tri
                 settings.depth_mode = cfg.dmode;
                 settings.depth_value = cfg.dvalue;
                 settings.ms_filter = cfg.ms;
-                // No budget, as before this field moved into the rules.
-                settings.rules.auto_budget_s = std::nullopt;
                 record = analyze_chart(song, settings);
             } catch (const ChartFileError&) {
                 continue;
@@ -287,7 +280,6 @@ TEST_CASE("RecordStore maintenance: has_record, list_records, reindex") {
     store.add_record(RecordKey{"h1", "Expert Pro Drums, 2x Bass", at4}, *record);
     CHECK(store.has_record(RecordKey{"h1", "Expert Pro Drums, 2x Bass", at4}));
     CHECK_FALSE(store.has_record(RecordKey{"h1", "Expert Pro Drums, 2x Bass", CapQuery::at(8)}));
-    CHECK_FALSE(store.has_record(RecordKey{"h1", "Expert Pro Drums, 2x Bass", CapQuery::automatic()}));
 
     std::vector<RecordListing> listing =
         store.list_records(std::nullopt, at4, Lens{}, SortColumn::Score, true);
@@ -438,7 +430,7 @@ HydraRecord at_cap_ms10(int cap) {
 
 }  // namespace
 
-TEST_CASE("records at different caps coexist; Auto picks the newest current one") {
+TEST_CASE("records at different caps coexist; each lookup sees only its own cap") {
     RecordStore store(":memory:");
     store.add_song("h", "Song", "Artist", "Charter", fixture().song);
     store.add_record(RecordKey{"h", "mode", CapQuery::at(4)}, at_cap(4));
@@ -451,24 +443,18 @@ TEST_CASE("records at different caps coexist; Auto picks the newest current one"
     CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::at(8)}).status ==
           RecordStatus::NotAnalyzed);
 
-    // Auto takes the newest row above 4 and counts it as already analyzed.
-    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic()}).record->sp_cap == 32);
-    CHECK(store.has_record(RecordKey{"h", "mode", CapQuery::automatic()}));
-    CHECK(store.get_summary(RecordKey{"h", "mode", CapQuery::automatic()}).status ==
-          RecordStatus::Ready);
-
-    // A stale 64-bar row does not outrank a current 32-bar one -- for single
+    // A stale 64-bar row leaves the 32-bar answer alone -- for single
     // lookups and for the set queries alike.
     PreparedRow stale = prepare_row(RecordKey{"h", "mode", CapQuery::at(64)}, at_cap(64));
     stale.hyversion = "0.0.0";
     store.add_row(stale);
-    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic()}).record->sp_cap == 32);
+    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::at(32)}).record->sp_cap == 32);
     std::vector<RecordListing> listed =
-        store.list_records(std::nullopt, CapQuery::automatic(), Lens{}, SortColumn::Score, true);
+        store.list_records(std::nullopt, CapQuery::at(32), Lens{}, SortColumn::Score, true);
     REQUIRE(listed.size() == 1);
     CHECK(listed[0].sp_cap == 32);
     int seen = 0;
-    store.for_each_blob(std::nullopt, CapQuery::automatic(), Lens{},
+    store.for_each_blob(std::nullopt, CapQuery::at(32), Lens{},
                         [&](const RecordStore::BlobRow& meta, const HydraRecord*) {
                             CHECK(meta.sp_cap == 32);
                             ++seen;
@@ -500,52 +486,10 @@ TEST_CASE("records at different caps coexist; Auto picks the newest current one"
     CHECK(store.list_records(std::nullopt, CapQuery::at(64), Lens{}, SortColumn::Score, true)
               .empty());
 
-    // With only a 4-bar row, Auto has nothing to reuse.
-    RecordStore only4(":memory:");
-    only4.add_song("h", "Song", "Artist", "Charter", fixture().song);
-    only4.add_record(RecordKey{"h", "mode", CapQuery::at(4)}, at_cap(4));
-    CHECK(only4.get_record(RecordKey{"h", "mode", CapQuery::automatic()}).status ==
-          RecordStatus::NotAnalyzed);
-    CHECK_FALSE(only4.has_record(RecordKey{"h", "mode", CapQuery::automatic()}));
-
     // reindex touches each cap's own row.
     CHECK(store.reindex() == 3);
     CHECK(store.list_records(std::nullopt, CapQuery::at(4), Lens{}, SortColumn::Score, true)[0]
               .summary.score == fixture().record.best_path().totalscore());
-}
-
-TEST_CASE("an Auto run that settles below an existing row becomes the Auto answer") {
-    // The real sequence behind the bug: a chart already holds a tall row (an
-    // imported uncapped run, or a what-if the user typed), then the user
-    // presses Analyze under Auto and the ladder settles lower. The fresh row
-    // is the one the user just paid for and the one that matches the current
-    // depth / ms settings, so every Auto lookup must show it -- not the
-    // taller, older one.
-    RecordStore store(":memory:");
-    store.add_song("h", "Song", "Artist", "Charter", fixture().song);
-    store.add_record(RecordKey{"h", "mode", CapQuery::at(32)}, at_cap(32));
-    store.add_record(RecordKey{"h", "mode", CapQuery::automatic()}, at_cap(16));
-    CHECK(store.counts().second == 2);
-
-    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic()}).record->sp_cap == 16);
-    std::vector<RecordListing> listed =
-        store.list_records(std::nullopt, CapQuery::automatic(), Lens{}, SortColumn::Score, true);
-    REQUIRE(listed.size() == 1);
-    CHECK(listed[0].sp_cap == 16);
-    int seen = 0;
-    store.for_each_blob(std::nullopt, CapQuery::automatic(), Lens{},
-                        [&](const RecordStore::BlobRow& meta, const HydraRecord*) {
-                            CHECK(meta.sp_cap == 16);
-                            ++seen;
-                        });
-    CHECK(seen == 1);
-
-    // The taller row is still there for an explicit lookup.
-    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::at(32)}).record->sp_cap == 32);
-
-    // Re-analyzing at the taller cap makes it the newest again.
-    store.add_record(RecordKey{"h", "mode", CapQuery::at(32)}, at_cap(32));
-    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic()}).record->sp_cap == 32);
 }
 
 TEST_CASE("a row an old migration marked with unknown settings reads Not analyzed") {
@@ -863,22 +807,21 @@ TEST_CASE("for_each_blob stops between rows when its cancel flag is set") {
 }
 
 TEST_CASE("the listing and a lookup agree on which row is a chart's answer") {
-    // The lock between the two paths. Each chart below holds several
-    // candidates; whatever get_record picks is what the listing must show, and
-    // when that pick is not readable the chart must not be listed at all.
+    // The lock between the two paths. Each chart below holds rows at several
+    // caps. At every cap, whatever get_record picks is what the listing must
+    // show, and when that pick is not readable the chart must not be listed.
     RecordStore store(":memory:");
-    const std::vector<const char*> charts = {"newest", "over_stale", "over_sentinel",
+    const std::vector<const char*> charts = {"two_caps", "over_stale", "over_sentinel",
                                              "all_stale"};
     for (const char* hash : charts)
         store.add_song(hash, hash, "Artist", "Charter", fixture().song);
 
-    // Two current rows: the newer write wins, not the taller cap.
-    store.add_record(RecordKey{"newest", "mode", CapQuery::at(32)}, at_cap(32));
-    store.add_record(RecordKey{"newest", "mode", CapQuery::at(16)}, at_cap(16));
+    // Two current rows at two caps.
+    store.add_record(RecordKey{"two_caps", "mode", CapQuery::at(32)}, at_cap(32));
+    store.add_record(RecordKey{"two_caps", "mode", CapQuery::at(16)}, at_cap(16));
 
-    // A current row and a taller stale one: this build's stamp wins. The stale
-    // row goes in second because a current-version write purges the chart's
-    // other-version rows.
+    // A current row and a taller stale one. The stale row goes in second
+    // because a current-version write purges the chart's other-version rows.
     store.add_record(RecordKey{"over_stale", "mode", CapQuery::at(8)}, at_cap(8));
     PreparedRow stale =
         prepare_row(RecordKey{"over_stale", "mode", CapQuery::at(64)}, at_cap(64));
@@ -899,30 +842,39 @@ TEST_CASE("the listing and a lookup agree on which row is a chart's answer") {
     only_stale.hyversion = "0.0.0";
     store.add_row(only_stale);
 
-    std::unordered_map<std::string, int> listed;
-    for (const RecordListing& r : store.list_records(std::nullopt, CapQuery::automatic(),
-                                                     Lens{}, SortColumn::Score, true))
-        listed[r.hyhash] = r.sp_cap;
+    auto listed_at = [&](int cap) {
+        std::unordered_map<std::string, int> listed;
+        for (const RecordListing& r : store.list_records(std::nullopt, CapQuery::at(cap),
+                                                         Lens{}, SortColumn::Score, true))
+            listed[r.hyhash] = r.sp_cap;
+        return listed;
+    };
 
-    for (const char* hash : charts) {
-        INFO(hash);
-        const RecordKey key{hash, "mode", CapQuery::automatic()};
-        const RecordLookup rec = store.get_record(key);
-        CHECK(store.get_summary(key).status == rec.status);
-        if (rec.status == RecordStatus::Ready) {
-            REQUIRE(listed.count(hash) == 1);
-            CHECK(listed[hash] == rec.record->sp_cap);
-        } else {
-            CHECK(listed.count(hash) == 0);
+    for (int cap : {8, 16, 32, 64}) {
+        std::unordered_map<std::string, int> listed = listed_at(cap);
+        for (const char* hash : charts) {
+            INFO(hash << " at " << cap);
+            const RecordKey key{hash, "mode", CapQuery::at(cap)};
+            const RecordLookup rec = store.get_record(key);
+            CHECK(store.get_summary(key).status == rec.status);
+            if (rec.status == RecordStatus::Ready) {
+                REQUIRE(listed.count(hash) == 1);
+                CHECK(listed[hash] == rec.record->sp_cap);
+            } else {
+                CHECK(listed.count(hash) == 0);
+            }
         }
     }
 
-    // Spelled out, so a comparator change that moves both paths together still
-    // has to answer for itself.
-    CHECK(listed.at("newest") == 16);
-    CHECK(listed.at("over_stale") == 8);
-    CHECK(listed.at("over_sentinel") == 8);
-    CHECK(store.get_record(RecordKey{"all_stale", "mode", CapQuery::automatic()}).status ==
+    // Spelled out, so a change that moves both paths together still has to
+    // answer for itself.
+    CHECK(listed_at(16).at("two_caps") == 16);
+    CHECK(listed_at(32).at("two_caps") == 32);
+    CHECK(listed_at(8).at("over_stale") == 8);
+    CHECK(listed_at(64).count("over_stale") == 0);
+    CHECK(listed_at(8).at("over_sentinel") == 8);
+    CHECK(listed_at(64).count("over_sentinel") == 0);
+    CHECK(store.get_record(RecordKey{"all_stale", "mode", CapQuery::at(16)}).status ==
           RecordStatus::Stale);
 }
 
@@ -934,11 +886,7 @@ TEST_CASE("prepare_row refuses a key whose exact cap isn't the record's") {
     CHECK_THROWS_AS(prepare_row(RecordKey{"h", "mode", CapQuery::at(8)}, rec),
                     std::invalid_argument);
 
-    // An automatic key takes whatever cap the record carries.
-    PreparedRow row = prepare_row(RecordKey{"h", "mode", CapQuery::automatic()}, rec);
-    CHECK(row.sp_cap == 4);
-
-    // So does the matching exact key.
+    // The matching key is fine.
     CHECK(prepare_row(RecordKey{"h", "mode", CapQuery::at(4)}, rec).sp_cap == 4);
 }
 
@@ -968,11 +916,9 @@ TEST_CASE("RecordKey compares on every part of the identity") {
     CHECK_FALSE(key == RecordKey{"other", "mode", CapQuery::at(4), kLensA});
     CHECK_FALSE(key == RecordKey{"h", "other mode", CapQuery::at(4), kLensA});
     CHECK_FALSE(key == RecordKey{"h", "mode", CapQuery::at(8), kLensA});
-    CHECK_FALSE(key == RecordKey{"h", "mode", CapQuery::automatic(), kLensA});
     CHECK_FALSE(key == RecordKey{"h", "mode", CapQuery::at(4), kLensB});
-    CHECK(CapQuery::at(4) != CapQuery::automatic());
-    CHECK(CapQuery::automatic() == CapQuery::from_setting(std::nullopt));
-    CHECK(CapQuery::at(8) == CapQuery::from_setting(8));
+    CHECK(CapQuery::at(4) != CapQuery::at(8));
+    CHECK(CapQuery{} == CapQuery::at(kCloneHeroSpCap));
 
     // Each of the lens's four fields is part of the identity...
     CHECK(kLensA == Lens::from(10, 0, 20));
@@ -1047,53 +993,6 @@ TEST_CASE("the same chart at the same cap keeps one result per lens") {
               .record->paths.empty());
     CHECK_FALSE(store.get_record(RecordKey{"h", "mode", CapQuery::at(4), kLensB})
                     .record->paths.empty());
-}
-
-TEST_CASE("Auto answers inside the lens it was asked about") {
-    RecordStore store(":memory:");
-    store.add_song("h", "Song", "Artist", "Charter", fixture().song);
-    store.add_record(RecordKey{"h", "mode", CapQuery::at(32), kLensA}, at_cap_ms10(32));
-    store.add_record(RecordKey{"h", "mode", CapQuery::at(64), kLensB}, at_cap(64));
-
-    // Auto reaches for the tall rows, but only the ones its own lens wrote.
-    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic(), kLensA})
-              .record->sp_cap == 32);
-    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic(), kLensB})
-              .record->sp_cap == 64);
-    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic(), kLensC}).status ==
-          RecordStatus::NotAnalyzed);
-    CHECK(store.has_record(RecordKey{"h", "mode", CapQuery::automatic(), kLensA}));
-    CHECK_FALSE(store.has_record(RecordKey{"h", "mode", CapQuery::automatic(), kLensC}));
-
-    auto auto_caps = [&](const Lens& lens) {
-        std::vector<int> caps;
-        for (const RecordListing& r : store.list_records(std::nullopt, CapQuery::automatic(),
-                                                         lens, SortColumn::Score, true))
-            caps.push_back(r.sp_cap);
-        return caps;
-    };
-    CHECK(auto_caps(kLensA) == std::vector<int>{32});
-    CHECK(auto_caps(kLensB) == std::vector<int>{64});
-    CHECK(auto_caps(kLensC).empty());
-
-    // A stale 128-bar row in lens A does not outrank the current 32-bar one.
-    PreparedRow stale =
-        prepare_row(RecordKey{"h", "mode", CapQuery::at(128), kLensA}, at_cap_ms10(128));
-    stale.hyversion = "0.0.0";
-    store.add_row(stale);
-    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic(), kLensA})
-              .record->sp_cap == 32);
-    CHECK(auto_caps(kLensA) == std::vector<int>{32});
-
-    // An Auto run that settles below the existing row is still the answer --
-    // per lens, so the other lens's taller row is untouched.
-    store.add_record(RecordKey{"h", "mode", CapQuery::automatic(), kLensA}, at_cap_ms10(16));
-    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic(), kLensA})
-              .record->sp_cap == 16);
-    CHECK(auto_caps(kLensA) == std::vector<int>{16});
-    CHECK(store.get_record(RecordKey{"h", "mode", CapQuery::automatic(), kLensB})
-              .record->sp_cap == 64);
-    CHECK(auto_caps(kLensB) == std::vector<int>{64});
 }
 
 TEST_CASE("a path stored under two lenses is stored once") {
@@ -1519,7 +1418,7 @@ TEST_CASE("analyzed_hashes names exactly the charts has_record would skip") {
     store.add_record(RecordKey{"other_cap", "mode", CapQuery::at(8)}, at_cap(8));
     store.add_record(RecordKey{"other_mode", "other", CapQuery::at(4)}, at_cap(4));
 
-    for (const CapQuery& cap : {CapQuery::at(4), CapQuery::at(8), CapQuery::automatic()}) {
+    for (const CapQuery& cap : {CapQuery::at(4), CapQuery::at(8)}) {
         const std::unordered_set<std::string> got = store.analyzed_hashes("mode", cap, Lens{});
         for (const char* h : charts) {
             INFO(h);
@@ -1543,7 +1442,7 @@ TEST_CASE("get_summaries answers a page the same as get_summary row by row") {
 
     // "ready" twice: a page can list the same chart from two folders.
     const std::vector<std::string> page = {"ready", "stale", "none", "two_caps", "ready"};
-    for (const CapQuery& cap : {CapQuery::at(4), CapQuery::automatic()}) {
+    for (const CapQuery& cap : {CapQuery::at(4), CapQuery::at(16), CapQuery::at(32)}) {
         const std::vector<SummaryLookup> got = store.get_summaries(page, "mode", cap, Lens{});
         REQUIRE(got.size() == page.size());
         for (size_t i = 0; i < page.size(); ++i) {
@@ -1561,45 +1460,100 @@ TEST_CASE("get_summaries answers a page the same as get_summary row by row") {
     CHECK(store.get_summaries({}, "mode", CapQuery::at(4), Lens{}).empty());
 }
 
-// ---- rules fingerprint scope (2026-09-26 audit, Task 10) -------------------
+// ---- Auto removed (2026-09-27, interface redesign Task 6) ------------------
 
-TEST_CASE("editing the Auto ladder marks only Auto runs Stale") {
-    // User decision 7: the ladder only changes what an Auto run does, so a
-    // fixed-cap row stays Ready when it changes, and the budget changes
-    // nothing at all.
-    core::Rules taller = core::default_rules();
-    taller.auto_cap_ladder = {16, 32, 64, 128, 256, 512, 1024};
-    const RecordKey fixed{"h", "fixed", CapQuery::at(32)};
-    const RecordKey autorun{"h", "auto", CapQuery::automatic()};
-    const std::string db = temp_db("ladder");
-    std::remove(db.c_str());
+namespace {
+
+// A result the way Hydra 1.8.4's Auto stamped it: the fixture's paths at
+// `cap`, under the default rules' Auto fingerprint.
+HydraRecord auto_run_at(int cap) {
+    HydraRecord r = at_cap(cap);
+    r.rules_fingerprint = core::default_rules().retired_auto_fingerprint();
+    return r;
+}
+
+}  // namespace
+
+TEST_CASE("the first open deletes the results Auto saved, and their paths, once") {
+    const std::string path = temp_db("auto_delete");
+    std::remove(path.c_str());
+    const RecordKey kept{"h", "mode", CapQuery::at(4)};
+    const RecordKey whatif{"h", "mode", CapQuery::at(8)};
+    const RecordKey auto_same_chart{"h", "mode", CapQuery::at(16)};
+    const RecordKey auto_only{"a", "mode", CapQuery::at(32)};
+
+    std::vector<uint8_t> kept_bytes;
     {
-        RecordStore store(db);
+        RecordStore store(path);
         store.add_song("h", "Song", "Artist", "Charter", fixture().song);
-        store.add_record(fixed, at_cap(32));  // the fixture ran at a fixed cap
-        HydraRecord auto_run = at_cap(32);
-        auto_run.rules_fingerprint = core::default_rules().auto_fingerprint();
-        store.add_record(autorun, auto_run);
-        CHECK(store.get_record(fixed).status == RecordStatus::Ready);
-        CHECK(store.get_record(autorun).status == RecordStatus::Ready);
+        store.add_song("a", "Other", "Artist", "Charter", fixture().song);
+        store.add_record(kept, at_cap(4));
+        store.add_record(whatif, at_cap(8));
+        store.add_record(auto_same_chart, auto_run_at(16));
+        store.add_record(auto_only, auto_run_at(32));
+        kept_bytes = record_bytes(*store.get_record(kept).record);
+        // This build accepts only the fixed-cap fingerprint, so an Auto row
+        // reads Stale even before anything deletes it.
+        CHECK(store.get_record(auto_only).status == RecordStatus::Stale);
+        CHECK(store.counts().second == 4);
+    }
+    REQUIRE(scalar(path, "SELECT COUNT(*) FROM paths WHERE hyhash='a'") > 0);
+    // A database Hydra 1.8.4 wrote has no mark yet.
+    exec_on_file(path, "DELETE FROM meta WHERE key='auto_results_deleted'");
+
+    {
+        RecordStore store(path);
+        CHECK(store.counts().second == 2);
+        CHECK(store.get_record(auto_only).status == RecordStatus::NotAnalyzed);
+        CHECK(store.get_record(auto_same_chart).status == RecordStatus::NotAnalyzed);
+        // A fixed-cap what-if above 4 bars is not an Auto result and stays.
+        CHECK(store.get_record(whatif).status == RecordStatus::Ready);
+        const RecordLookup left = store.get_record(kept);
+        REQUIRE(left.status == RecordStatus::Ready);
+        CHECK(record_bytes(*left.record) == kept_bytes);
+    }
+    // The chart that held only an Auto row has no paths left; the other
+    // chart's paths are still used by its kept rows.
+    CHECK(scalar(path, "SELECT COUNT(*) FROM paths WHERE hyhash='a'") == 0);
+    CHECK(scalar(path, "SELECT COUNT(*) FROM path_refs WHERE hyhash='a'") == 0);
+    CHECK(scalar(path, "SELECT COUNT(*) FROM paths WHERE hyhash='h'") > 0);
+    CHECK(scalar(path, "SELECT COUNT(*) FROM meta WHERE key='auto_results_deleted'") == 1);
+
+    // Marked done: a later open never deletes again.
+    {
+        RecordStore store(path);
+        store.add_record(auto_only, auto_run_at(32));
     }
     {
-        RecordStore store(db, core::RulesStamp::of(taller));
-        CHECK(store.get_record(fixed).status == RecordStatus::Ready);
-        CHECK(store.has_record(fixed));
-        const RecordLookup a = store.get_record(autorun);
-        CHECK(a.status == RecordStatus::Stale);
-        CHECK(a.stale_rules);
-        CHECK_FALSE(a.stale_build);
-        CHECK_FALSE(store.has_record(autorun));
-    }
-    {
-        core::Rules quicker = core::default_rules();
-        quicker.auto_budget_s = 5.0;
-        RecordStore store(db, core::RulesStamp::of(quicker));
-        CHECK(store.get_record(fixed).status == RecordStatus::Ready);
-        CHECK(store.get_record(autorun).status == RecordStatus::Ready);
+        RecordStore store(path);
+        CHECK(store.counts().second == 3);
+        CHECK(store.get_record(auto_only).status == RecordStatus::Stale);
     }
     std::error_code ec;
-    std::filesystem::remove(std::filesystem::u8path(db), ec);
+    std::filesystem::remove(std::filesystem::u8path(path), ec);
+}
+
+TEST_CASE("a start with a bad rules file leaves the Auto results for the next good start") {
+    const std::string path = temp_db("auto_delete_none");
+    std::remove(path.c_str());
+    const RecordKey auto_only{"a", "mode", CapQuery::at(32)};
+    {
+        RecordStore store(path);
+        store.add_song("a", "Other", "Artist", "Charter", fixture().song);
+        store.add_record(auto_only, auto_run_at(32));
+    }
+    exec_on_file(path, "DELETE FROM meta WHERE key='auto_results_deleted'");
+    {
+        // A bad hydra_rules.ini: there is no fingerprint to look for, so
+        // nothing is deleted and nothing is marked done.
+        RecordStore store(path, core::RulesStamp::none());
+        CHECK(store.counts().second == 1);
+    }
+    CHECK(scalar(path, "SELECT COUNT(*) FROM meta WHERE key='auto_results_deleted'") == 0);
+    {
+        RecordStore store(path);
+        CHECK(store.counts().second == 0);
+    }
+    std::error_code ec;
+    std::filesystem::remove(std::filesystem::u8path(path), ec);
 }

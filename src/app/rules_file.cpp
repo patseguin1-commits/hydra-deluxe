@@ -1,7 +1,6 @@
 #include "app/rules_file.h"
 
 #include <fstream>
-#include <sstream>
 #include <string>
 
 #include "app/config.h"
@@ -62,23 +61,9 @@ core::Rules load_rules_file(const std::filesystem::path& path) {
             else bad(where, key, v, "first_note or whole_chord");
         }
         else if (key == "max_tied_paths") r.max_tied_paths = to_int(where, key, v, 1);
-        else if (key == "auto_cap_ladder") {
-            r.auto_cap_ladder.clear();
-            std::stringstream ss(v);
-            std::string item;
-            while (std::getline(ss, item, ',')) {
-                int cap = to_int(where, key, trim(item), 1);
-                if (!r.auto_cap_ladder.empty() && cap <= r.auto_cap_ladder.back())
-                    bad(where, key, v, "a rising list of caps");
-                r.auto_cap_ladder.push_back(cap);
-            }
-            if (r.auto_cap_ladder.empty()) bad(where, key, v, "a rising list of caps");
-        }
-        else if (key == "auto_budget_s") {
-            const double budget = to_double(where, key, v, 0.0);
-            if (budget == 0.0) bad(where, key, v, "above zero");
-            r.auto_budget_s = budget;
-        }
+        // Auto's two keys (Auto was removed 2026-09-27). A file that still
+        // sets them keeps loading; whatever they say is ignored.
+        else if (key == "auto_cap_ladder" || key == "auto_budget_s") {}
         else if (key == "fill_cooldown_measures") r.fill_cooldown_measures = to_int(where, key, v, 1);
         else if (key == "fill_max_distance_beats") r.fill_max_distance_beats = to_double(where, key, v, 0.0);
         else if (key == "fill_length_measures") {

@@ -1,7 +1,6 @@
 #include "search/pather.h"
 
 #include <algorithm>
-#include <chrono>
 #include <stdexcept>
 
 #include "search/engine.h"
@@ -10,12 +9,6 @@
 namespace hydra {
 
 namespace {
-
-using bench_clock = std::chrono::steady_clock;
-
-// Thrown out of the progress callback to abandon a ladder rung that has blown
-// the time budget (auto_budget_s in hydra_rules.ini).
-struct CapBudgetExceeded {};
 
 HydraRecord read(const ScoreGraph& graph, DepthMode depth_mode, int depth_value,
                  std::optional<double> ms_filter,
@@ -58,9 +51,8 @@ void attach_allzero(const ScoreGraph& graph, HydraRecord& record,
         record.allzero_paths = search_allzero(graph, on_progress);
     } catch (const std::exception&) {
         // A broken search state is worth losing the section over, not the whole
-        // analysis. Cancel and the ladder's time budget unwind through
-        // AnalysisCancelled / CapBudgetExceeded, neither of which derives from
-        // std::exception, so both still propagate.
+        // analysis. Cancel unwinds through AnalysisCancelled, which does not
+        // derive from std::exception, so it still propagates.
         record.allzero_paths.clear();
     }
 }
@@ -87,9 +79,8 @@ std::vector<Path> search_allzero(const ScoreGraph& graph,
     } catch (const std::runtime_error&) {
         // The hard filter can empty the frontier: this chart offers no all-0
         // path inside 0 ms. run() reports that the same way it reports a broken
-        // state, so both end here as "no all-0 path". Cancel and the ladder's
-        // time budget unwind through their own non-std::exception types and
-        // still propagate.
+        // state, so both end here as "no all-0 path". Cancel unwinds through
+        // its own non-std::exception type and still propagates.
         return {};
     }
 
@@ -102,16 +93,11 @@ std::vector<Path> search_allzero(const ScoreGraph& graph,
 
 std::vector<Path> search_target(const Song& song, const SearchSettings& settings,
                                 const std::vector<int64_t>& act_ticks) {
-    if (!settings.sp_cap)
-        throw std::invalid_argument(
-            "search_target needs a fixed SP cap; Auto has no single graph to "
-            "price the path against");
-
     std::vector<int64_t> ticks = act_ticks;
     std::sort(ticks.begin(), ticks.end());
     ticks.erase(std::unique(ticks.begin(), ticks.end()), ticks.end());
 
-    ScoreGraph graph(song, std::optional<int>(*settings.sp_cap),
+    ScoreGraph graph(song, std::optional<int>(settings.sp_cap),
                      settings.legacy_fill_deadline ? FillDeadlineRule::Ch10
                                                    : FillDeadlineRule::Ch11,
                      settings.rules);
@@ -185,102 +171,6 @@ HydraRecord analyze_at_cap(const Song& song, int sp_cap, DepthMode depth_mode,
     return record;
 }
 
-// Auto cap: raise the ceiling up the SP-cap ladder until the score settles,
-// approximating "no ceiling at all".
-// budget_s (Rules::auto_budget_s), if set, abandons a ladder rung that overruns it (the first
-// rung always finishes), keeping the best rung so far and flagging it
-// unsettled. nullopt runs every rung to completion — what the tests use, so
-// their results stay deterministic.
-// want_allzero runs the all-0 pass once, after the ladder settles, at the
-// settled ceiling -- never per rung.
-HydraRecord analyze_auto_cap(const Song& song, DepthMode depth_mode, int depth_value,
-                             std::optional<double> ms_filter, bool legacy_fills,
-                             const core::Rules& rules,
-                             bool want_allzero = false,
-                             const std::function<void(float)>& on_progress = {},
-                             std::optional<double> budget_s = std::nullopt) {
-    int sp_phrases = song.sp_phrase_count();
-    const int ladder_n = static_cast<int>(rules.auto_cap_ladder.size());
-
-    std::optional<HydraRecord> record;
-    std::optional<int64_t> previous_score;
-    // The clock only starts once the first rung has finished, so there is always
-    // a result to report.
-    std::optional<bench_clock::time_point> deadline;
-
-    // The ladder re-runs the search per ceiling, so no rung runs the all-0 pass:
-    // only the settled rung's answer is worth keeping. The tail below runs it
-    // once, which costs one extra graph build and one cheap search.
-    const bool split = want_allzero && static_cast<bool>(on_progress);
-    std::function<void(float)> main_cb =
-        split ? scaled_progress(on_progress, 0.0f, kMainProgressShare) : on_progress;
-
-    int rung = 0;
-    bool converged = false;
-    int settled_build_cap = 1;
-    for (int sp_cap : rules.auto_cap_ladder) {
-        // Each rung's 0..1 sweep occupies its slice of the overall bar, so the
-        // ladder reads as one monotonic progress even though it re-runs the
-        // search per ceiling. Early convergence just finishes below 100%. The
-        // same per-iteration callback is where a rung overrunning the budget is
-        // interrupted, rather than only checking
-        // between rungs -- one big-cap rung can dwarf the whole budget.
-        auto wrapped = [&](float f) {
-            if (deadline && bench_clock::now() > *deadline) throw CapBudgetExceeded{};
-            if (main_cb) main_cb((static_cast<float>(rung) + f) /
-                                 static_cast<float>(ladder_n));
-        };
-        int build_cap = graph_build_cap(sp_cap, sp_phrases);
-        HydraRecord candidate;
-        try {
-            candidate = analyze_at_cap(song, sp_cap, depth_mode, depth_value,
-                                       ms_filter, build_cap, legacy_fills, rules,
-                                       /*want_allzero=*/false, wrapped);
-        } catch (const CapBudgetExceeded&) {
-            // Out of time partway up. Keep the best rung that finished; the
-            // abandoned one is discarded and the result reads as unsettled.
-            break;
-        }
-
-        std::optional<int64_t> score;
-        if (!candidate.paths.empty())
-            score = candidate.best_path().totalscore();
-
-        record = std::move(candidate);
-        settled_build_cap = build_cap;
-
-        // Settled: no higher ceiling could bank more than the song offers.
-        if (sp_cap >= sp_phrases) {
-            converged = true;
-            break;
-        }
-        if (previous_score.has_value() && score == previous_score) {
-            converged = true;
-            break;
-        }
-        previous_score = score;
-        ++rung;
-        if (!deadline && budget_s)
-            deadline = bench_clock::now() +
-                       std::chrono::duration_cast<bench_clock::duration>(
-                           std::chrono::duration<double>(*budget_s));
-    }
-
-    if (record.has_value()) {
-        record->sp_cap_converged = converged;
-        if (want_allzero) {
-            ScoreGraph graph(song, settled_build_cap,
-                             legacy_fills ? FillDeadlineRule::Ch10
-                                          : FillDeadlineRule::Ch11,
-                             rules);
-            attach_allzero(graph, *record,
-                           split ? scaled_progress(on_progress, kMainProgressShare, 1.0f)
-                                 : on_progress);
-        }
-    }
-    return std::move(*record);
-}
-
 }  // namespace
 
 HydraRecord analyze_chart(const Song& song, const SearchSettings& settings,
@@ -288,33 +178,17 @@ HydraRecord analyze_chart(const Song& song, const SearchSettings& settings,
     if (song.is_empty())
         throw ChartFileError("No drum notes in this chart.");
 
-    const std::optional<int> sp_cap = settings.sp_cap;
-    const DepthMode depth_mode = settings.depth_mode;
-    const int depth_value = settings.depth_value;
-    const std::optional<double> ms_filter = settings.ms_filter;
-
-    // A fixed cap, Clone Hero's 4 bars included, runs a single pass at that
-    // ceiling. The graph is only built as tall as the song has phrases to
-    // bank -- no run can exceed that -- so a huge cap on a short song stays
-    // cheap, and a 4-bar graph built lower stores the same bytes (test "a
-    // 4-bar graph built at the song's phrase count stores the same paths").
-    // A fixed cap is the user's explicit choice, so Auto's time budget
-    // doesn't apply to it.
-    if (sp_cap.has_value()) {
-        int build_cap = graph_build_cap(*sp_cap, song.sp_phrase_count());
-        HydraRecord record =
-            analyze_at_cap(song, *sp_cap, depth_mode, depth_value, ms_filter,
-                           build_cap, settings.legacy_fill_deadline, settings.rules,
-                           /*want_allzero=*/true, on_progress);
-        record.rules_fingerprint = settings.rules.fingerprint();
-        return record;
-    }
-    HydraRecord record = analyze_auto_cap(song, depth_mode, depth_value, ms_filter,
-                                          settings.legacy_fill_deadline, settings.rules,
-                                          /*want_allzero=*/true, on_progress,
-                                          settings.rules.auto_budget_s);
-    // An Auto run climbed the ladder, so its answer depends on it too.
-    record.rules_fingerprint = settings.rules.auto_fingerprint();
+    // One pass at the chosen ceiling, Clone Hero's 4 bars included. The graph
+    // is only built as tall as the song has phrases to bank -- no run can
+    // exceed that -- so a huge cap on a short song stays cheap, and a 4-bar
+    // graph built lower stores the same bytes (test "a 4-bar graph built at
+    // the song's phrase count stores the same paths").
+    const int build_cap = graph_build_cap(settings.sp_cap, song.sp_phrase_count());
+    HydraRecord record =
+        analyze_at_cap(song, settings.sp_cap, settings.depth_mode, settings.depth_value,
+                       settings.ms_filter, build_cap, settings.legacy_fill_deadline,
+                       settings.rules, /*want_allzero=*/true, on_progress);
+    record.rules_fingerprint = settings.rules.fingerprint();
     return record;
 }
 

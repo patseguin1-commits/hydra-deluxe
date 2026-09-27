@@ -395,9 +395,7 @@ GeneratedReport generate_report(store::RecordStore& store,
                             ? "every path"
                             : "top " + std::to_string(options.max_paths) +
                                   " paths per chart";
-    std::string cap_label = options.cap.exact
-                                ? "SP cap " + std::to_string(*options.cap.exact) + " bars"
-                                : "SP cap Auto";
+    std::string cap_label = "SP cap " + std::to_string(options.cap.exact) + " bars";
     std::string subtitle = counted(out.records, "record", "records") + " across " +
                            counted(out.songs, "chart", "charts") + " — " + shown + " — " +
                            cap_label;

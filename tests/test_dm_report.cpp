@@ -52,7 +52,7 @@ int64_t fill_store(store::RecordStore& store, const std::string& name = "Stored 
             store.add_song(kHash, name, "Stored Artist",
                            "Stored Charter", result.song);
             store.add_record(
-                store::RecordKey{kHash, kMode, store::CapQuery::automatic()},
+                store::RecordKey{kHash, kMode, store::CapQuery::at(kCloneHeroSpCap)},
                 result.record);
             // A what-if record at 8 bars for the same chart: the comparison
             // must never pick it up (the leaderboard plays at 4 bars).

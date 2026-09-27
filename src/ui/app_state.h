@@ -65,9 +65,6 @@ struct DetailsViewState {
     // Points into `viewed`'s record; valid only for record_watcher's generation.
     const Path* selected_path = nullptr;
     GenerationWatcher record_watcher;
-    // The SP cap number box keeps its last value while Auto is ticked, so
-    // unticking returns to it.
-    int last_cap = kCloneHeroSpCap;
     // When "Copied!" last flashed after Copy path string; -1 = never.
     double copied_at = -1.0;
     // Analyze-progress completion state, keyed on analyze_generation -- not on
