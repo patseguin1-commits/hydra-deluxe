@@ -13,6 +13,8 @@
 #include <string>
 #include <thread>
 
+#include "app/user_messages.h"
+
 namespace hydra::ui {
 
 // Thrown by JobBase::throw_if_cancelled() between a job's steps. run_guarded
@@ -61,17 +63,25 @@ protected:
 class ResultJobBase : public JobBase {
 public:
     bool ok() const { return ok_; }
+    // The raw exception text, for a small details line. Unchanged from
+    // before: a cancelled job still reads "cancelled" here.
     const std::string& error() const { return error_; }
+    // What the user reads: app::plain_error of the exception. Empty when the
+    // job succeeded or was cancelled, because a cancel is the user's own
+    // click and needs no message.
+    const std::string& message() const { return message_; }
 
 protected:
     // Runs the job body; f returns whether the job succeeded. Any escaping
-    // exception becomes the job's error text. Always publishes finished.
+    // exception becomes the job's error text and plain message. Always
+    // publishes finished.
     template <class F>
     void run_guarded(F&& f) {
         try {
             ok_ = f();
         } catch (const std::exception& e) {
             error_ = e.what();
+            if (!is_cancelled()) message_ = app::plain_error(e);
             ok_ = false;
         }
         finished_.store(true);
@@ -79,6 +89,7 @@ protected:
 
     bool ok_ = false;
     std::string error_;
+    std::string message_;
 };
 
 }  // namespace hydra::ui

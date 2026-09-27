@@ -16,7 +16,9 @@ void DmFetchUsersJob::start() { spawn([this] { run(); }); }
 void DmFetchUsersJob::run() {
     run_guarded([this] {
         users_ = net::fetch_users(net::kDefaultApiBase, &cancel_);
-        return true;
+        // A cancel can land while the server is still answering; the fetch
+        // then returns normally. The picker asked to stop, so stop.
+        return !is_cancelled();
     });
 }
 
@@ -37,6 +39,10 @@ void DmReportJob::run() {
     run_guarded([this] {
         std::vector<net::DmScore> scores =
             net::fetch_scores(discord_id_, net::kDefaultApiBase, &cancel_);
+        // The fetch only checks cancel between read chunks, so a cancel
+        // pressed while the server was waking up arrives here. Stop before
+        // anything is written or opened (audit B3).
+        if (is_cancelled()) return false;
         // Join, tally, and framing all live behind generate_dm_report; the
         // job only fetches, forwards the counts, and writes the file.
         app::dm_report::GeneratedDmReport report =
@@ -49,11 +55,10 @@ void DmReportJob::run() {
         matched_ = report.stats.matched;
         above_ = report.stats.above;
         unmatched_ = report.stats.unmatched;
+        stats_ = report.stats;
 
-        std::filesystem::path outpath = app::dm_report_html_path();
-        app::write_report_file(outpath, report.html);
-        if (open_when_done_ && !app::open_in_browser(outpath.wstring()))
-            throw std::runtime_error("could not open " + outpath.u8string());
+        // A browser that won't open the page is not a failed report.
+        outcome_ = publish_report(app::dm_report_html_path(), report.html, open_when_done_);
         return true;
     });
 }

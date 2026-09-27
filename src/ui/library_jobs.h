@@ -10,15 +10,20 @@
 #define HYDRA_UI_LIBRARY_JOBS_H
 
 #include <atomic>
+#include <condition_variable>
+#include <filesystem>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "app/analysis.h"
 #include "core/model.h"
 #include "store/record_store.h"
 #include "ui/job_base.h"
+#include "ui/report_outcome.h"
 
 namespace hydra::ui {
 
@@ -61,6 +66,30 @@ private:
 
 // ---- BatchJob ---------------------------------------------------------
 
+// How long a batch has been working, with paused stretches left out. Times
+// are seconds on any steady clock: BatchJob feeds it steady_clock readings,
+// tests feed it plain numbers.
+class BatchClock {
+public:
+    void start(double now);
+    void pause(double now);   // does nothing unless running
+    void resume(double now);  // does nothing unless paused
+    void finish(double now);  // freezes the total; a paused clock stops at its pause
+    double elapsed_s(double now) const;
+    bool paused() const { return paused_at_.has_value(); }
+
+private:
+    std::optional<double> started_, paused_at_, finished_at_;
+    double paused_total_ = 0.0;
+};
+
+// How many charts must finish before a time-left estimate shows.
+inline constexpr int kEtaMinFinished = 3;
+
+// Time left: the average wall time per finished chart so far, times the
+// charts still to go. Empty until kEtaMinFinished charts have finished.
+std::optional<double> batch_eta_s(double elapsed_s, int completed, int total);
+
 class BatchJob : public JobBase {
 public:
     // The job queries the library itself (filtered by `search`, like the
@@ -68,34 +97,84 @@ public:
     // before the progress modal appeared froze the UI for the whole query.
     BatchJob(std::optional<std::string> search, app::BatchRun run,
              store::RecordStore& store, bool redo);
-    ~BatchJob() { shutdown(); }
+    // Analyzes exactly these charts, in this order. The library screen's own
+    // search (T12) decides which rows match, so "Analyze search (N)..." hands
+    // over the N rows it shows instead of a search string SQL would read
+    // differently.
+    BatchJob(std::vector<store::ChartLibraryEntry> charts, app::BatchRun run,
+             store::RecordStore& store, bool redo);
+    ~BatchJob() {
+        stop();
+        shutdown();
+    }
+
+    // Test seam: what analyzes one chart, and how many workers run. Call
+    // before start().
+    void set_analyzer_for_test(app::ChartAnalyzer analyze, int workers);
 
     void start();
+
+    // Pause stops handing out new charts. Charts already being analyzed
+    // finish and are stored. Resume carries on. Both may be called before
+    // start(); neither does anything once the run has finished.
+    void pause();
+    void resume();
+    // Ends the run. Results already stored stay stored. A chart in the middle
+    // of its analysis stops at its next progress tick and is neither stored
+    // nor counted as failed. Works while paused.
+    void stop();
+    // The old name for stop(), kept until T13 moves the batch modal's
+    // callers to stop().
+    void cancel() { stop(); }
 
     struct Snapshot {
         bool preparing = true;  // still loading the item list from the store
         int total = 0;      // items actually dispatched (excludes pre-skipped)
-        int completed = 0;
+        int completed = 0;  // finished charts, stored or failed
         int skipped = 0;    // already stored, known up front (not part of total)
         int failed = 0;
+        bool paused = false;
+        // Wall time since start(), paused time left out; frozen once finished.
+        double elapsed_s = 0.0;
+        // Seconds left. Empty until kEtaMinFinished charts finish, while
+        // paused, and once finished.
+        std::optional<double> eta_s;
+        // The chart a worker started most recently. Empty once finished.
         std::string current_title;
-        std::vector<std::string> failures;
+        std::string current_artist;
+        std::vector<std::string> failures;         // "Title: plain message"
+        std::vector<std::string> failure_details;  // "Title: raw error", same order
         bool finished = false;
     };
     Snapshot snapshot() const;
 
 private:
     void run();
+    // On a worker, before each chart: waits while paused. Throws
+    // app::AnalysisCancelled once stopped, so the chart counts as stopped.
+    void wait_while_paused();
+    // On a worker: records the chart it is starting as the current one.
+    void note_started(const std::string& notespath);
 
     std::optional<std::string> search_;
+    std::optional<std::vector<store::ChartLibraryEntry>> given_;
     std::vector<app::ScanItem> items_;
+    // notespath -> index into items_. Built before run_batch starts and only
+    // read after that, so workers read it without a lock.
+    std::unordered_map<std::string, size_t> by_path_;
     app::BatchRun run_;
     store::RecordStore& store_;
     bool redo_;
     int workers_;
+    app::ChartAnalyzer analyze_;  // empty = app::analyze_chart_file
+
+    std::mutex pause_mu_;
+    std::condition_variable pause_cv_;
+    bool paused_ = false;  // guarded by pause_mu_
 
     mutable std::mutex mu_;
-    Snapshot snap_;
+    Snapshot snap_;     // guarded by mu_
+    BatchClock clock_;  // guarded by mu_
 };
 
 // ---- AnalyzeJob -------------------------------------------------------
@@ -156,6 +235,12 @@ public:
 
     void start();
 
+    // Valid once finished() && ok(): where the page was written, whether the
+    // browser opened it, and why not when it was asked to and didn't.
+    const std::filesystem::path& saved_path() const { return outcome_.saved_path; }
+    bool opened() const { return outcome_.opened; }
+    const std::string& open_problem() const { return outcome_.open_problem; }
+
 private:
     void run();
 
@@ -164,6 +249,7 @@ private:
     store::Lens lens_;
     bool open_when_done_;
     int hit_window_ms_;
+    ReportOutcome outcome_;
 };
 
 }  // namespace hydra::ui
