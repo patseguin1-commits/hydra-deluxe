@@ -382,6 +382,53 @@ void test_preview_controls(ImGuiTestContext* ctx) {
     IM_CHECK_STR_EQ(pc.time_box().measure_beat.c_str(), mb0.c_str());
 }
 
+// The SP drain box beside the gauge. Its values are build_drain_box's, pinned
+// by the unit tests; this checks the panel feeds it the playhead and the
+// viewed path, and saves a frame of the active box to look at.
+void test_preview_drain_box(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_preview(ctx)) return;  // chart 0, not analyzed yet
+    auto& pc = *h.app->preview;
+
+    // Analyze, then visit Paths and come back so the overlay is rebuilt from
+    // the new record's path (as preview-controls does).
+    ctx->ItemClick("**/Analyze paths!");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
+    IM_CHECK(h.app->viewed.record.has_value());
+    ctx->ItemClick("##DetailsTabs/Paths");
+    ctx->Yield(2);
+    ctx->ItemClick("##DetailsTabs/Preview");
+    IM_CHECK(wait_until(ctx, [&] { return !pc.loading() && pc.score_box().shown; }, 60));
+    IM_CHECK(pc.sp_meter_has_curve());
+
+    // Before anything is banked or spent: the idle box.
+    pc.seek_ms(0.0);
+    hydra::app::PreviewDrainBox idle = pc.drain_box();
+    IM_CHECK(idle.shown);
+    IM_CHECK(!idle.active);
+    IM_CHECK_STR_EQ(idle.header.c_str(), "SP drain (if activated)");
+    IM_CHECK(idle.rate.rfind("1 bar / ", 0) == 0);
+    IM_CHECK(idle.detail.rfind("full meter ", 0) == 0);
+
+    // Somewhere the path has SP running. Walk the playhead to find it, so the
+    // test needs no timing of its own.
+    double active_ms = -1.0;
+    for (double t = 0.0; t <= pc.length_ms() && active_ms < 0.0; t += 50.0) {
+        pc.seek_ms(t);
+        if (pc.drain_box().active) active_ms = t;
+    }
+    IM_CHECK(active_ms >= 0.0);
+    pc.seek_ms(active_ms);
+    hydra::app::PreviewDrainBox on = pc.drain_box();
+    IM_CHECK_STR_EQ(on.header.c_str(), "SP drain");
+    IM_CHECK(on.rate.rfind("1 bar / ", 0) == 0);
+    IM_CHECK(on.detail.rfind("empties in ", 0) == 0);
+
+    // A frame of the active box, for a person to look at.
+    ctx->Yield(2);
+    IM_CHECK(screenshot(ctx, "drain-box-active.png"));
+}
+
 // The Preview's new transport buttons and keys: -5s / +5s and Left / Right
 // jump 5 s, < 5 Ticks / 5 Ticks > and comma / period step 5 chart ticks, Space
 // plays and pauses.
@@ -1167,6 +1214,7 @@ void register_tests(Harness& h) {
         {"analyze-on-preview", test_analyze_on_preview},
         {"preview-path-overlay", test_preview_path_overlay},
         {"preview-controls", test_preview_controls},
+        {"preview-drain-box", test_preview_drain_box},
         {"preview-buttons-keys", test_preview_buttons_keys},
         {"scrub-hold", test_scrub_hold},
         {"layout-drift", test_layout_drift},

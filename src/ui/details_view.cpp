@@ -820,6 +820,33 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
                                 IM_COL32(0, 0, 0, 160), px(1.0f));
                 }
             }
+
+            // The SP drain box, bottom-right just left of the gauge, in the
+            // time box's panel style and right-aligned: how long a bar of SP
+            // lasts at the playhead, then "empties in" (gold, SP running on
+            // the path) or "full meter" (grey, if activated here). Every
+            // number is build_drain_box's.
+            hydra::app::PreviewDrainBox drain = pc->drain_box();
+            if (drain.shown) {
+                const char* d_lines[3] = {drain.header.c_str(), drain.rate.c_str(),
+                                          drain.detail.c_str()};
+                float d_w = 0.0f;
+                for (const char* l : d_lines)
+                    d_w = std::max(d_w, font->CalcTextSizeA(size, FLT_MAX, 0.0f, l).x);
+                const float d_gap = px(6.0f);
+                ImVec2 d_max(gauge_min.x - d_gap, img_max.y - v_margin);
+                ImVec2 d_min(d_max.x - d_w - pad * 2.0f, d_max.y - line_h * 3.0f - pad * 2.0f);
+                dl->AddRectFilled(d_min, d_max, IM_COL32(0, 0, 0, 128), px(6.0f));
+                const ImU32 accent = drain.active ? IM_COL32(255, 204, 51, 255)  // SP gold
+                                                  : IM_COL32(200, 200, 200, 255);
+                const ImU32 colors[3] = {accent, IM_COL32(255, 255, 255, 255), accent};
+                for (int i = 0; i < 3; ++i) {
+                    const float lw = font->CalcTextSizeA(size, FLT_MAX, 0.0f, d_lines[i]).x;
+                    dl->AddText(font, size,
+                                ImVec2(d_max.x - pad - lw, d_min.y + pad + line_h * static_cast<float>(i)),
+                                colors[i], d_lines[i]);
+                }
+            }
         }
     }
 }

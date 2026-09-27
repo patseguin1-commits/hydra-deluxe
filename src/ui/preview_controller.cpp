@@ -264,6 +264,10 @@ hydra::app::PreviewScoreBox PreviewController::score_box() const {
     return hydra::app::build_score_box(scene_, transport_.now_ms());
 }
 
+hydra::app::PreviewDrainBox PreviewController::drain_box() const {
+    return hydra::app::build_drain_box(scene_, transport_.now_ms());
+}
+
 const render::PreviewConfig& PreviewController::preview_config() const {
     static const render::PreviewConfig kOnyxDefaults;
     return renderer_ ? renderer_->config() : kOnyxDefaults;

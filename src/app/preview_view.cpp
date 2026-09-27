@@ -514,6 +514,51 @@ PreviewScoreBox build_score_box(const PreviewScene& scene, double now_ms) {
     return box;
 }
 
+PreviewDrainBox build_drain_box(const PreviewScene& scene, double now_ms) {
+    PreviewDrainBox box;
+    if (!scene.timing || scene.sp_meter.segments.empty()) return box;
+    box.shown = true;
+
+    const SongTiming& timing = *scene.timing;
+    const double now = now_ms < 0.0 ? 0.0 : now_ms;
+    const int64_t now_tick = tick_at(timing, now);
+
+    // The rule's own constant at the local measure length: on a tempo or
+    // meter change the new section is read, as the time box's BPM line does.
+    char buf[64];
+    const double bar_ms =
+        static_cast<double>(kMeasuresPerSpBar) * timing.ms_per_measure_at(now_tick);
+    std::snprintf(buf, sizeof buf, "1 bar / %.1f s", bar_ms / 1000.0);
+    box.rate = buf;
+
+    // SP is running when the playhead sits in an activation's stored window.
+    // A record with no deact node cannot say, so it reads idle.
+    const PreviewActivation* running = nullptr;
+    for (const PreviewActivation& a : scene.activations) {
+        if (a.has_sp_end && a.ms <= now && now < a.sp_end_ms) {
+            running = &a;
+            break;
+        }
+    }
+
+    if (running != nullptr) {
+        box.active = true;
+        box.header = "SP drain";
+        std::snprintf(buf, sizeof buf, "empties in %.1f s",
+                      (running->sp_end_ms - now) / 1000.0);
+    } else {
+        box.header = "SP drain (if activated)";
+        // The engine's own SP-end call, from the playhead's tick.
+        const Timecode start = timing.timecode(now_tick);
+        const Timecode end =
+            timing.plusmeasure(start, sp_bars_to_measures(scene.sp_meter.cap));
+        std::snprintf(buf, sizeof buf, "full meter %.1f s",
+                      (end.ms() - start.ms()) / 1000.0);
+    }
+    box.detail = buf;
+    return box;
+}
+
 double step_tick_ms(const PreviewScene& scene, double now_ms, double length_ms,
                     int delta_ticks) {
     if (!scene.timing) return now_ms;
