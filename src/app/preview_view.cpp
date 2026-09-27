@@ -291,6 +291,8 @@ PreviewScene build_preview_scene(const Song& song, const Path* path, int sp_cap,
             scene.meters.push_back({mi.keys_at(i), mi.tpm_at(i), mi.starts_at(i)});
         }
     }
+    for (const auto& [tick, sig] : song.timesig_changes)
+        scene.time_sigs.push_back({tick, sig.first, sig.second});
     // A section marker can sit past the last note, where the ms index does not
     // reach; the timing's own timecode extrapolates instead.
     for (const SongSection& s : song.practice_sections)
@@ -481,6 +483,16 @@ PreviewTimeBox build_time_box(const PreviewScene& scene, double now_ms,
     char buf[64];
     std::snprintf(buf, sizeof buf, "BPM: %.3f", bpm);
     box.bpm = buf;
+    // The time signature in force at the playhead's tick, as the chart wrote
+    // it; 4/4 before any, the chart default.
+    int ts_num = 4, ts_den = 4;
+    for (const PreviewTimeSig& t : scene.time_sigs) {
+        if (t.tick > now_tick) break;
+        ts_num = t.numerator;
+        ts_den = t.denominator;
+    }
+    std::snprintf(buf, sizeof buf, "Time signature: %d/%d", ts_num, ts_den);
+    box.time_sig = buf;
 
     for (const PreviewSection& s : scene.sections) {
         if (s.tick > now_tick) break;

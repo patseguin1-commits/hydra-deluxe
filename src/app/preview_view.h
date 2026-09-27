@@ -130,6 +130,13 @@ struct PreviewMeter {
     int64_t first_bar = 0;
 };
 
+// A time signature as the chart wrote it, for the time box's line.
+struct PreviewTimeSig {
+    int64_t tick = 0;
+    int numerator = 4;
+    int denominator = 4;
+};
+
 // One straight stretch of the Star Power meter: the banked bars run linearly
 // in ms from start_bars at start_ms to end_bars at end_ms.
 //
@@ -189,6 +196,7 @@ struct PreviewScene {
     std::vector<PreviewTempo> tempos;  // tempo changes, tick order
     std::vector<PreviewSection> sections;  // practice sections, tick order
     std::vector<PreviewMeter> meters;      // meter sections, tick order
+    std::vector<PreviewTimeSig> time_sigs; // the chart's own signatures, tick order
     // Banked SP over time, for the meter gauge. Empty when the chart has
     // neither SP phrases nor activations. Without a path there is nothing to
     // drain it, so it fills and then pins at the cap — deliberate: that is the
@@ -217,13 +225,14 @@ std::vector<PreviewBeat> build_beat_events(const SongTiming& timing, int64_t las
 
 // The Preview's time box at `now_ms`, in Moonscraper's layout: the playhead
 // time and the song length as "m:ss.mmm / m:ss.mmm", the same two points as
-// 1-based "[measure:beat:tick]", the BPM in force, and the practice section in
-// force. `section` is empty when the chart has none at or before the playhead;
-// the box is three lines tall then.
+// 1-based "[measure:beat:tick]", the BPM in force, the time signature in force
+// ("Time signature: 6/4"), and the practice section in force. `section` is empty when the chart has none at or before the playhead;
+// the box is four lines tall then.
 struct PreviewTimeBox {
     std::string timestamp;
     std::string measure_beat;
     std::string bpm;
+    std::string time_sig;
     std::string section;
 };
 
