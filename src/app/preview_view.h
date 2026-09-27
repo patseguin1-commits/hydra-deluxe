@@ -252,11 +252,12 @@ PreviewScoreBox build_score_box(const PreviewScene& scene, double now_ms);
 // gives (SongTiming::ms_per_measure_at). The box is `active` when the path has
 // SP running at the playhead: an activation at or before it whose stored deact
 // node is after it. Then `detail` is "empties in X s", that stored end minus
-// the playhead. Otherwise `detail` is "full meter X s": how long the meter's
-// cap would last if activated at the playhead's tick, from the engine's own
-// SongTiming::plusmeasure. Hidden (`shown` false) when the scene has no SP
-// gauge or no timing. Nothing here re-derives Star Power: it reads the record
-// and the timing calls the engine itself makes.
+// the playhead.
+// Otherwise `detail` is "full meter X s": the meter's cap in bars at that same
+// bar time, so it jumps exactly when the rate does.
+// Hidden (`shown` false) when the scene has no SP gauge or no timing.
+// Nothing here re-derives Star Power: it reads the record and the song's own
+// timing.
 struct PreviewDrainBox {
     bool shown = false;
     bool active = false;

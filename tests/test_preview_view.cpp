@@ -1124,15 +1124,11 @@ TEST_CASE("drain box: the rate switches exactly at a tempo change") {
     CHECK(build_drain_box(scene, 5990.0).rate == "1 bar / 4.0 s");
     CHECK(build_drain_box(scene, 6000.0).rate == "1 bar / 8.0 s");
 
-    // A full meter from tick 1920 (2000 ms): two measures at 120 BPM reach
-    // the change at 6000 ms, then six measures at 4000 ms each end at 30000.
-    PreviewDrainBox box = build_drain_box(scene, 2000.0);
-    CHECK(box.detail == "full meter 28.0 s");
-    // ...which is exactly the engine's own SP-end call.
-    const SongTiming& t = song.timing();
-    const Timecode start = t.timecode(1920);
-    const Timecode end = t.plusmeasure(start, sp_bars_to_measures(4));
-    CHECK(end.ms() - start.ms() == doctest::Approx(28000.0));
+    // "full meter" is the cap at the bar time in force, so it jumps with the
+    // rate, at the change and not before: 4 x 4 s, then 4 x 8 s.
+    CHECK(build_drain_box(scene, 2000.0).detail == "full meter 16.0 s");
+    CHECK(build_drain_box(scene, 5990.0).detail == "full meter 16.0 s");
+    CHECK(build_drain_box(scene, 6000.0).detail == "full meter 32.0 s");
 }
 
 TEST_CASE("drain box: a 7/8 section drains faster at the same BPM") {
@@ -1143,6 +1139,7 @@ TEST_CASE("drain box: a 7/8 section drains faster at the same BPM") {
 
     CHECK(build_drain_box(scene, 2000.0).rate == "1 bar / 4.0 s");
     CHECK(build_drain_box(scene, 4000.0).rate == "1 bar / 3.5 s");
+    CHECK(build_drain_box(scene, 4000.0).detail == "full meter 14.0 s");
 }
 
 TEST_CASE("drain box: active inside the stored SP window, idle outside it") {
