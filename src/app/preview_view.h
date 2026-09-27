@@ -228,19 +228,12 @@ struct PreviewScene {
 // [0, last_tick]. ms from the timing's own ms index.
 std::vector<PreviewBeat> build_beat_events(const SongTiming& timing, int64_t last_tick);
 
-// The Preview's time box at `now_ms`, in Moonscraper's layout: the playhead
-// time and the song length as "m:ss.mmm / m:ss.mmm", the same two points as
-// 1-based "[measure:beat:tick]", the BPM in force, the time signature in force
-// ("Time signature: 6/4"), and the practice section in force. `section` is empty when the chart has none at or before the playhead;
-// the box is four lines tall then.
+// The Preview's time readouts at `now_ms`. `timestamp` is the clock beside the
+// scrubber, playhead and song length as "m:ss.mmm / m:ss.mmm". The time box
+// over the highway shows the two same points through format_measure, the BPM
+// and time signature in force, and the practice section in force.
 struct PreviewTimeBox {
-    std::string timestamp;
-    std::string measure_beat;
-    std::string bpm;
-    std::string time_sig;
-    std::string section;
-    // The redesigned box's lines. Task 11 draws these, deletes measure_beat,
-    // bpm, time_sig and section above, and moves `timestamp` beside the scrubber.
+    std::string timestamp;     // "0:35.000 / 2:06.253"
     std::string position;      // format_measure at the playhead, "m27.2.450"
     std::string length;        // format_measure at the song's end, "m96.3.240"
     std::string tempo;         // "BPM 191.001 · 4/4"

@@ -83,6 +83,31 @@ void test_analyze_on_preview(ImGuiTestContext* ctx) {
     IM_CHECK(wait_until(ctx, [&] { return visible_text(h).find(best) != std::string::npos; }, 5));
 }
 
+// The "Showing" list's ID. Dear ImGui's BeginCombo reports no label to the
+// test engine, so a "**/##previewpath" wildcard never finds it. It is hashed
+// on the same ID stack as the "< Act" button beside it, whose parent ID the
+// engine does know, so this works wherever the tab is drawn.
+ImGuiID preview_path_combo(ImGuiTestContext* ctx) {
+    const ImGuiTestItemInfo act = ctx->ItemInfo("**/< Act##prevact");
+    return ImHashStr("##previewpath", 0, act.ParentID);
+}
+
+// Pick path `index` (its place in the Paths tab's list, ##path<index>) in the
+// Preview's "Showing" list. The Preview tab must be showing.
+void pick_preview_path(ImGuiTestContext* ctx, size_t index) {
+    Harness& h = harness(ctx);
+    const hydra::app::PathButtonsView list = hydra::app::build_path_buttons(
+        *h.app->viewed.record, h.app->settings.depth_mode, h.app->settings.depth_value);
+    IM_CHECK(index < list.buttons.size());
+    if (index >= list.buttons.size()) return;
+    const std::string item =
+        hydra::app::preview_path_label(list.buttons[index]) + "##" + std::to_string(index);
+    ctx->ItemClick(preview_path_combo(ctx));
+    ctx->Yield(1);
+    ctx->ItemClick(("//$FOCUSED/" + item).c_str());
+    ctx->Yield(2);
+}
+
 // The path overlay follows the Paths tab's selection. Re-opening the Preview
 // for a chart that was already open used to be a plain no-op, so the overlay
 // stayed on whatever path had been selected the first time -- the record's
@@ -107,13 +132,17 @@ void test_preview_path_overlay(ImGuiTestContext* ctx) {
     for (const hydra::Path* p : h.app->viewed.record->all_allzero_paths())
         rows.push_back(p);
     const hydra::Path* other = nullptr;
+    size_t other_index = 0;  // its place in the list: the list follows all_paths()
     for (size_t i = 1; i < paths.size() && other == nullptr; ++i) {
         std::string label = paths[i]->pathstring();
         if (label == paths[0]->pathstring()) continue;
         size_t seen = 0;
         for (const hydra::Path* p : rows)
             if (p->pathstring() == label) ++seen;
-        if (seen == 1) other = paths[i];
+        if (seen == 1) {
+            other = paths[i];
+            other_index = i;
+        }
     }
     IM_CHECK(other != nullptr);  // the fixture must keep 2+ distinguishable paths
     const std::string first_key = hydra::app::path_overlay_key(paths[0]);
@@ -133,6 +162,10 @@ void test_preview_path_overlay(ImGuiTestContext* ctx) {
     IM_CHECK_STR_EQ(h.app->preview->error().c_str(), "");
     // The overlay key carries the SP cap after the path's own key, so match the
     // prefix and then compare whole keys against this first one.
+    // The path's overlay can land a frame or two after the load itself.
+    IM_CHECK(wait_until(ctx, [&] {
+        return h.app->preview->overlay_path_key().rfind(first_key, 0) == 0;
+    }, 10));
     const std::string first_overlay = h.app->preview->overlay_path_key();
     IM_CHECK_EQ(first_overlay.rfind(first_key, 0), (size_t)0);
 
@@ -143,9 +176,10 @@ void test_preview_path_overlay(ImGuiTestContext* ctx) {
     double held = h.app->preview->position_ms();
     IM_CHECK(held > 0.0);
 
-    // Pick the other path and come back to the Preview.
+    // Pick the other path in the Preview's list, then visit Paths and come
+    // back, so the Preview is re-opened on the same chart.
+    pick_preview_path(ctx, other_index);
     ctx->ItemClick("##DetailsTabs/Paths");
-    ctx->ItemClick(("**/" + escape_ref(other_label)).c_str());
     ctx->Yield(2);
     ctx->ItemClick("##DetailsTabs/Preview");
     ctx->Yield(2);
@@ -156,9 +190,9 @@ void test_preview_path_overlay(ImGuiTestContext* ctx) {
     IM_CHECK_FLOAT_NEAR_EQ(h.app->preview->position_ms(), held, 1.0);
     IM_CHECK(h.app->preview->overlay_path_key() != first_overlay);
 
-    // The same chart still previews the first path when it is selected again.
+    // The same chart still previews the first path when it is picked again.
+    pick_preview_path(ctx, 0);
     ctx->ItemClick("##DetailsTabs/Paths");
-    ctx->ItemClick(("**/" + escape_ref(first_label)).c_str());
     ctx->Yield(2);
     ctx->ItemClick("##DetailsTabs/Preview");
     ctx->Yield(2);
@@ -222,13 +256,13 @@ void test_preview_controls(ImGuiTestContext* ctx) {
     pc.step_ticks(0);  // pause and snap onto the displayed tick
     IM_CHECK(!pc.playing());
     const double t0 = pc.position_ms();
-    const std::string mb0 = pc.time_box().measure_beat;
+    const std::string mb0 = pc.time_box().position;
     pc.step_ticks(1);
     IM_CHECK(pc.position_ms() > t0);
     IM_CHECK(pc.position_ms() - t0 < 20.0);  // one tick, at any real tempo
-    IM_CHECK(pc.time_box().measure_beat != mb0);
+    IM_CHECK(pc.time_box().position != mb0);
     pc.step_ticks(-1);
-    IM_CHECK_STR_EQ(pc.time_box().measure_beat.c_str(), mb0.c_str());
+    IM_CHECK_STR_EQ(pc.time_box().position.c_str(), mb0.c_str());
 }
 
 // The SP drain box beside the gauge. Its values are build_drain_box's, pinned
@@ -341,13 +375,13 @@ void test_preview_buttons_keys(ImGuiTestContext* ctx) {
     // the time box to it.
     ctx->ItemClick(("**/" + escape_ref("< 5 Ticks")).c_str());
     const double t0 = pc.position_ms();
-    const std::string mb0 = pc.time_box().measure_beat;
+    const std::string mb0 = pc.time_box().position;
     ctx->KeyPress(ImGuiKey_Period);
     const double t5 = pc.position_ms();
     IM_CHECK(t5 > t0);
-    IM_CHECK(pc.time_box().measure_beat != mb0);
+    IM_CHECK(pc.time_box().position != mb0);
     ctx->KeyPress(ImGuiKey_Comma);
-    IM_CHECK_STR_EQ(pc.time_box().measure_beat.c_str(), mb0.c_str());
+    IM_CHECK_STR_EQ(pc.time_box().position.c_str(), mb0.c_str());
 
     // The key steps 5 ticks: the same place five single steps reach.
     for (int i = 0; i < 5; ++i) pc.step_ticks(1);
@@ -424,6 +458,148 @@ void test_layout_drift(ImGuiTestContext* ctx) {
     (void)play0;
 }
 
+// File-local copies of uitest_details.cpp's two helpers, for this wave only:
+// Task 9 moves them into uitest_harness.{h,cpp} and updates them for the song
+// panel. Delete these two copies when Task 9 merges (the calls below keep the
+// same names and arguments).
+void open_titled(ImGuiTestContext* ctx, const std::string& search, const std::string& title) {
+    Harness& h = harness(ctx);
+    h.app->search = search;
+    h.app->refresh_page();
+    ctx->Yield(2);
+    size_t idx = h.app->current_page.rows.size();
+    for (size_t i = 0; i < h.app->current_page.rows.size(); ++i)
+        if (h.app->current_page.rows[i].title == title) idx = i;
+    IM_CHECK(idx < h.app->current_page.rows.size());
+    open_details(ctx, idx);
+}
+
+void analyze_open_song(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    ctx->ItemClick("##DetailsTabs/Paths");
+    ctx->ItemClick("**/Analyze paths!");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300));
+    IM_CHECK(h.app->viewed.status == hydra::store::RecordStatus::Ready);
+}
+
+// Burnout analyzed, its Preview open with the optimal path's overlay loaded.
+// Returns false (the check already failed) when a step did not work.
+bool open_burnout_preview(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return false;
+    open_titled(ctx, "burnout", "Burnout");
+    if (ctx->IsError()) return false;
+    analyze_open_song(ctx);
+    if (ctx->IsError()) return false;
+    IM_CHECK_RETV(h.app->viewed.record->best_path().pathstring() == "3- 1 2", false);
+    ctx->ItemClick("##DetailsTabs/Preview");
+    IM_CHECK_RETV(wait_until(ctx, [&] { return h.app->preview && h.app->preview->active(); }, 10),
+                  false);
+    IM_CHECK_RETV(wait_until(ctx, [&] {
+        return !h.app->preview->loading() && h.app->preview->scrub_marks().size() == 3;
+    }, 120), false);
+    IM_CHECK_RETV(h.app->preview->error().empty(), false);
+    return true;
+}
+
+// The "Showing" list: it names the drawn path, lists the all-0 path under its
+// own name, and a pick changes the one selection the Paths tab reads too. A
+// pending "Show in Preview" lands the playhead on its activation. (Clicking
+// the link itself is Task 10's, checked in paths-rows.)
+void test_preview_path_picker(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_burnout_preview(ctx)) return;
+    auto& pc = *h.app->preview;
+    ctx->Yield(2);
+    IM_CHECK(visible_text(h).find("Showing") != std::string::npos);
+    IM_CHECK(visible_text(h).find("3- 1 2  (optimal)") != std::string::npos);
+
+    ctx->ItemClick(preview_path_combo(ctx));
+    ctx->Yield(1);
+    IM_CHECK(visible_text(h).find("0 0 0 0  (0 ms limit)") != std::string::npos);
+    // Close the list on the path already shown. (PopupCloseAll would also
+    // close the Song Details modal the tab sits in.)
+    ctx->ItemClick("//$FOCUSED/3- 1 2  (optimal)##0");
+    ctx->Yield(1);
+    IM_CHECK(h.app->details_ui.selected_path == &h.app->viewed.record->best_path());
+
+    pick_preview_path(ctx, 1);
+    IM_CHECK(h.app->details_ui.selected_path != nullptr);
+    IM_CHECK(h.app->details_ui.selected_path->pathstring() == "0 4 1");
+    const std::string key = hydra::app::path_overlay_key(h.app->details_ui.selected_path);
+    IM_CHECK(wait_until(ctx, [&] { return pc.overlay_path_key().rfind(key, 0) == 0; }, 30));
+    ctx->ItemClick("##DetailsTabs/Paths");
+    ctx->Yield(2);
+    IM_CHECK(h.app->details_ui.selected_path->pathstring() == "0 4 1");
+    ctx->ItemClick("##DetailsTabs/Preview");
+    ctx->Yield(2);
+
+    // Back to the optimal path, then a pending jump to its first activation.
+    pick_preview_path(ctx, 0);
+    IM_CHECK(h.app->details_ui.selected_path == &h.app->viewed.record->best_path());
+    pc.seek_ms(0.0);
+    h.app->details_ui.paths_tab.ui().preview_jump = 0;
+    IM_CHECK(wait_until(ctx, [&] {
+        return !h.app->details_ui.paths_tab.ui().preview_jump.has_value();
+    }, 30));
+    IM_CHECK(pc.position_ms() > 0.0);
+    IM_CHECK_STR_EQ(pc.next_act_box().header.c_str(), "Next: activation 1 of 3");
+    IM_CHECK(pc.next_act_box().detail.rfind("at m32.1.0", 0) == 0);
+}
+
+// Activation jumps by button and key, the scrubber marks, the next-activation
+// box, the SP readout, the one measure format, and the key hint.
+void test_preview_activation_jumps(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_burnout_preview(ctx)) return;
+    auto& pc = *h.app->preview;
+
+    const std::vector<double> marks = pc.scrub_marks();
+    IM_CHECK_EQ(marks.size(), (size_t)3);
+    IM_CHECK(marks[0] > 0.0);
+    IM_CHECK(marks[0] < marks[1]);
+    IM_CHECK(marks[1] < marks[2]);
+    IM_CHECK(marks[2] < 1.0);
+
+    pc.seek_ms(0.0);
+    IM_CHECK_STR_EQ(pc.next_act_box().header.c_str(), "Next: activation 1 of 3");
+    IM_CHECK_STR_EQ(pc.next_act_box().detail.c_str(), "at m32.1.0 \xC2\xB7 [Kick - GreenCym]");
+
+    ctx->ItemClick("**/Act >##nextact");
+    const double act1 = pc.position_ms();
+    IM_CHECK(act1 > 0.0);
+    IM_CHECK_STR_EQ(pc.time_box().position.c_str(), "m32.1.0");
+    ctx->KeyPress(ImGuiKey_RightBracket);
+    IM_CHECK_STR_EQ(pc.time_box().position.c_str(), "m58.1.0");
+    IM_CHECK_STR_EQ(pc.next_act_box().header.c_str(), "Next: activation 2 of 3");
+    ctx->KeyPress(ImGuiKey_LeftBracket);
+    IM_CHECK_FLOAT_NEAR_EQ(pc.position_ms(), act1, 0.5);
+    // Nothing before the first activation: the playhead stays.
+    ctx->ItemClick("**/< Act##prevact");
+    IM_CHECK_FLOAT_NEAR_EQ(pc.position_ms(), act1, 0.5);
+
+    // A jump keeps playing when playing.
+    ctx->ItemClick("**/Play");
+    IM_CHECK(pc.playing());
+    ctx->KeyPress(ImGuiKey_RightBracket);
+    IM_CHECK(pc.playing());
+    ctx->ItemClick("**/Pause");
+    IM_CHECK(!pc.playing());
+
+    const std::string readout = pc.sp_meter_readout();
+    IM_CHECK(readout.size() >= 5);
+    IM_CHECK(readout.substr(readout.size() - 2) == "/4");
+    pc.seek_ms(pc.length_ms());
+    IM_CHECK_STR_EQ(pc.time_box().length.c_str(), "m96.3.240");
+    IM_CHECK_STR_EQ(pc.time_box().position.c_str(), pc.time_box().length.c_str());
+    IM_CHECK(pc.time_box().tempo.rfind("BPM ", 0) == 0);
+
+    ctx->Yield(2);
+    IM_CHECK(visible_text(h).find("[ ] previous/next activation") != std::string::npos);
+}
+
 }  // namespace
 
 const std::vector<TestEntry>& preview_tests() {
@@ -437,6 +613,8 @@ const std::vector<TestEntry>& preview_tests() {
         {"preview-buttons-keys", test_preview_buttons_keys},
         {"scrub-hold", test_scrub_hold},
         {"layout-drift", test_layout_drift},
+        {"preview-path-picker", test_preview_path_picker},
+        {"preview-activation-jumps", test_preview_activation_jumps},
     };
     return entries;
 }

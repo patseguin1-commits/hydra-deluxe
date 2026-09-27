@@ -268,6 +268,33 @@ hydra::app::PreviewDrainBox PreviewController::drain_box() const {
     return hydra::app::build_drain_box(scene_, transport_.now_ms());
 }
 
+std::vector<double> PreviewController::scrub_marks() const {
+    return hydra::app::build_scrub_marks(scene_, transport_.length_ms());
+}
+
+hydra::app::PreviewNextActBox PreviewController::next_act_box() const {
+    return hydra::app::build_next_act_box(scene_, transport_.now_ms());
+}
+
+std::string PreviewController::sp_meter_readout() const {
+    return hydra::app::sp_meter_readout(scene_.sp_meter, transport_.now_ms());
+}
+
+bool PreviewController::jump_activation(int direction) {
+    if (!active_ || job_) return false;  // nothing loaded yet
+    const std::optional<double> to =
+        hydra::app::activation_jump_ms(scene_, transport_.now_ms(), direction);
+    if (!to) return false;
+    transport_.seek_ms(*to);
+    return true;
+}
+
+bool PreviewController::seek_activation(size_t index) {
+    if (!active_ || job_ || index >= scene_.activations.size()) return false;
+    transport_.seek_ms(scene_.activations[index].ms);
+    return true;
+}
+
 const render::PreviewConfig& PreviewController::preview_config() const {
     static const render::PreviewConfig kOnyxDefaults;
     return renderer_ ? renderer_->config() : kOnyxDefaults;

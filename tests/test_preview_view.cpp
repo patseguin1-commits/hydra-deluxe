@@ -389,7 +389,7 @@ TEST_CASE("build_preview_scene fills beats, tempos and resolution") {
     CHECK(scene.beats.back().tick == 4320);
 }
 
-TEST_CASE("build_time_box: timestamp, measure:beat:tick, BPM") {
+TEST_CASE("build_time_box: timestamp, measure, tempo") {
     Song song = make_hand_song();
     PreviewScene scene = build_preview_scene(song, nullptr);
 
@@ -397,15 +397,11 @@ TEST_CASE("build_time_box: timestamp, measure:beat:tick, BPM") {
     // tick 4800: the third bar's third beat, exactly on the line.
     PreviewTimeBox box = build_time_box(scene, 1300.0, 5000.0);
     CHECK(box.timestamp == "0:01.300 / 0:05.000");
-    CHECK(box.measure_beat == "[1:3:288] / [3:3:000]");
-    CHECK(box.bpm == "BPM: 120.000");
-    CHECK(box.section.empty());
     CHECK(box.position == "m1.3.288");
     CHECK(box.length == "m3.3.0");
     CHECK(box.tempo == "BPM 120.000 " + kDot + " 4/4");
     CHECK(box.section_line.empty());
 
-    CHECK(build_time_box(scene, 0.0, 5000.0).measure_beat == "[1:1:000] / [3:3:000]");
     CHECK(build_time_box(scene, 0.0, 5000.0).position == "m1.1.0");
 
     PreviewTimeBox later = build_time_box(scene, 64000.0, 64000.0);
@@ -415,14 +411,13 @@ TEST_CASE("build_time_box: timestamp, measure:beat:tick, BPM") {
     CHECK(build_time_box(scene, 9999.0, 5000.0).timestamp == "0:05.000 / 0:05.000");
 }
 
-TEST_CASE("build_time_box: the end bracket runs past the last beat line") {
+TEST_CASE("build_time_box: the end measure runs past the last beat line") {
     Song song = make_hand_song();
     PreviewScene scene = build_preview_scene(song, nullptr);
     // The beat grid stops at tick 4320, but the last tempo and meter hold
     // forever: 30 s is tick 28800, which is bar 16 on the nose.
     REQUIRE(scene.beats.back().tick == 4320);
     PreviewTimeBox box = build_time_box(scene, 30000.0, 30000.0);
-    CHECK(box.measure_beat == "[16:1:000] / [16:1:000]");
     CHECK(box.position == "m16.1.0");
     CHECK(box.length == "m16.1.0");
     CHECK(box.timestamp == "0:30.000 / 0:30.000");
@@ -442,15 +437,12 @@ TEST_CASE("build_time_box: the practice section in force") {
     CHECK(scene.sections[1].ms == doctest::Approx(2500.0));
 
     const double len = 10000.0;
-    CHECK(build_time_box(scene, 0.0, len).section.empty());
-    CHECK(build_time_box(scene, 400.0, len).section.empty());
-    CHECK(build_time_box(scene, 500.0, len).section == "Verse 1");
-    CHECK(build_time_box(scene, 2000.0, len).section == "Verse 1");
-    CHECK(build_time_box(scene, 2500.0, len).section == "Chorus");
-    CHECK(build_time_box(scene, 9000.0, len).section == "Chorus");
+    CHECK(build_time_box(scene, 0.0, len).section_line.empty());
     CHECK(build_time_box(scene, 400.0, len).section_line.empty());
     CHECK(build_time_box(scene, 500.0, len).section_line == "Section Verse 1");
+    CHECK(build_time_box(scene, 2000.0, len).section_line == "Section Verse 1");
     CHECK(build_time_box(scene, 2500.0, len).section_line == "Section Chorus");
+    CHECK(build_time_box(scene, 9000.0, len).section_line == "Section Chorus");
 }
 
 TEST_CASE("build_time_box: a mid-measure meter change follows the engine") {
@@ -481,7 +473,6 @@ TEST_CASE("build_time_box: a mid-measure meter change follows the engine") {
     CHECK(mbt[2] == 240);
 
     PreviewTimeBox box = build_time_box(scene, 3750.0, 3750.0);
-    CHECK(box.measure_beat == "[3:1:240] / [3:1:240]");
     CHECK(box.position == "m3.1.240");
 
     // ...and that measure is the one the drawn bar lines put tick 3600 in: the
@@ -516,14 +507,11 @@ TEST_CASE("build_time_box: the time signature in force, as the chart wrote it") 
     }
     PreviewScene scene = build_preview_scene(song, nullptr);
 
-    CHECK(build_time_box(scene, 0.0, 5000.0).time_sig == "Time signature: 4/4");
-    CHECK(build_time_box(scene, 1999.0, 5000.0).time_sig == "Time signature: 4/4");
-    CHECK(build_time_box(scene, 2000.0, 5000.0).time_sig == "Time signature: 6/8");
-    CHECK(build_time_box(scene, 3500.0, 5000.0).time_sig == "Time signature: 3/4");
-    // A scene built from nothing reads the chart default.
-    CHECK(build_time_box(PreviewScene{}, 0.0, 0.0).time_sig == "Time signature: 4/4");
+    CHECK(build_time_box(scene, 0.0, 5000.0).tempo == "BPM 120.000 " + kDot + " 4/4");
+    CHECK(build_time_box(scene, 1999.0, 5000.0).tempo == "BPM 120.000 " + kDot + " 4/4");
     CHECK(build_time_box(scene, 2000.0, 5000.0).tempo == "BPM 120.000 " + kDot + " 6/8");
     CHECK(build_time_box(scene, 3500.0, 5000.0).tempo == "BPM 120.000 " + kDot + " 3/4");
+    // A scene built from nothing reads the chart default.
     CHECK(build_time_box(PreviewScene{}, 0.0, 0.0).tempo == "BPM 0.000 " + kDot + " 4/4");
     CHECK(build_time_box(PreviewScene{}, 0.0, 0.0).position == "m1.1.0");
 }
@@ -983,13 +971,11 @@ TEST_CASE("step_tick_ms: one tick from the tick the time box shows") {
     PreviewScene scene = build_preview_scene(song, nullptr);
     const MsIndex& ms = song.timing().ms_index();
 
-    // 1300 ms is the time box's own example: tick 1248, "[1:3:288]".
+    // 1300 ms is the time box's own example: tick 1248, "m1.3.288".
     const double fwd = step_tick_ms(scene, 1300.0, 5000.0, 1);
     const double back = step_tick_ms(scene, 1300.0, 5000.0, -1);
     CHECK(fwd == doctest::Approx(ms.at(1249)));
     CHECK(back == doctest::Approx(ms.at(1247)));
-    CHECK(build_time_box(scene, fwd, 5000.0).measure_beat == "[1:3:289] / [3:3:000]");
-    CHECK(build_time_box(scene, back, 5000.0).measure_beat == "[1:3:287] / [3:3:000]");
     CHECK(build_time_box(scene, fwd, 5000.0).position == "m1.3.289");
     CHECK(build_time_box(scene, back, 5000.0).position == "m1.3.287");
 
@@ -1002,7 +988,7 @@ TEST_CASE("step_tick_ms: one tick from the tick the time box shows") {
 
     // Past the end the time box shows the end (5000 ms, tick 4800), and the
     // step starts there too.
-    CHECK(build_time_box(scene, 6000.0, 5000.0).measure_beat == "[3:3:000] / [3:3:000]");
+    CHECK(build_time_box(scene, 6000.0, 5000.0).position == "m3.3.0");
     CHECK(step_tick_ms(scene, 6000.0, 5000.0, -1) == doctest::Approx(ms.at(4799)));
 }
 

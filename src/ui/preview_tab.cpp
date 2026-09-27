@@ -19,9 +19,75 @@
 #include <cfloat>
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace hydra::ui::detail {
+
+namespace {
+
+// The line under the highway naming the Preview's keys.
+const char* const kPreviewKeysHint =
+    "Space play/pause \xC2\xB7 \xE2\x86\x90 \xE2\x86\x92 5 s \xC2\xB7 , . 5 ticks "
+    "\xC2\xB7 [ ] previous/next activation";
+
+// "Showing" and the ##previewpath list: the same paths, in the same order and
+// from the same cache, as the Paths tab's buttons. A pick sets the one
+// selection both tabs read (DetailsViewState::selected_path). Drawn only when
+// the song has a Ready record with paths.
+void render_path_picker(AppState& app) {
+    if (app.viewed.status != store::RecordStatus::Ready || !app.viewed.record ||
+        app.viewed.record->paths.empty())
+        return;
+    const hydra::app::PathButtonsView& list = app.details_ui.paths_tab.buttons(
+        *app.viewed.record, app.record_generation.n, app.settings.depth_mode,
+        app.settings.depth_value);
+    const Path*& selected = app.details_ui.selected_path;
+    std::string current;
+    for (const hydra::app::PathButtonView& b : list.buttons)
+        if (b.path == selected) current = hydra::app::preview_path_label(b);
+
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Showing");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(px(200.0f));
+    ImGui::PushFont(g_mono_font, 0.0f);
+    if (ImGui::BeginCombo("##previewpath", current.c_str())) {
+        for (size_t i = 0; i < list.buttons.size(); ++i) {
+            const hydra::app::PathButtonView& b = list.buttons[i];
+            // "##<i>" keeps two paths with the same notation apart.
+            const std::string item = hydra::app::preview_path_label(b) + "##" + std::to_string(i);
+            const bool is_selected = b.path == selected;
+            if (ImGui::Selectable(item.c_str(), is_selected)) selected = b.path;
+            if (is_selected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::PopFont();
+    ImGui::SameLine(0.0f, px(16.0f));
+}
+
+// Gold ticks over the scrubber just drawn, one per activation, where the
+// grab's centre sits for that time. ImGui keeps 2 px of padding and half a
+// grab at each end of a float slider, so the ticks do too.
+void draw_scrub_marks(const std::vector<double>& marks) {
+    if (marks.empty()) return;
+    const ImVec2 mn = ImGui::GetItemRectMin();
+    const ImVec2 mx = ImGui::GetItemRectMax();
+    const float grab = ImGui::GetStyle().GrabMinSize;
+    const float pad = 2.0f;  // ImGui's slider grab_padding, not scaled
+    const float x0 = mn.x + pad + grab * 0.5f;
+    const float span = (mx.x - mn.x) - 2.0f * pad - grab;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    for (double f : marks) {
+        const float x = x0 + static_cast<float>(f) * span;
+        dl->AddRectFilled(ImVec2(x - px(1.5f), mn.y + px(2.0f)), ImVec2(x + px(1.5f), mx.y - px(2.0f)),
+                          ImGui::GetColorU32(kBestPathColor));
+    }
+}
+
+}  // namespace
 
 // The Preview tab: a transport row over the 3D note highway. Reached only while
 // the tab is shown, so the controller (and its decode + GPU work) spins up lazily
@@ -81,14 +147,29 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
         hint(pc->audio_warning().c_str());
     }
 
-    // Transport row: back 5 s, back 5 ticks, play/pause, forward 5 ticks,
-    // forward 5 s, a scrubber, and the time readout. Every piece whose text
-    // changes while playing sits in a fixed slot (see widgets.h): otherwise
-    // the Vol slider walked under a held mouse as the readout's digits
-    // changed width. The four step buttons have fixed labels, so they need
-    // no slot.
+    // "Show in Preview" on the Paths tab: once the overlay for the selected
+    // path is in, move the playhead to that activation.
+    std::optional<size_t>& jump = app.details_ui.paths_tab.ui().preview_jump;
+    if (jump && pc->overlay_path_key().rfind(ui.overlay_key, 0) == 0) {
+        pc->seek_activation(*jump);
+        jump.reset();
+    }
+
+    // Row 1: which path the overlay draws, the activation jumps, the
+    // transport buttons and the volume. Row 2: the scrubber, a gold mark per
+    // activation, and the clock. The clock sits in a fixed slot (see
+    // widgets.h), so nothing walks under a held mouse as its digits change.
     // The tick buttons and comma/period step this many chart ticks.
     constexpr int kTickStep = 5;
+    render_path_picker(app);
+    const bool no_acts = pc->scrub_marks().empty();
+    begin_disabled_button(no_acts);
+    if (ImGui::Button("< Act##prevact")) pc->jump_activation(-1);
+    ImGui::SameLine();
+    if (ImGui::Button("Act >##nextact")) pc->jump_activation(+1);
+    end_disabled_button(no_acts);
+    hint("Previous or next activation ([ and ])");
+    ImGui::SameLine(0.0f, px(16.0f));
     if (ImGui::Button("-5s")) pc->jump_ms(-5000.0);
     hint("Back 5 seconds (Left arrow)");
     ImGui::SameLine();
@@ -104,43 +185,48 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
     ImGui::SameLine();
     if (ImGui::Button("+5s")) pc->jump_ms(5000.0);
     hint("Forward 5 seconds (Right arrow)");
-    ImGui::SameLine();
-
-    // The clock drives the scrubber, so a chart with no audio still scrubs.
-    double len_ms = pc->length_ms();
-    float pos_s = static_cast<float>(pc->position_ms() / 1000.0);
-    float len_s = static_cast<float>(len_ms / 1000.0);
-    std::string len_digits = widest_digits(digit_count((long long)len_s));
-    std::string readout_sample = len_digits + "." + len_digits.substr(0, 1) + " / " +
-                                 len_digits + "." + len_digits.substr(0, 1) + " s";
-    const float readout_w = text_slot_width(readout_sample.c_str());
-    const float volume_w = px(110.0f);
-    const float spacing = ImGui::GetStyle().ItemSpacing.x;
-    ImGui::SetNextItemWidth(std::max(
-        px(120.0f), ImGui::GetContentRegionAvail().x - readout_w - text_slot_width("Vol") -
-                        volume_w - 3.0f * spacing));
-    if (ImGui::SliderFloat("##scrub", &pos_s, 0.0f, len_s > 0.0f ? len_s : 1.0f, "%.1fs"))
-        pc->seek_ms(static_cast<double>(pos_s) * 1000.0);
-    // Holding the scrubber pauses playback (Onyx's rule); release resumes.
-    pc->set_scrubbing(ImGui::IsItemActive());
-    ImGui::SameLine();
-    char readout[48];
-    std::snprintf(readout, sizeof(readout), "%.1f / %.1f s", pos_s, len_s);
-    text_in_slot(readout, readout_w);
+    ImGui::SameLine(0.0f, px(16.0f));
 
     // Volume: applied live and remembered in the settings file.
     ImGui::TextUnformatted("Vol");
     ImGui::SameLine();
     int volume = app.settings.preview_volume;
-    ImGui::SetNextItemWidth(volume_w);
+    ImGui::SetNextItemWidth(px(110.0f));
     if (ImGui::SliderInt("##volume", &volume, 0, 100, "%d%%")) {
         app.settings.preview_volume = volume;
         pc->set_volume(volume);
     }
     if (ImGui::IsItemDeactivatedAfterEdit()) app.commit_settings();
 
+    // The clock drives the scrubber, so a chart with no audio still scrubs.
+    const hydra::app::PreviewTimeBox box = pc->time_box();
+    float pos_s = static_cast<float>(pc->position_ms() / 1000.0);
+    const float len_s = static_cast<float>(pc->length_ms() / 1000.0);
+    // The clock's slot fits its widest form: every digit drawn as the widest one.
+    std::string readout_sample = box.timestamp;
+    const char widest = widest_digits(1)[0];
+    for (char& c : readout_sample)
+        if (c >= '0' && c <= '9') c = widest;
+    ImGui::PushFont(g_mono_font, 0.0f);
+    const float readout_w = text_slot_width(readout_sample.c_str());
+    ImGui::PopFont();
+    ImGui::SetNextItemWidth(std::max(px(120.0f), ImGui::GetContentRegionAvail().x - readout_w -
+                                                     ImGui::GetStyle().ItemSpacing.x));
+    if (ImGui::SliderFloat("##scrub", &pos_s, 0.0f, len_s > 0.0f ? len_s : 1.0f, ""))
+        pc->seek_ms(static_cast<double>(pos_s) * 1000.0);
+    // Holding the scrubber pauses playback (Onyx's rule); release resumes.
+    pc->set_scrubbing(ImGui::IsItemActive());
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+        ImGui::SetTooltip("Gold marks are this path's activations.");
+    draw_scrub_marks(pc->scrub_marks());
+    ImGui::SameLine();
+    ImGui::PushFont(g_mono_font, 0.0f);
+    text_in_slot(box.timestamp.c_str(), readout_w);
+    ImGui::PopFont();
+    ImGui::NewLine();  // text_in_slot leaves the cursor on its line; the highway goes below
+
     // Keys: Space plays or pauses, Left/Right jump 5 s, comma/period step
-    // 5 ticks; a held arrow or comma/period repeats. Not while a text field
+    // 5 ticks, [ and ] jump between activations; a held arrow or comma/period repeats. Not while a text field
     // has the keyboard. Keyboard navigation (on in app_shell.cpp) reads the
     // arrows and Space only when nobody owns them, so the Preview claims them
     // every frame it shows; a claim made this frame still holds during next
@@ -159,12 +245,15 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
             pc->jump_ms(5000.0);
         if (ImGui::IsKeyPressed(ImGuiKey_Comma, true)) pc->step_ticks(-kTickStep);
         if (ImGui::IsKeyPressed(ImGuiKey_Period, true)) pc->step_ticks(kTickStep);
+        // [ and ] jump between the drawn path's activations; no repeat.
+        if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket, false)) pc->jump_activation(-1);
+        if (ImGui::IsKeyPressed(ImGuiKey_RightBracket, false)) pc->jump_activation(+1);
     }
 
-    // Highway viewport: size the offscreen target to the remaining region.
+    // Highway viewport: the remaining region, less one line for the key hint.
     ImVec2 avail = ImGui::GetContentRegionAvail();
     int w = static_cast<int>(avail.x);
-    int h = static_cast<int>(avail.y);
+    int h = static_cast<int>(avail.y - ImGui::GetTextLineHeightWithSpacing());
     ID3D11ShaderResourceView* srv = pc->render(w, h);
     if (srv != nullptr && w > 0 && h > 0) {
         ImGui::Image((ImTextureID)(intptr_t)srv,
@@ -187,17 +276,17 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
         };
 
         // The time box's lines, the way Onyx draws its own (top-left,
-        // monospace, on a translucent dark panel): time / length,
-        // [measure:beat:tick] for both, BPM, the time signature, and the
-        // practice section (absent on charts that have none).
-        hydra::app::PreviewTimeBox box = pc->time_box();
-        const char* lines[5];
+        // monospace, on a translucent dark panel): the playhead's measure and
+        // the song's last, the tempo and signature in force, and the practice
+        // section (absent on charts that have none). The clock is beside the
+        // scrubber now.
+        const std::string where = box.position + "  of " + box.length;
+        const char* lines[3];
         int line_count = 0;
-        lines[line_count++] = box.timestamp.c_str();
-        lines[line_count++] = box.measure_beat.c_str();
-        lines[line_count++] = box.bpm.c_str();
-        lines[line_count++] = box.time_sig.c_str();
-        if (!box.section.empty()) lines[line_count++] = box.section.c_str();
+        lines[line_count++] = where.c_str();
+        lines[line_count++] = box.tempo.c_str();
+        if (!box.section_line.empty()) lines[line_count++] = box.section_line.c_str();
+        hydra::app::PreviewNextActBox next = pc->next_act_box();
         hydra::app::PreviewScoreBox score = pc->score_box();
         const bool has_gauge = pc->sp_meter_has_curve();
         hydra::app::PreviewDrainBox drain = pc->drain_box();
@@ -241,6 +330,11 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
             fit.right_h = line_h1 * 3.0f + pad1 * 2.0f;
             fit.right_edge = gauge_left - d_gap - origin.x;
             fit.right_top = v_margin;
+        }
+        if (next.shown) {
+            const float next_w1 = std::max(text_width(size1, next.header.c_str()),
+                                           text_width(size1, next.detail.c_str()));
+            fit.left_w = std::max(fit.left_w, margin1 + next_w1 + pad1 * 2.0f);
         }
         fit.gap = gap1;
         const float scale = render::overlay_scale(pcfg, w, h, fit);
@@ -289,14 +383,42 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
                             IM_COL32(200, 200, 200, 255), score.detail.c_str());
         }
 
+        // The next activation, bottom-left in the same panel style: its number
+        // in gold, then where it is and its chord. Hidden past the last one.
+        if (next.shown) {
+            const float nw = std::max(text_width(size, next.header.c_str()),
+                                      text_width(size, next.detail.c_str()));
+            const ImVec2 n_min(origin.x, img_max.y - (pad * 2.0f + line_h * 2.0f));
+            const ImVec2 n_max(origin.x + margin + nw + pad * 2.0f, img_max.y);
+            dl->AddRectFilled(n_min, n_max, IM_COL32(0, 0, 0, 128), corner,
+                              ImDrawFlags_RoundCornersTopRight);
+            dl->AddText(font, size, ImVec2(origin.x + margin, n_min.y + pad),
+                        IM_COL32(255, 204, 51, 255), next.header.c_str());
+            dl->AddText(font, size, ImVec2(origin.x + margin, n_min.y + pad + line_h),
+                        IM_COL32(255, 255, 255, 255), next.detail.c_str());
+        }
+
         // The Star Power meter: a gauge down the image's right edge, filling
         // bottom-up as phrases are collected and draining while SP is active.
         // Hydra's own overlay, like the time box above -- not part of the Onyx
         // render. The value is the view-model's curve read at the playhead, so
         // it is anchored to the same engine truth the path overlay is.
         if (has_gauge) {
-            ImVec2 gauge_min(gauge_left, origin.y + v_margin);
-            ImVec2 gauge_max(img_max.x - inset, img_max.y - v_margin);
+            // "SP" above the gauge in gold, the banked bars under it.
+            const float label_size = px(14.0f);
+            const float label_h = label_size * 1.25f;
+            const float centre_x = gauge_left + bar_w * 0.5f;
+            dl->AddText(font, label_size,
+                        ImVec2(centre_x - text_width(label_size, "SP") * 0.5f, origin.y + v_margin),
+                        IM_COL32(255, 204, 51, 255), "SP");
+            const std::string readout = pc->sp_meter_readout();
+            const float rw = text_width(label_size, readout.c_str());
+            dl->AddText(font, label_size,
+                        ImVec2(std::min(centre_x - rw * 0.5f, img_max.x - px(2.0f) - rw),
+                               img_max.y - v_margin - label_size),
+                        IM_COL32(255, 255, 255, 255), readout.c_str());
+            ImVec2 gauge_min(gauge_left, origin.y + v_margin + label_h);
+            ImVec2 gauge_max(img_max.x - inset, img_max.y - v_margin - label_h);
             if (gauge_max.y > gauge_min.y) {
                 dl->AddRectFilled(gauge_min, gauge_max, IM_COL32(0, 0, 0, 128), px(4.0f));
 
@@ -344,6 +466,9 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
             }
         }
     }
+
+    // The keys, under the highway.
+    ImGui::TextDisabled("%s", kPreviewKeysHint);
 }
 
 }  // namespace hydra::ui::detail

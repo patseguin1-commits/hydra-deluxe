@@ -154,6 +154,26 @@ public:
     // The SP drain box the panel draws beside the gauge.
     hydra::app::PreviewDrainBox drain_box() const;
 
+    // The drawn path's activations on the scrubber, as fractions of
+    // length_ms() (app::build_scrub_marks). Empty until a path's scene is in.
+    std::vector<double> scrub_marks() const;
+
+    // The box at the highway's bottom-left (app::build_next_act_box).
+    hydra::app::PreviewNextActBox next_act_box() const;
+
+    // The number under the SP gauge, "2.5/4" (app::sp_meter_readout).
+    std::string sp_meter_readout() const;
+
+    // Move the playhead to the previous (-1) or next (+1) activation of the
+    // drawn path (app::activation_jump_ms). Playing stays playing, as with
+    // jump_ms. False when there is none that way or nothing is loaded.
+    bool jump_activation(int direction);
+
+    // Move the playhead to activation `index` (0-based) of the drawn path,
+    // for "Show in Preview". False when nothing is loaded or the drawn path
+    // has no such activation.
+    bool seek_activation(size_t index);
+
     // The text overlays' scale the panel last drew at (1 = full size). The
     // panel sets it each frame; only the GUI test reads it back.
     void set_overlay_scale(float scale) { overlay_scale_ = scale; }
