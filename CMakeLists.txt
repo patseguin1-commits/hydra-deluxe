@@ -253,9 +253,13 @@ target_include_directories(hydra_dm PRIVATE third_party/json)
 add_library(hydra_ui STATIC
     src/ui/app_shell.cpp
     src/ui/app_state.cpp
-    src/ui/details_view.cpp
+    src/ui/details_panel.cpp
     src/ui/dm_jobs.cpp
+    src/ui/dynamics_tab.cpp
     src/ui/icons.cpp
+    src/ui/paths_tab.cpp
+    src/ui/preview_tab.cpp
+    src/ui/stars_tab.cpp
     src/ui/library_jobs.cpp
     src/ui/library_view.cpp
     src/ui/preview_controller.cpp
