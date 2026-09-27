@@ -218,6 +218,9 @@ void run_frame(AppState& app, FrameText* capture) {
         ImGui::LogToBuffer();
     }
 
+    // Batch ends, report starts and reaps, parked leaderboard jobs: state
+    // work, done here once a frame rather than inside a view.
+    app.update_background_jobs();
     render_main_window(app);
     render_details_modal(app);
     // The number boxes apply edits live but leave the INI until the edit

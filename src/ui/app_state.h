@@ -14,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -113,6 +114,12 @@ struct LibraryViewState {
     // Whether the path report file exists, as of the last look.
     bool report_exists = false;
     double report_checked_at = -1.0;  // -1 = look now
+    // Song folders: a folder was added or removed since the dialog opened,
+    // so it offers "Scan now".
+    bool folders_changed = false;
+    // The leaderboard report was opened by the "Open report" button (the
+    // job itself knows whether it auto-opened).
+    bool dm_opened_by_click = false;
 };
 
 // What the app reads before it opens the store: the settings, with
@@ -262,21 +269,47 @@ public:
     void start_dm_fetch();  // loads the dmleaderboards user list
     void start_dm_report(const std::string& discord_id, const std::string& username);
 
-    bool batch_redo = false;  // "redo existing" checkbox state
+    // The confirm's "Also re-analyze charts that already have a result" box.
+    bool batch_redo = false;
 
-    // "Analyze library" opens its modal in a confirm stage before any work
-    // starts; true while that stage is showing (batch_job not yet created).
+    // True while the "Analyze library" confirm shows. open_batch_confirm()
+    // loads what it lists: the charts the batch would analyze (the library,
+    // or the search's matches) and how many already have a result under the
+    // current settings. start_batch() analyzes exactly those charts.
     bool batch_confirm_pending = false;
+    std::vector<store::ChartLibraryEntry> batch_scope;
+    int64_t batch_scope_with_result = 0;
+    void open_batch_confirm();
+
+    // Once per frame (run_frame), after tick(): when a batch ends, start its
+    // path report (never for a stopped batch); when the finished strip was
+    // dismissed before the report landed, post the outcome to the status
+    // line; let go of cancelled leaderboard jobs once they finish.
+    void update_background_jobs();
+
+    // Leaderboard jobs cancelled while a request was in flight. WinHTTP only
+    // checks the cancel flag between reads, so joining one on the spot could
+    // freeze the window for up to two minutes. They wait here instead, and
+    // update_background_jobs() drops each once it has finished.
+    std::vector<std::unique_ptr<DmFetchUsersJob>> parked_dm_fetches;
+    std::vector<std::unique_ptr<DmReportJob>> parked_dm_reports;
+    void cancel_dm_fetch();
+    void cancel_dm_report();
 
     // Set by the details modal's "Rescan library" remedy: the main window
     // starts the scan on its next frame (the scan modal belongs to it).
     bool request_scan = false;
 
-    // Transient feedback line ("folder already added", save failures, ...).
-    // The view times the fade-out off status_generation changing.
+    // The status line under the toolbar. set_status is news ("Path report
+    // saved"): neutral text that fades after a few seconds. set_problem is
+    // something the user should act on: orange, and it stays until dismissed.
+    // The view times the fade off status_generation changing.
     std::string status_message;
+    bool status_is_problem = false;
     Generation status_generation;
     void set_status(std::string message);
+    void set_problem(std::string message);
+    void dismiss_status();
 
     // The one way to finish a settings change: write the INI (with a status
     // message when it can't be written — a silent failure made changes look
@@ -302,6 +335,7 @@ public:
 
 private:
     explicit AppState(StartupSettings start);
+    bool batch_finish_seen_ = false;  // update_background_jobs saw this run end
     ID3D11Device* render_device_ = nullptr;
     ID3D11DeviceContext* render_context_ = nullptr;
 

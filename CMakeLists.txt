@@ -364,6 +364,7 @@ add_executable(hydra_tests
     tests/test_model.cpp
     tests/test_squeeze_rating.cpp
     tests/test_stars.cpp
+    tests/test_batch_text.cpp
     tests/test_path_view.cpp
     tests/test_preview_view.cpp
     tests/test_preview_source.cpp
