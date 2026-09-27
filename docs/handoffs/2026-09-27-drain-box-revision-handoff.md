@@ -81,6 +81,6 @@ The dev build reads `hydra_settings.ini` and `hydra.db` from its own folder. Wit
 
 ## Loose ends, not part of this work
 
-- **Old worktrees:** `.claude/worktrees/wf_6716a077-f5b-1` and `-2` (branches `drain/T1`, `drain/T2`) are merged but still on disk. They can be removed once the user agrees.
+- **Old worktrees:** Tasks 1 and 2's worktrees are removed. Their merged branches `drain/T1` and `drain/T2` are still there.
 - **A separate session:** it is removing `SongTiming::sp_end_ms`, which has had no callers outside its tests since `c89596b`. It touches `src/core/timing.{h,cpp}` and `tests/test_timing.cpp`, which none of Tasks 4 to 6 touch.
 - **Pushing:** nothing has been pushed.
