@@ -13,6 +13,8 @@
 
 namespace uitest {
 
+void register_paths_tests(Harness& h);  // uitest_paths.cpp
+
 void register_tests(Harness& h) {
     // --all runs the tests in the order they are registered, and the ImGui
     // context carries over from one test to the next. So the 26 tests that
@@ -53,6 +55,7 @@ void register_tests(Harness& h) {
         t->UserData = &h;
         t->TestFunc = e.fn;
     }
+    register_paths_tests(h);
 }
 
 }  // namespace uitest

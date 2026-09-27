@@ -305,6 +305,7 @@ add_library(hydra_uitest_harness STATIC
     tests/ui/uitest_details.cpp
     tests/ui/uitest_preview.cpp
     tests/ui/uitest_batch_reports.cpp
+    tests/ui/uitest_paths.cpp
 )
 target_include_directories(hydra_uitest_harness PUBLIC tests/ui)
 target_link_libraries(hydra_uitest_harness PUBLIC hydra_ui PRIVATE hydra_warnings)
