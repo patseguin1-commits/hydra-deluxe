@@ -1,5 +1,10 @@
 # The squeezed-out phrase, the collected phrases and the rules are stored
 
+> **Superseded 2026-09-27: Auto was removed.** The 2026-09-26 amendment below,
+> about the Auto budget and the Auto ladder, no longer applies. Hydra still
+> reads `auto_cap_ladder` and `auto_budget_s` in `hydra_rules.ini` but ignores
+> them. The rest of this record stands.
+
 Two facts about an activation were only ever known inside the search. The
 first is which SP phrase it squeezed out. The second is which phrases it
 collected while Star Power was running. The display layer needed both, so it
