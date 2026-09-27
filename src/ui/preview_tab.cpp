@@ -51,8 +51,14 @@ void render_path_picker(AppState& app) {
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Showing");
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(px(200.0f));
     ImGui::PushFont(g_mono_font, 0.0f);
+    // On its own line, as wide as the longest path in the list (or the
+    // line), so no path is ever cut off under the arrow.
+    float widest = 0.0f;
+    for (const hydra::app::PathButtonView& b : list.buttons)
+        widest = std::max(widest, ImGui::CalcTextSize(hydra::app::preview_path_label(b).c_str()).x);
+    const float fit = widest + ImGui::GetStyle().FramePadding.x * 2.0f + ImGui::GetFrameHeight();
+    ImGui::SetNextItemWidth(std::min(fit, ImGui::GetContentRegionAvail().x));
     if (ImGui::BeginCombo("##previewpath", current.c_str())) {
         for (size_t i = 0; i < list.buttons.size(); ++i) {
             const hydra::app::PathButtonView& b = list.buttons[i];
@@ -65,7 +71,6 @@ void render_path_picker(AppState& app) {
         ImGui::EndCombo();
     }
     ImGui::PopFont();
-    ImGui::SameLine(0.0f, px(16.0f));
 }
 
 // Gold ticks over the scrubber just drawn, one per activation, where the
@@ -155,8 +160,8 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
         jump.reset();
     }
 
-    // Row 1: which path the overlay draws, the activation jumps, the
-    // transport buttons and the volume. Row 2: the scrubber, a gold mark per
+    // Row 1: which path the overlay draws. Row 2: the activation jumps, the
+    // transport buttons and the volume. Row 3: the scrubber, a gold mark per
     // activation, and the clock. The clock sits in a fixed slot (see
     // widgets.h), so nothing walks under a held mouse as its digits change.
     // The tick buttons and comma/period step this many chart ticks.

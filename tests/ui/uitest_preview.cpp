@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cfloat>
 #include <string>
 #include <vector>
 
@@ -5,8 +7,10 @@
 
 #include "app/preview_view.h"
 #include "core/model.h"
+#include "imgui_internal.h"
 #include "render/overlay_layout.h"
 #include "ui/app_state.h"
+#include "ui/fonts.h"  // g_mono_font
 #include "ui/preview_controller.h"
 #include "ui/preview_load_job.h"
 
@@ -85,7 +89,7 @@ void test_analyze_on_preview(ImGuiTestContext* ctx) {
 
 // The "Showing" list's ID. Dear ImGui's BeginCombo reports no label to the
 // test engine, so a "**/##previewpath" wildcard never finds it. It is hashed
-// on the same ID stack as the "< Act" button beside it, whose parent ID the
+// on the same ID stack as the "< Act" button under it, whose parent ID the
 // engine does know, so this works wherever the tab is drawn.
 ImGuiID preview_path_combo(ImGuiTestContext* ctx) {
     const ImGuiTestItemInfo act = ctx->ItemInfo("**/< Act##prevact");
@@ -502,6 +506,27 @@ void test_preview_path_picker(ImGuiTestContext* ctx) {
     ctx->Yield(2);
     IM_CHECK(visible_text(h).find("Showing") != std::string::npos);
     IM_CHECK(visible_text(h).find("3- 1 2  (optimal)") != std::string::npos);
+
+    // The list sits on its own line above the buttons, as wide as its longest
+    // path, so no path is cut off under the arrow.
+    {
+        const ImRect combo = ctx->ItemInfo(preview_path_combo(ctx)).RectFull;
+        const ImRect act = ctx->ItemInfo("**/< Act##prevact").RectFull;
+        IM_CHECK_GE(act.Min.y, combo.Max.y);
+        const ImGuiStyle& s = ImGui::GetStyle();
+        const float size = s.FontSizeBase * s.FontScaleMain * s.FontScaleDpi;
+        const hydra::app::PathButtonsView list = hydra::app::build_path_buttons(
+            *h.app->viewed.record, h.app->settings.depth_mode, h.app->settings.depth_value);
+        float widest = 0.0f;
+        for (const hydra::app::PathButtonView& b : list.buttons) {
+            const std::string label = hydra::app::preview_path_label(b);
+            widest = (std::max)(widest, hydra::ui::g_mono_font
+                                            ->CalcTextSizeA(size, FLT_MAX, 0.0f, label.c_str())
+                                            .x);
+        }
+        const float fit = widest + s.FramePadding.x * 2.0f + combo.GetHeight();
+        IM_CHECK_FLOAT_NEAR_EQ(combo.GetWidth(), fit, 1.0f);
+    }
 
     ctx->ItemClick(preview_path_combo(ctx));
     ctx->Yield(1);
