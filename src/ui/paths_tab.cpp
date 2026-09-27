@@ -12,8 +12,11 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
 #include <cstdio>
+#include <optional>
 #include <string>
+#include <vector>
 
 #include "app/path_view.h"
 #include "core/model.h"
@@ -22,6 +25,7 @@
 #include "ui/app_state.h"
 #include "ui/details_view.h"
 #include "ui/fonts.h"
+#include "ui/label_layout.h"
 #include "ui/theme.h"
 #include "ui/widgets.h"
 
@@ -33,13 +37,23 @@ ImVec4 text_color() { return ImGui::GetStyleColorVec4(ImGuiCol_Text); }
 ImVec4 dim_color() { return ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled); }
 
 // Draw `text` at `pos` over an item already submitted. `font` null keeps the
-// current font.
+// current font; `wrap_w` > 0 wraps the text at that width.
 void text_at(const ImVec2& pos, const ImVec4& color, const char* text,
-             ImFont* font = nullptr) {
+             ImFont* font = nullptr, float wrap_w = 0.0f) {
     ImGui::SetCursorScreenPos(pos);
     if (font) ImGui::PushFont(font, 0.0f);
+    if (wrap_w > 0.0f) ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrap_w);
     ImGui::TextColored(color, "%s", text);
+    if (wrap_w > 0.0f) ImGui::PopTextWrapPos();
     if (font) ImGui::PopFont();
+}
+
+// The height of `text` wrapped at `wrap_w`, in `font` (null: the current one).
+float wrapped_height(const char* text, float wrap_w, ImFont* font = nullptr) {
+    if (font) ImGui::PushFont(font, 0.0f);
+    const float h = ImGui::CalcTextSize(text, nullptr, false, wrap_w).y;
+    if (font) ImGui::PopFont();
+    return h;
 }
 
 // After text laid over a block that starts at `top` and is `h` tall: put the
@@ -50,9 +64,22 @@ void end_overlay(const ImVec2& top, float h) {
     ImGui::Dummy(ImVec2(0.0f, 0.0f));
 }
 
-// Put the next item flush right on the current line, `w` wide.
+// True when an item `w` wide still fits after the last item, `spacing` apart.
+bool fits_on_line(float w, float spacing) {
+    return ImGui::GetItemRectMax().x + spacing + w <= ImGui::GetCurrentWindow()->WorkRect.Max.x;
+}
+
+// Keep the next item, `w` wide, on the last item's line when it fits there;
+// otherwise it starts the next line. A row of variable-length pieces wraps
+// instead of running past the column's edge.
+void flow_next(float w, float spacing) {
+    if (fits_on_line(w, spacing)) ImGui::SameLine(0.0f, spacing);
+}
+
+// Put the next item flush right, `w` wide: on the current line when it fits,
+// else on the next.
 void align_right(float w) {
-    ImGui::SameLine();
+    if (fits_on_line(w, ImGui::GetStyle().ItemSpacing.x)) ImGui::SameLine();
     const float room = ImGui::GetContentRegionAvail().x - w;
     if (room > 0.0f) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + room);
 }
@@ -64,26 +91,27 @@ float button_width(const char* label) {
 // ---- the path list ----------------------------------------------------------
 
 // One path: a full-width Selectable with the id ##path<i>, the title over it
-// (gold for an optimal path) and the detail line under the title.
+// (gold for an optimal path) and the detail line under the title. A title
+// longer than the list is wide wraps onto more lines, and the button grows to
+// hold them, so the whole path is always on screen.
 bool path_button(size_t i, const app::PathButtonView& b, bool selected) {
     const float pad = px(6.0f);
     const float gap = px(2.0f);
-    const float line = ImGui::GetTextLineHeight();
-    const float h = pad * 2.0f + line + (b.detail.empty() ? 0.0f : gap + line);
+    const float wrap_w = std::max(1.0f, ImGui::GetContentRegionAvail().x - pad * 2.0f);
+    const float title_h = wrapped_height(b.title.c_str(), wrap_w, g_mono_font);
+    const float detail_h = b.detail.empty() ? 0.0f : wrapped_height(b.detail.c_str(), wrap_w);
+    const float h = pad * 2.0f + title_h + (b.detail.empty() ? 0.0f : gap + detail_h);
     char id[32];
     std::snprintf(id, sizeof(id), "##path%zu", i);
     const ImVec2 top = ImGui::GetCursorScreenPos();
     const bool clicked = ImGui::Selectable(id, selected, ImGuiSelectableFlags_None, ImVec2(0.0f, h));
-    // The list is narrow; the full title is a hover away.
-    const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal);
     const bool optimal = b.group == app::PathButtonView::Group::Optimal;
     text_at(ImVec2(top.x + pad, top.y + pad), optimal ? kBestPathColor : text_color(),
-            b.title.c_str(), g_mono_font);
+            b.title.c_str(), g_mono_font, wrap_w);
     if (!b.detail.empty())
-        text_at(ImVec2(top.x + pad, top.y + pad + line + gap),
-                b.detail_warn ? kWarningColor : dim_color(), b.detail.c_str());
+        text_at(ImVec2(top.x + pad, top.y + pad + title_h + gap),
+                b.detail_warn ? kWarningColor : dim_color(), b.detail.c_str(), nullptr, wrap_w);
     end_overlay(top, h);
-    if (hovered) ImGui::SetTooltip("%s", b.title.c_str());
     return clicked;
 }
 
@@ -112,6 +140,9 @@ void render_path_list(const app::PathButtonsView& list, const Path*& selected_pa
 // The strip above the rows: a thin bar the column's width, a gold mark per
 // activation at its song_fraction with its number above, and the first and
 // last measure under the ends. Not drawn unless every row has a fraction.
+// Every mark is drawn; a number is drawn only where it has room beside the
+// last one (label_layout.h), and hovering the strip names the activations
+// under the mouse, so a crowded chart's hidden numbers can still be read.
 void render_timeline(const app::ActivationsView& view) {
     for (const app::ActivationRowView& a : view.acts)
         if (!a.song_fraction) return;
@@ -119,11 +150,13 @@ void render_timeline(const app::ActivationsView& view) {
     const float h = px(40.0f);
     const ImVec2 top = ImGui::GetCursorScreenPos();
     ImGui::Dummy(ImVec2(w, h));
+    const bool hovered = ImGui::IsItemHovered();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float bar_y = top.y + px(26.0f);
     dl->AddRectFilled(ImVec2(top.x, bar_y), ImVec2(top.x + w, bar_y + px(4.0f)),
                       IM_COL32(58, 58, 62, 255), px(2.0f));
     const float num_size = ImGui::GetFontSize() * 0.7f;
+    std::vector<float> centres, widths;
     for (const app::ActivationRowView& a : view.acts) {
         const float x = top.x + static_cast<float>(*a.song_fraction) * w;
         const ImVec2 m_min(x - px(2.0f), top.y + px(20.0f));
@@ -135,10 +168,39 @@ void render_timeline(const app::ActivationsView& view) {
                         ImVec2(m_max.x + px(2.0f), m_max.y + px(2.0f)),
                         ImGui::GetColorU32(kWarningColor), px(1.0f), 0, px(1.5f));
         const std::string num = std::to_string(a.number);
-        const float nw = ImGui::GetFont()->CalcTextSizeA(num_size, FLT_MAX, 0.0f, num.c_str()).x;
-        dl->AddText(ImGui::GetFont(), num_size, ImVec2(x - nw * 0.5f, top.y + px(2.0f)),
+        centres.push_back(x);
+        widths.push_back(ImGui::GetFont()->CalcTextSizeA(num_size, FLT_MAX, 0.0f, num.c_str()).x);
+    }
+    const std::vector<std::optional<float>> lefts =
+        spaced_labels(centres, widths, top.x, top.x + w, px(3.0f));
+    for (size_t i = 0; i < view.acts.size(); ++i) {
+        if (!lefts[i]) continue;
+        const app::ActivationRowView& a = view.acts[i];
+        dl->AddText(ImGui::GetFont(), num_size, ImVec2(*lefts[i], top.y + px(2.0f)),
                     ImGui::GetColorU32(a.badge.empty() ? ImGuiCol_TextDisabled : ImGuiCol_Text),
-                    num.c_str());
+                    std::to_string(a.number).c_str());
+    }
+    if (hovered) {
+        // Every activation whose mark is within a few pixels of the mouse,
+        // else the nearest one.
+        const float mx = ImGui::GetIO().MousePos.x;
+        std::string tip;
+        size_t nearest = 0;
+        for (size_t i = 0; i < centres.size(); ++i) {
+            if (std::fabs(centres[i] - mx) < std::fabs(centres[nearest] - mx)) nearest = i;
+            if (std::fabs(centres[i] - mx) <= px(6.0f)) {
+                const app::ActivationRowView& a = view.acts[i];
+                if (!tip.empty()) tip += "\n";
+                tip += "Activation " + std::to_string(a.number) + "  " + a.measure;
+                if (!a.badge.empty()) tip += "  " + a.badge;
+            }
+        }
+        if (tip.empty() && !centres.empty()) {
+            const app::ActivationRowView& a = view.acts[nearest];
+            tip = "Activation " + std::to_string(a.number) + "  " + a.measure;
+            if (!a.badge.empty()) tip += "  " + a.badge;
+        }
+        if (!tip.empty()) ImGui::SetTooltip("%s", tip.c_str());
     }
     ImGui::PushFont(g_mono_font, 0.0f);
     ImGui::TextDisabled("m1");
@@ -304,7 +366,7 @@ void render_activation_body(size_t i, const app::ActivationRowView& a, app::Path
 void render_activations(const app::ActivationsView& view, app::PathsTabUi& ui) {
     ImGui::TextUnformatted("Activations");
     if (!view.summary.empty()) {
-        ImGui::SameLine();
+        flow_next(ImGui::CalcTextSize(view.summary.c_str()).x, ImGui::GetStyle().ItemSpacing.x);
         ImGui::TextDisabled("%s", view.summary.c_str());
     }
     if (view.acts.empty()) {
@@ -337,18 +399,22 @@ void fold_button(const char* label, bool& open) {
 
 void render_path_footer(AppState& app, const app::PathsTabCache::Details& d,
                         app::PathsTabUi& ui) {
+    // One row that wraps where the next piece would run past the edge: the
+    // summary's length changes from chart to chart.
     ImGui::Spacing();
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
     fold_button("Multiplier squeeze##mult", ui.mult_open);
-    ImGui::SameLine();
-    ImGui::TextDisabled("%s", app::multsqueeze_summary(d.squeezes).c_str());
-    ImGui::SameLine(0.0f, px(16.0f));
+    const std::string summary = app::multsqueeze_summary(d.squeezes);
+    flow_next(ImGui::CalcTextSize(summary.c_str()).x, spacing);
+    ImGui::TextDisabled("%s", summary.c_str());
+    flow_next(button_width("Score breakdown##breakdown"), px(16.0f));
     fold_button("Score breakdown##breakdown", ui.breakdown_open);
-    ImGui::SameLine(0.0f, px(24.0f));
+    flow_next(button_width("Copy path"), px(24.0f));
     if (ImGui::Button("Copy path")) copy_selected_path(app);
     hint("Ctrl+C also copies the selected path");
     const double copied_at = app.details_ui.copied_at;
     if (copied_at >= 0.0 && ImGui::GetTime() - copied_at < 2.0) {
-        ImGui::SameLine();
+        flow_next(ImGui::CalcTextSize("Copied!").x, spacing);
         ImGui::TextDisabled("Copied!");
     }
 
@@ -405,9 +471,9 @@ void render_path_panel(AppState& app, const Path*& selected_path) {
     const app::PathButtonsView& list =
         cache.buttons(record, generation, app.settings.depth_mode, app.settings.depth_value);
 
-    // The list is as wide as its longest line, when the details keep their
-    // minimum beside it; below that it keeps 240 px and the full title is a
-    // hover away.
+    // The list is as wide as its longest line, up to kMaxPathListShare of the
+    // tab and never taking the details below their minimum; a longer path
+    // wraps (path_button). Never under 240 px.
     float widest = 0.0f;
     ImGui::PushFont(g_mono_font, 0.0f);
     for (const app::PathButtonView& b : list.buttons)
@@ -416,7 +482,9 @@ void render_path_panel(AppState& app, const Path*& selected_path) {
     for (const app::PathButtonView& b : list.buttons)
         widest = std::max(widest, ImGui::CalcTextSize(b.detail.c_str()).x);
     const float list_fit = widest + px(6.0f) * 2.0f + ImGui::GetStyle().ScrollbarSize;
-    const float list_max = ImGui::GetContentRegionAvail().x - px(24.0f) - px(kMinPathDetailsW);
+    const float tab_w = ImGui::GetContentRegionAvail().x;
+    const float list_max =
+        std::min(tab_w * kMaxPathListShare, tab_w - px(24.0f) - px(kMinPathDetailsW));
     const float list_w = std::max(px(kMinPathListW), std::min(list_fit, list_max));
     ImGui::BeginChild("##pathlist", ImVec2(list_w, 0.0f));
     render_path_list(list, selected_path);

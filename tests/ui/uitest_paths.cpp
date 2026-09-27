@@ -290,6 +290,36 @@ void test_paths_fit_narrow(ImGuiTestContext* ctx) {
     IM_CHECK_FLOAT_NEAR_EQ(list->Size.x, hydra::ui::px(hydra::ui::kMinPathListW), 0.5f);
 }
 
+// The scratch library's longest path (9 activations): the path list takes at
+// most its share of the tab, the activations get the rest, and nothing in
+// either column runs past its edge (a long title wraps instead).
+void test_paths_long_path(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    open_titled(ctx, "spiraling void", "The Spiraling Void");
+    if (ctx->IsError()) return;
+    analyze_open_song(ctx);
+    if (ctx->IsError()) return;
+    ctx->Yield(2);
+    for (float share : {0.01f, 0.99f}) {  // the widest panel, then the narrowest
+        hydra::ui::remember_library_share(share);
+        h.app->library_ui.panel_was_open = false;
+        ctx->Yield(3);
+        ImGuiWindow* list = window_named("##pathlist");
+        ImGuiWindow* details = window_named("##pathdetails");
+        IM_CHECK(list != nullptr && details != nullptr);
+        if (ctx->IsError()) return;
+        const float tab = details->Pos.x + details->Size.x - list->Pos.x;
+        IM_CHECK_LE(list->Size.x, (std::max)(hydra::ui::px(hydra::ui::kMinPathListW),
+                                             tab * hydra::ui::kMaxPathListShare) + 1.0f);
+        IM_CHECK_GE(details->Size.x, hydra::ui::px(hydra::ui::kMinPathDetailsW) - 1.0f);
+        IM_CHECK_LE(list->ContentSize.x, list->ContentRegionRect.GetWidth() + 0.5f);
+        IM_CHECK_LE(details->ContentSize.x, details->ContentRegionRect.GetWidth() + 0.5f);
+    }
+}
+
 }  // namespace
 
 // Registers this file's tests; register_tests() (uitest_tests.cpp) calls it.
@@ -305,6 +335,7 @@ void register_paths_tests(Harness& h) {
         {"paths-folds-copy", test_paths_folds_copy},
         {"paths-uncounted", test_paths_uncounted},
         {"paths-fit-narrow", test_paths_fit_narrow},
+        {"paths-long-path", test_paths_long_path},
     };
     for (const Entry& e : entries) {
         ImGuiTest* t = IM_REGISTER_TEST(h.engine, "hydra", e.name);

@@ -15,6 +15,8 @@ namespace hydra::ui {
 // Copy path buttons; the panel's minimum fits that beside the 240 px path
 // list, the gap between them, the panel's padding and a scroll bar.
 inline constexpr float kMinPathListW = 240.0f;
+// The most of the Paths tab the path list may take; a longer path wraps.
+inline constexpr float kMaxPathListShare = 0.4f;
 inline constexpr float kMinPathDetailsW = 500.0f;
 inline constexpr float kMinSongPanelW = 820.0f;
 
