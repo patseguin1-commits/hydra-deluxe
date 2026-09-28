@@ -725,7 +725,11 @@ void test_preview_activation_jumps(ImGuiTestContext* ctx) {
     IM_CHECK(pc.time_box().tempo.rfind("BPM ", 0) == 0);
 
     ctx->Yield(2);
-    IM_CHECK(visible_text(h).find("[ ] previous/next activation") != std::string::npos);
+    // The key bar: each group's action is on screen, the old run-on line is gone.
+    const std::string text = visible_text(h);
+    for (const char* action : {"Activation", "5 seconds", "5 ticks", "Play/pause", "Space"})
+        IM_CHECK(text.find(action) != std::string::npos);
+    IM_CHECK(text.find("previous/next activation") == std::string::npos);
 }
 
 }  // namespace

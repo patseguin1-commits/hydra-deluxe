@@ -27,10 +27,81 @@ namespace hydra::ui::detail {
 
 namespace {
 
-// The line under the highway naming the Preview's keys.
-const char* const kPreviewKeysHint =
-    "Space play/pause \xC2\xB7 \xE2\x86\x90 \xE2\x86\x92 5 s \xC2\xB7 , . 5 ticks "
-    "\xC2\xB7 [ ] previous/next activation";
+// The bar under the highway naming the Preview's keys: each key drawn as a
+// keycap, then what it does, in the transport buttons' left-to-right order.
+// A pair is back/forward. A group never splits across lines.
+struct KeyHint {
+    const char* keys[2];
+    const char* action;
+};
+const KeyHint kKeyHints[] = {
+    {{"[", "]"}, "Activation"},
+    {{"\xE2\x86\x90", "\xE2\x86\x92"}, "5 seconds"},  // left and right arrows
+    {{",", "."}, "5 ticks"},
+    {{"Space", nullptr}, "Play/pause"},
+};
+
+// Lay out the key bar `width` wide from the cursor and return its height.
+// With `draw` false it only measures, so the highway can leave room for it
+// first. Key and action text are ImGui Text (hydra_uitest reads it); the caps
+// are the draw list.
+float key_hints(float width, bool draw) {
+    const float text_h = ImGui::GetTextLineHeight();
+    const float pad_x = px(5.0f);
+    const float cap_h = text_h + px(4.0f);
+    const float wall = px(2.0f);            // the darker edge under a cap
+    const float cap_gap = px(3.0f);         // between the two caps of a pair
+    const float action_gap = px(6.0f);      // cap to its action
+    const float group_gap = px(22.0f);      // between groups
+    const float row_h = cap_h + wall + ImGui::GetStyle().ItemSpacing.y;
+    auto cap_w = [&](const char* key) {
+        return std::max(cap_h, ImGui::CalcTextSize(key).x + pad_x * 2.0f);
+    };
+
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    float x = 0.0f, y = 0.0f;
+    for (const KeyHint& kh : kKeyHints) {
+        float group_w = ImGui::CalcTextSize(kh.action).x + action_gap;
+        for (const char* key : kh.keys)
+            if (key) group_w += cap_w(key) + (key == kh.keys[0] ? 0.0f : cap_gap);
+        if (x > 0.0f && x + group_w > width) {
+            x = 0.0f;
+            y += row_h;
+        }
+        if (draw) {
+            float kx = origin.x + x;
+            const float top = origin.y + y;
+            for (const char* key : kh.keys) {
+                if (!key) continue;
+                if (key != kh.keys[0]) kx += cap_gap;
+                const float w = cap_w(key);
+                const float r = px(3.0f);
+                dl->AddRectFilled(ImVec2(kx, top + wall), ImVec2(kx + w, top + cap_h + wall),
+                                  IM_COL32(20, 20, 22, 255), r);
+                dl->AddRectFilled(ImVec2(kx, top), ImVec2(kx + w, top + cap_h),
+                                  IM_COL32(62, 62, 66, 255), r);
+                dl->AddRect(ImVec2(kx, top), ImVec2(kx + w, top + cap_h),
+                            IM_COL32(110, 110, 116, 255), r);
+                const float tw = ImGui::CalcTextSize(key).x;
+                ImGui::SetCursorScreenPos(
+                    ImVec2(kx + (w - tw) * 0.5f, top + (cap_h - text_h) * 0.5f));
+                ImGui::TextColored(kDefaultTextColor, "%s", key);
+                kx += w;
+            }
+            ImGui::SetCursorScreenPos(ImVec2(kx + action_gap, top + (cap_h - text_h) * 0.5f));
+            ImGui::TextColored(kSubtleTextColor, "%s", kh.action);
+        }
+        x += group_w + group_gap;
+    }
+    const float height = y + row_h;
+    if (draw) {
+        // Leave the cursor under the bar on a real item (see end_overlay).
+        ImGui::SetCursorScreenPos(origin);
+        ImGui::Dummy(ImVec2(width, height - ImGui::GetStyle().ItemSpacing.y));
+    }
+    return height;
+}
 
 // "Showing" and the ##previewpath list: the same paths, in the same order and
 // from the same cache, as the Paths tab's buttons. A pick sets the one
@@ -264,10 +335,10 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
         if (ImGui::IsKeyPressed(ImGuiKey_RightBracket, false)) pc->jump_activation(+1);
     }
 
-    // Highway viewport: the remaining region, less one line for the key hint.
+    // Highway viewport: the remaining region, less the key bar under it.
     ImVec2 avail = ImGui::GetContentRegionAvail();
     int w = static_cast<int>(avail.x);
-    int h = static_cast<int>(avail.y - ImGui::GetTextLineHeightWithSpacing());
+    int h = static_cast<int>(avail.y - key_hints(avail.x, /*draw=*/false));
     ID3D11ShaderResourceView* srv = pc->render(w, h);
     if (srv != nullptr && w > 0 && h > 0) {
         ImGui::Image((ImTextureID)(intptr_t)srv,
@@ -510,7 +581,7 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
     }
 
     // The keys, under the highway.
-    ImGui::TextDisabled("%s", kPreviewKeysHint);
+    key_hints(ImGui::GetContentRegionAvail().x, /*draw=*/true);
 }
 
 }  // namespace hydra::ui::detail
