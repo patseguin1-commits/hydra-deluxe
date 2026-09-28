@@ -128,6 +128,10 @@ struct LibraryViewState {
     // The leaderboard report was opened by the "Open report" button (the
     // job itself knows whether it auto-opened).
     bool dm_opened_by_click = false;
+    // The Analysis settings bar's four blocks (Difficulty, SP cap, Score
+    // range, Path limit) as wide as they were drawn last frame, so this frame
+    // can tell which still fit on the line. 0 = not drawn yet.
+    float settings_block_w[4] = {};
 };
 
 // What the app reads before it opens the store: the settings, with

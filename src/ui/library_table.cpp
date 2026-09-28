@@ -17,6 +17,7 @@
 #include "app/library_query.h"
 #include "core/model.h"  // group_thousands
 #include "imgui.h"
+#include "imgui_internal.h"  // ImGuiSelectableFlags_SpanAvailWidth
 #include "ui/app_state.h"
 #include "ui/fonts.h"
 #include "ui/library_model.h"
@@ -157,12 +158,22 @@ void render_chips(AppState& app) {
         {StatusChip::Analyzed, "Analyzed", "chipdone"},
     };
     const ChipCounts& counts = app.library.counts();
+    // A chip that doesn't fit after the last one starts a new line. A
+    // button's width is its label plus the frame padding, known before it is
+    // drawn.
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float right_edge = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
     for (size_t i = 0; i < std::size(kChips); ++i) {
         const Chip& c = kChips[i];
-        if (i > 0) ImGui::SameLine();
         const size_t n = counts.of(c.chip);
         const std::string label = std::string(c.name) + " (" +
                                   group_thousands(static_cast<int64_t>(n)) + ")##" + c.id;
+        if (i > 0) {
+            const float w =
+                ImGui::CalcTextSize(label.c_str(), nullptr, true).x + style.FramePadding.x * 2.0f;
+            if (ImGui::GetItemRectMax().x + style.ItemSpacing.x + w <= right_edge)
+                ImGui::SameLine();
+        }
         const bool on = app.library.chip() == c.chip;
         if (chip_button(label.c_str(), on, !on && n == 0)) app.library.set_chip(c.chip);
         if (c.chip == StatusChip::Stale)
@@ -196,6 +207,26 @@ void cell_text(const std::string& text, const std::vector<app::MatchSpan>& spans
     const float max_x = pos.x + ImGui::GetContentRegionAvail().x;
     text_ellipsized(text.c_str());
     overlay_matches(pos, text, spans, max_x);
+}
+
+// Draws a row's title at `pos` cut to end in "..." within `max_w`, and returns
+// how wide the kept part is, so the search highlight stops before the "...".
+// It goes straight to the draw list: the row's Selectable already gave the
+// text log the full title.
+float draw_title_ellipsized(ImVec2 pos, float max_w, const std::string& title) {
+    ImFont* font = ImGui::GetFont();
+    const float size = ImGui::GetFontSize();
+    const float ellipsis_w = ImGui::GetFontBaked()->GetCharAdvance(font->EllipsisChar);
+    const char* kept_end = title.data();
+    const float kept_w =
+        font->CalcTextSizeA(size, std::max(max_w - ellipsis_w, 1.0f), 0.0f, title.data(),
+                            title.data() + title.size(), &kept_end)
+            .x;
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const ImU32 col = ImGui::GetColorU32(ImGuiCol_Text);
+    draw->AddText(font, size, pos, col, title.data(), kept_end);
+    font->RenderChar(draw, size, ImVec2(IM_TRUNC(pos.x + kept_w), pos.y), col, font->EllipsisChar);
+    return kept_w;
 }
 
 // Which hidden columns this frame's second lines named, for the footer.
@@ -327,17 +358,27 @@ SecondLineUse render_table(AppState& app, ImVec2 size) {
             const ImVec2 title_pos = ImGui::GetCursorScreenPos();
             const float title_w = ImGui::GetContentRegionAvail().x;
             const bool selected = !selected_path.empty() && row.entry.notespath == selected_path;
-            if (ImGui::Selectable(row.title.c_str(), selected,
-                                  ImGuiSelectableFlags_SpanAllColumns, ImVec2(0.0f, row_h)))
-                app.select(row.entry);
-            if (ImGui::TableGetHoveredColumn() == kColumnTitle &&
-                ImGui::CalcTextSize(row.title.c_str()).x > title_w)
+            // A title too long for its cell ends in "..." like the other
+            // columns: the Selectable keeps its label (its ID, and the text
+            // log) but draws it invisibly and lays out only the cell's width,
+            // and the cut title is drawn over it.
+            const bool title_cut = ImGui::CalcTextSize(row.title.c_str()).x > title_w;
+            if (title_cut) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+            ImGuiSelectableFlags row_flags = ImGuiSelectableFlags_SpanAllColumns;
+            if (title_cut) row_flags |= ImGuiSelectableFlags_SpanAvailWidth;
+            const bool clicked = ImGui::Selectable(row.title.c_str(), selected, row_flags,
+                                                   ImVec2(title_cut ? title_w : 0.0f, row_h));
+            if (title_cut) ImGui::PopStyleColor();
+            if (clicked) app.select(row.entry);
+            if (ImGui::TableGetHoveredColumn() == kColumnTitle && title_cut)
                 overflow_tooltip(row.title.c_str());
+            const float title_text_w =
+                title_cut ? draw_title_ellipsized(title_pos, title_w, row.title) : title_w;
             if (scroll_to && *scroll_to == static_cast<size_t>(k)) ImGui::SetScrollHereY(0.5f);
             if (searching_words)
                 overlay_matches(title_pos, row.title,
                                 app::match_spans(q, app::QueryField::Title, row.title),
-                                title_pos.x + title_w);
+                                title_pos.x + title_text_w);
             if (two_lines) {
                 const SecondLine line = second_line(q, row, folder_shown, charter_shown);
                 ImGui::SetCursorScreenPos(ImVec2(title_pos.x, title_pos.y + line_h + line_gap));
