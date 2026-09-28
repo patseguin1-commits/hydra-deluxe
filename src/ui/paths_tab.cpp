@@ -91,15 +91,29 @@ float button_width(const char* label) {
 
 // ---- the path list ----------------------------------------------------------
 
+// The space between a path's title and its timing.
+constexpr float kTimingGap = 12.0f;
+
+// The width of `text` on one line in the path list's mono font.
+float mono_width(const std::string& text) {
+    ImGui::PushFont(g_mono_font, 0.0f);
+    const float w = ImGui::CalcTextSize(text.c_str()).x;
+    ImGui::PopFont();
+    return w;
+}
+
 // One path: a full-width Selectable with the id ##path<i>, the title over it
-// (gold for an optimal path) and the detail line under the title. A title
-// longer than the list is wide wraps onto more lines, and the button grows to
-// hold them, so the whole path is always on screen.
+// (gold for an optimal path), the path's own hardest timing right after the
+// title, and the detail line under the title. A title longer than the list is
+// wide wraps onto more lines beside the timing, and the button grows to hold
+// them, so the whole path is always on screen.
 bool path_button(size_t i, const app::PathButtonView& b, bool selected) {
     const float pad = px(6.0f);
     const float gap = px(2.0f);
     const float wrap_w = std::max(1.0f, ImGui::GetContentRegionAvail().x - pad * 2.0f);
-    const float title_h = wrapped_height(b.title.c_str(), wrap_w, g_mono_font);
+    const float timing_w = b.timing.empty() ? 0.0f : px(kTimingGap) + mono_width(b.timing);
+    const float title_wrap_w = std::max(1.0f, wrap_w - timing_w);
+    const float title_h = wrapped_height(b.title.c_str(), title_wrap_w, g_mono_font);
     const float detail_h = b.detail.empty() ? 0.0f : wrapped_height(b.detail.c_str(), wrap_w);
     const float h = pad * 2.0f + title_h + (b.detail.empty() ? 0.0f : gap + detail_h);
     char id[32];
@@ -108,10 +122,15 @@ bool path_button(size_t i, const app::PathButtonView& b, bool selected) {
     const bool clicked = ImGui::Selectable(id, selected, ImGuiSelectableFlags_None, ImVec2(0.0f, h));
     const bool optimal = b.group == app::PathButtonView::Group::Optimal;
     text_at(ImVec2(top.x + pad, top.y + pad), optimal ? kBestPathColor : text_color(),
-            b.title.c_str(), g_mono_font, wrap_w);
+            b.title.c_str(), g_mono_font, title_wrap_w);
+    if (!b.timing.empty()) {
+        const float title_w = std::min(mono_width(b.title), title_wrap_w);
+        text_at(ImVec2(top.x + pad + title_w + px(kTimingGap), top.y + pad),
+                b.timing_warn ? kWarningColor : dim_color(), b.timing.c_str(), g_mono_font);
+    }
     if (!b.detail.empty())
         text_at(ImVec2(top.x + pad, top.y + pad + title_h + gap),
-                b.detail_warn ? kWarningColor : dim_color(), b.detail.c_str(), nullptr, wrap_w);
+                dim_color(), b.detail.c_str(), nullptr, wrap_w);
     end_overlay(top, h);
     return clicked;
 }
@@ -508,10 +527,10 @@ void render_path_panel(AppState& app, const Path*& selected_path) {
     // tab and never taking the details below their minimum; a longer path
     // wraps (path_button). Never under 240 px.
     float widest = 0.0f;
-    ImGui::PushFont(g_mono_font, 0.0f);
     for (const app::PathButtonView& b : list.buttons)
-        widest = std::max(widest, ImGui::CalcTextSize(b.title.c_str()).x);
-    ImGui::PopFont();
+        widest = std::max(widest, mono_width(b.title) +
+                                      (b.timing.empty() ? 0.0f
+                                                        : px(kTimingGap) + mono_width(b.timing)));
     for (const app::PathButtonView& b : list.buttons)
         widest = std::max(widest, ImGui::CalcTextSize(b.detail.c_str()).x);
     const float list_fit = widest + px(6.0f) * 2.0f + ImGui::GetStyle().ScrollbarSize;

@@ -6,11 +6,11 @@
 #endif
 #include <windows.h>
 
-#include "app/display_format.h"  // format_ms_spaced
 #include "app/library_query.h"  // strip_rich_tags
 #include "app/path_view.h"
 #include "core/model.h"
 #include "imgui.h"
+#include "ui/app_shell.h"  // library_hidden
 #include "ui/fonts.h"
 #include "ui/generation.h"
 #include "ui/preview_controller.h"
@@ -26,18 +26,27 @@ namespace hydra::ui {
 
 namespace {
 
-// Title, "artist · charted by charter", and previous / next / close at the
-// right. Clone Hero rich-text tags (<color=...>) are stripped for display.
+// Title, "artist · charted by charter", and hide library / previous / next /
+// close at the right. Clone Hero rich-text tags (<color=...>) are stripped for
+// display.
 void render_panel_header(AppState& app) {
     const ImGuiStyle& style = ImGui::GetStyle();
     const float button = ImGui::GetFrameHeight();
-    const float buttons_w = button * 3.0f + style.ItemSpacing.x * 2.0f;
+    const float library_w = std::max(button_slot_width("Hide library"),
+                                     button_slot_width("Show library"));
+    const float buttons_w = library_w + button * 3.0f + style.ItemSpacing.x * 3.0f;
     const float left_x = ImGui::GetCursorPosX();
     const float top_y = ImGui::GetCursorPosY();
     const float text_w = ImGui::GetContentRegionAvail().x - buttons_w - style.ItemSpacing.x;
 
     // The buttons first, at the right edge, so the title can take the rest.
     ImGui::SetCursorPosX(left_x + text_w + style.ItemSpacing.x);
+    const bool hidden = library_hidden();
+    if (ImGui::Button(hidden ? "Show library" : "Hide library", ImVec2(library_w, button)))
+        remember_library_hidden(!hidden);
+    hint(hidden ? "Put the library back beside this song"
+                : "Give this song the whole window; < and > still step through the list");
+    ImGui::SameLine();
     const bool can_prev = app.can_select_relative(-1);
     begin_disabled_button(!can_prev);
     if (ImGui::Button("<##prevsong", ImVec2(button, button))) app.select_relative(-1);
@@ -68,8 +77,8 @@ void render_panel_header(AppState& app) {
 
 // The optimal score and path in gold with one line of facts under it, and the
 // analyze button at the right. Before a Ready record, the same place says why
-// there is nothing to show. Stars and the hardest squeeze are the stored
-// summary's (T7), never worked out again here.
+// there is nothing to show. Stars are the stored summary's (T7), never worked
+// out again here.
 void render_headline(AppState& app) {
     const store::RecordStatus status = app.viewed.status;
     const char* label = status == store::RecordStatus::NotAnalyzed ? "Analyze this song"
@@ -108,30 +117,28 @@ void render_headline(AppState& app) {
         const Path& best = app.viewed.record->best_path();
         ImGui::PushStyleColor(ImGuiCol_Text, kBestPathColor);
         ImGui::PushFont(nullptr, 40.0f);
+        const float score_ascent = ImGui::GetFontBaked()->Ascent;
         ImGui::TextUnformatted(group_thousands(best.totalscore()).c_str());
         ImGui::PopFont();
         ImGui::SameLine(0.0f, px(18.0f));
         ImGui::PushFont(g_mono_font, 24.0f);
+        // SameLine starts the path at the line's top; drop it so its baseline
+        // sits on the score's.
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + score_ascent -
+                             ImGui::GetFontBaked()->Ascent);
         text_ellipsized(best.pathstring().c_str(), left_x + text_w - ImGui::GetCursorPosX());
         ImGui::PopFont();
         ImGui::PopStyleColor();
 
+        // Each path's hardest timing sits beside it in the path list, so the
+        // headline doesn't repeat the optimal one's.
         const store::PathSummary& summary = app.viewed_summary;
         std::string facts = "Optimal path";
         if (summary.stars)
             facts += " \xC2\xB7 " + std::to_string(*summary.stars) +
                      (*summary.stars == 1 ? " star" : " stars");
         ImGui::PushStyleColor(ImGuiCol_Text, kSubtleTextColor);
-        if (summary.hardest_ms) {
-            facts += " \xC2\xB7 hardest squeeze";
-            ImGui::TextUnformatted(facts.c_str());
-            ImGui::SameLine();
-            ImGui::TextColored(kWarningColor, "%s",
-                               app::format_ms_spaced(*summary.hardest_ms).c_str());
-        } else {
-            facts += " \xC2\xB7 no squeezes";
-            ImGui::TextUnformatted(facts.c_str());
-        }
+        ImGui::TextUnformatted(facts.c_str());
         ImGui::PopStyleColor();
     }
     ImGui::EndGroup();

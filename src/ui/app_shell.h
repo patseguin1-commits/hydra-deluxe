@@ -88,10 +88,18 @@ void remember_window_placement(const WindowPlacement& p);
 // open, until the user drags the edge between them.
 inline constexpr float kDefaultLibraryShare = 0.4f;
 
-// The body of the [Hydra][Layout] section: "LibraryShare=<0..1>". Parsing
-// takes one line and ignores lines it doesn't know and shares outside (0, 1).
-std::string format_layout(float library_share);
-void parse_layout_line(std::string_view line, float& library_share);
+// The [Hydra][Layout] section: the split, and whether the song panel's "Hide
+// library" button has the library hidden.
+struct Layout {
+    float library_share = kDefaultLibraryShare;
+    bool library_hidden = false;
+};
+
+// The section's body: "LibraryShare=<0..1>" and "LibraryHidden=<0|1>".
+// Parsing takes one line and ignores lines it doesn't know, shares outside
+// (0, 1) and hidden values other than 0 and 1.
+std::string format_layout(const Layout& layout);
+void parse_layout_line(std::string_view line, Layout& layout);
 
 // The share setup_imgui read from hydra_ui.ini (kDefaultLibraryShare when
 // there was none), updated by every remember_library_share since.
@@ -99,6 +107,12 @@ float library_share();
 // Records a split the user dragged to. It reaches hydra_ui.ini with ImGui's
 // own settings, like the window placement.
 void remember_library_share(float share);
+
+// Whether the library is hidden while a song is open, as hydra_ui.ini said
+// and the "Hide library" / "Show library" button set since. It only hides the
+// library beside an open song; with no song open the library always shows.
+bool library_hidden();
+void remember_library_hidden(bool hidden);
 
 // ---- UI scale ----------------------------------------------------------
 

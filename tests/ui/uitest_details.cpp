@@ -396,6 +396,64 @@ void test_panel_split(ImGuiTestContext* ctx) {
     IM_CHECK_FLOAT_NEAR_EQ(library()->Size.x, (std::max)(hydra::ui::px(320.0f), 0.3f * room), 1.0f);
 }
 
+// "Hide library" gives the song panel the whole width and flips to "Show
+// library"; < and > still step through the list; closing the panel shows the
+// library; the next song opens with it hidden again (it is remembered); "Show
+// library" puts it back at its share.
+void test_panel_hide_library(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    auto library = [&] { return ctx->WindowInfo("//Hydra/##library").Window; };
+    auto panel = [&] { return ctx->WindowInfo("//Hydra/##songpanel").Window; };
+    auto on_screen = [&](const char* s) { return visible_text(h).find(s) != std::string::npos; };
+
+    open_details(ctx, 0);
+    if (ctx->IsError()) return;
+    ctx->Yield(2);
+    const float room = library()->Size.x + panel()->Size.x;
+    const float shared = library()->Size.x;
+    IM_CHECK(on_screen("Hide library"));
+    IM_CHECK(!hydra::ui::library_hidden());
+
+    ctx->SetRef("//Hydra");
+    ctx->ItemClick("**/Hide library");
+    ctx->Yield(3);
+    IM_CHECK(hydra::ui::library_hidden());
+    IM_CHECK(on_screen("Show library"));
+    IM_CHECK(!on_screen("Hide library"));
+    IM_CHECK_FLOAT_NEAR_EQ(panel()->Size.x, room, 1.0f);
+    IM_CHECK(!on_screen("Library"));  // the pane's heading is gone
+
+    // Next song still works with the library hidden.
+    const std::string first = h.app->selected->notespath;
+    ctx->ItemClick("**/>##nextsong");
+    ctx->Yield(2);
+    IM_CHECK(h.app->selected->notespath != first);
+    IM_CHECK_FLOAT_NEAR_EQ(panel()->Size.x, room, 1.0f);
+
+    // Closing shows the library full width; the next song opens hidden again.
+    ctx->ItemClick("**/X##closepanel");
+    ctx->Yield(3);
+    if (ctx->IsError()) return;
+    IM_CHECK(library()->Size.x > room * 0.9f);
+    IM_CHECK(hydra::ui::library_hidden());
+    open_details(ctx, 0);
+    if (ctx->IsError()) return;
+    ctx->Yield(2);
+    IM_CHECK_FLOAT_NEAR_EQ(panel()->Size.x, room, 1.0f);
+
+    // Show library: back at its share, button reads Hide again.
+    ctx->SetRef("//Hydra");
+    ctx->ItemClick("**/Show library");
+    ctx->Yield(3);
+    IM_CHECK(!hydra::ui::library_hidden());
+    IM_CHECK(on_screen("Hide library"));
+    IM_CHECK_FLOAT_NEAR_EQ(library()->Size.x, shared, 1.0f);
+    IM_CHECK_FLOAT_NEAR_EQ(library()->Size.x + panel()->Size.x, room, 1.0f);
+}
+
 // Every window on screen whose content is wider than its room (and that has
 // no horizontal scroll bar to reach the rest): text or buttons running past
 // an edge. Tooltips and ImGui's own debug window aside.
@@ -563,8 +621,9 @@ void test_panel_headline(ImGuiTestContext* ctx) {
     }, 5));
     text = visible_text(h);
     IM_CHECK(text.find("3- 1 2") != std::string::npos);
-    IM_CHECK(text.find("Optimal path \xC2\xB7 7 stars \xC2\xB7 hardest squeeze") !=
-             std::string::npos);
+    IM_CHECK(text.find("Optimal path \xC2\xB7 7 stars") != std::string::npos);
+    // The hardest timing sits beside each path in the list, not in the headline.
+    IM_CHECK(text.find("hardest squeeze") == std::string::npos);
     IM_CHECK(text.find("163.0 ms") != std::string::npos);
     IM_CHECK(ctx->ItemExists("**/Re-analyze"));
 }
@@ -624,6 +683,7 @@ const std::vector<TestEntry>& details_tests() {
         {"details-close-teardown", test_details_close_teardown},
         {"panel-open-close", test_panel_open_close},
         {"panel-split", test_panel_split},
+        {"panel-hide-library", test_panel_hide_library},
         {"layout-sweep", test_layout_sweep},
         {"long-error-wraps", test_long_error_wraps},
         {"panel-prev-next", test_panel_prev_next},

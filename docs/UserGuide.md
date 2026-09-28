@@ -48,7 +48,7 @@ For example, say you analyzed a song with 2x Bass on and want to see it with 1x 
 
 ## Searching the library
 
-The library lists every song from the latest scan. Its columns are **Title**, **Artist**, **Charter**, **Folder** and **Best path**. Click a column heading to sort by it. Columns can be resized and hidden, and Hydra remembers them. While the song panel is open, the Charter and Folder columns step aside to save room, and the folder shows under the title.
+The library lists every song from the latest scan. Its columns are **Title**, **Artist**, **Charter**, **Folder** and **Best path**. Click a column heading to sort by it. Columns can be resized and hidden, and Hydra remembers them, the sort included. The columns always stay in this order. While the song panel is open, the Charter and Folder columns step aside to save room, and the folder shows under the title.
 
 The **Best path** cell shows the song's state under the current analysis settings:
 
@@ -87,9 +87,11 @@ Under the table, a search shows a `Clear search` button. When a match came from 
 
 Click a song to open its panel beside the library. The top shows the title, the artist and the charter. The `<` and `>` buttons step to the previous and next song in the list. The `X` button, or `Escape`, closes the panel.
 
+**`Hide library`**, left of `<`, gives the song panel the whole window. It then reads `Show library`, which puts the library back at the width you left it. `<` and `>` still step through the list while it's hidden. Closing the panel always brings the library back. Hydra remembers the choice, so the next song opens the same way, even after a restart.
+
 The button on the right analyzes the song. It reads `Analyze this song` when there is no result, and `Re-analyze` when there is one. A long analysis shows a progress bar and can be cancelled. Closing the panel does not stop it: the analysis finishes, is saved, and the library row updates.
 
-Under the button is the headline: the best score, its path, and one line like `Optimal path · 7 stars · hardest squeeze 163.0 ms`. A Stale result says why it is out of date.
+Under the button is the headline: the best score, its path, and one line like `Optimal path · 7 stars`. A Stale result says why it is out of date.
 
 If the song's file has moved or been deleted since the last scan, the panel says `Song file not found.` and offers a `Rescan library` button.
 
@@ -99,7 +101,9 @@ The panel has four tabs: **Paths**, **Preview**, **Dynamics** and **Stars**.
 
 The left side lists the paths the analysis kept, grouped by score. **Optimal** comes first. Then come the extra paths under a heading like **Within 2 scores**. Last is **Best all-0 path**: the best path that activates at the first chance every time, with no skips and no squeeze timing, and how far it falls below optimal. Click a path to show it on the right.
 
-The right side starts with a summary, like `Activations 3 · 3 bars each · no SP left over`. Under it, a timeline runs from the first measure to the last, with a mark for each activation. Results saved before this version show no timeline until the song is analyzed again.
+Each path shows its own hardest timing right after it, like `378,315 · 3- 1 2   163.0 ms`: the hardest squeeze or calibration fill that path needs. It turns orange past the difficult limit. A path that needs no timing shows nothing there.
+
+The right side starts with a summary, like `Activations 3 · no SP left over`. Under it, a timeline runs from the first measure to the last, with a mark for each activation. Results saved before this version show no timeline until the song is analyzed again.
 
 Each activation is one row. It shows the activation's number, its notation, its measure (like `m32.1.0`), how many bars of SP you spend, and a badge for a squeeze, like `squeeze out 163 ms`. Click a row to open it, or use `Expand all` and `Collapse all`.
 
@@ -140,6 +144,8 @@ The transport buttons are `-5s`, `< 5 Ticks`, `Play`/`Pause`, `5 Ticks >` and `+
 - `Left` and `Right` arrows jump 5 seconds.
 - `,` (comma) and `.` (period) step 5 ticks.
 - `[` and `]` jump between activations.
+
+The same keys are drawn as keycaps in a bar under the highway, in the buttons' order. Each button's tooltip names its key too.
 
 The scrubber under the highway shows where you are. Its gold marks are the path's activations.
 

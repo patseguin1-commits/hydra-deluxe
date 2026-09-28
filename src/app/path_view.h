@@ -99,7 +99,7 @@ struct ActivationRowView {
 
 struct ActivationsView {
     std::vector<ActivationRowView> acts;
-    // Beside the "Activations" heading: "3 · 3 bars each · no SP left over".
+    // Beside the "Activations" heading: "3 · no SP left over".
     // Empty when the path has no activations.
     std::string summary;
     // The timeline's right-hand label, "m96": the measure the song's length
@@ -180,10 +180,13 @@ struct PathButtonView {
     Group group = Group::Optimal;
     std::string notation;   // Path::pathstring(), "3- 1 2"
     std::string title;      // "378,315 · 3- 1 2"
-    // The line under the title: "hardest squeeze 163.0 ms" when the path has
-    // a difficulty, "2,360 below optimal" on the all-0 path, else empty.
+    // Beside the title: this path's own hardest squeeze or fill, "163.0 ms",
+    // empty when the path needs no timing.
+    std::string timing;
+    bool timing_warn = false;  // Path::is_difficult()
+    // The line under the title: "2,360 below optimal" on the all-0 path,
+    // else empty.
     std::string detail;
-    bool detail_warn = false;  // Path::is_difficult()
 };
 
 struct PathButtonsView {

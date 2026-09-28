@@ -283,6 +283,7 @@ void reset_app(Harness& h, const std::string& rules_text) {
     // The split outlives an AppState (it is hydra_ui.ini's), so a test that
     // dragged it would hand its split to the next test.
     hydra::ui::remember_library_share(hydra::ui::kDefaultLibraryShare);
+    hydra::ui::remember_library_hidden(false);
 
     h.app = std::make_unique<hydra::ui::AppState>();
     h.app->set_render_device(h.device.Get(), h.context.Get());

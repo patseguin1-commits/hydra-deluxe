@@ -131,16 +131,24 @@ TEST_CASE("app_shell: hydra_ui.ini remembers the window placement") {
 }
 
 TEST_CASE("app_shell: the [Hydra][Layout] text round-trips and refuses junk") {
-    CHECK(hydra::ui::format_layout(0.35f) == "LibraryShare=0.3500\n");
-    float share = hydra::ui::kDefaultLibraryShare;
-    hydra::ui::parse_layout_line("LibraryShare=0.3500", share);
-    CHECK(share == doctest::Approx(0.35f));
-    // Anything else leaves the share alone.
+    CHECK(hydra::ui::format_layout({0.35f, false}) == "LibraryShare=0.3500\nLibraryHidden=0\n");
+    CHECK(hydra::ui::format_layout({0.35f, true}) == "LibraryShare=0.3500\nLibraryHidden=1\n");
+    hydra::ui::Layout layout;
+    hydra::ui::parse_layout_line("LibraryShare=0.3500", layout);
+    CHECK(layout.library_share == doctest::Approx(0.35f));
+    CHECK_FALSE(layout.library_hidden);
+    hydra::ui::parse_layout_line("LibraryHidden=1", layout);
+    CHECK(layout.library_hidden);
+    // Anything else leaves both alone.
     for (const char* line : {"LibraryShare=abc", "LibraryShare=0", "LibraryShare=1",
                              "LibraryShare=1.5", "LibraryShare=-0.2", "LibraryShare=0.3x",
-                             "LibraryShare=", "Colour=blue"})
-        hydra::ui::parse_layout_line(line, share);
-    CHECK(share == doctest::Approx(0.35f));
+                             "LibraryShare=", "Colour=blue", "LibraryHidden=2",
+                             "LibraryHidden=", "LibraryHidden=yes"})
+        hydra::ui::parse_layout_line(line, layout);
+    CHECK(layout.library_share == doctest::Approx(0.35f));
+    CHECK(layout.library_hidden);
+    hydra::ui::parse_layout_line("LibraryHidden=0", layout);
+    CHECK_FALSE(layout.library_hidden);
 }
 
 TEST_CASE("app_shell: hydra_ui.ini remembers the library split, not the child's own width") {
@@ -155,17 +163,21 @@ TEST_CASE("app_shell: hydra_ui.ini remembers the library split, not the child's 
     }
     hydra::ui::setup_imgui(test_options(ini.string()));
     CHECK(hydra::ui::library_share() == doctest::Approx(hydra::ui::kDefaultLibraryShare));
+    CHECK_FALSE(hydra::ui::library_hidden());
     hydra::ui::remember_library_share(0.25f);
+    hydra::ui::remember_library_hidden(true);
     hydra::ui::shutdown_imgui();  // DestroyContext writes the ini
 
     hydra::ui::setup_imgui(test_options(ini.string()));
     CHECK(hydra::ui::library_share() == doctest::Approx(0.25f));
+    CHECK(hydra::ui::library_hidden());
     hydra::ui::shutdown_imgui();
 
     std::ifstream f(ini);
     std::stringstream text;
     text << f.rdbuf();
-    CHECK(text.str().find("[Hydra][Layout]\nLibraryShare=0.2500\n") != std::string::npos);
+    CHECK(text.str().find("[Hydra][Layout]\nLibraryShare=0.2500\nLibraryHidden=1\n") !=
+          std::string::npos);
     f.close();
     std::filesystem::remove_all(dir);
 }

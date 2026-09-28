@@ -28,7 +28,9 @@ void render_library_pane(AppState& app) {
 
 // The library and, when a song is open, the song panel beside it. The
 // library's right edge drags (ImGuiChildFlags_ResizeX); with no song open the
-// library takes the full width.
+// library takes the full width. The panel's "Hide library" button
+// (library_hidden()) gives the panel the full width instead, and the library
+// comes back at its remembered share.
 //
 // The split is kept as the library's share of the width, in hydra_ui.ini's
 // [Hydra][Layout] section, and only a drag changes it. The child itself
@@ -40,7 +42,13 @@ void render_library_and_panel(AppState& app) {
     const bool panel = app.details_open();
     const float avail_w = ImGui::GetContentRegionAvail().x;
     const float min_library = px(320.0f);
-    if (panel) {
+    // Read once: the panel's button can flip it later this frame.
+    const bool library_shown = !(panel && library_hidden());
+    if (!library_shown) {
+        // Counts as a closed panel, so the split sets its width again from
+        // the share when the library comes back.
+        ui.panel_was_open = false;
+    } else if (panel) {
         const float max_library = std::max(min_library, avail_w - px(kMinSongPanelW));
         ImGui::SetNextWindowSizeConstraints(ImVec2(min_library, 0.0f),
                                             ImVec2(max_library, FLT_MAX));
@@ -63,16 +71,19 @@ void render_library_and_panel(AppState& app) {
         if (!set_width && std::fabs(w - ui.library_w) > 0.5f && avail_w > 0.0f)
             remember_library_share(w / avail_w);
         ui.library_w = w;
+        ui.panel_was_open = true;
     } else {
         ImGui::BeginChild("##library", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None,
                           ImGuiWindowFlags_NoSavedSettings);
+        ui.panel_was_open = false;
     }
-    ui.panel_was_open = panel;
-    render_library_pane(app);
-    ImGui::EndChild();
+    if (library_shown) {
+        render_library_pane(app);
+        ImGui::EndChild();
+    }
 
     if (panel) {
-        ImGui::SameLine(0.0f, 0.0f);
+        if (library_shown) ImGui::SameLine(0.0f, 0.0f);
         ImGui::PushStyleColor(ImGuiCol_ChildBg, kPanelBg);
         ImGui::BeginChild("##songpanel", ImVec2(0.0f, 0.0f),
                           ImGuiChildFlags_AlwaysUseWindowPadding);

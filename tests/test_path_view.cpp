@@ -175,15 +175,17 @@ TEST_CASE("build_activations: the calibration fill reads positive = early on bot
     CHECK(av.calibration == "Calibration fill: -20.0ms (optional)");
 }
 
-TEST_CASE("path buttons: the hardest squeeze line, warn past the difficult floor") {
-    auto detail_of = [](const Path& p) {
+TEST_CASE("path buttons: each path's own hardest timing, warn past the difficult floor") {
+    auto button_of = [](const Path& p) {
         HydraRecord rec;
         rec.paths.push_back(p);
         PathButtonsView v = build_path_buttons(rec, 0, 2);
         REQUIRE(v.buttons.size() == 1);
         return v.buttons[0];
     };
-    CHECK(detail_of(Path{}).detail.empty());  // no activations, no difficulty
+    PathButtonView none = button_of(Path{});  // no activations, no difficulty
+    CHECK(none.timing.empty());
+    CHECK(none.detail.empty());
 
     Path hard;
     Activation act;
@@ -191,15 +193,16 @@ TEST_CASE("path buttons: the hardest squeeze line, warn past the difficult floor
     act.e_offset = 300.0;  // not e-critical
     act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -12.5});
     hard.activations.push_back(act);
-    PathButtonView b = detail_of(hard);
-    CHECK(b.detail == "hardest squeeze 12.5 ms");
-    CHECK(b.detail_warn);
+    PathButtonView b = button_of(hard);
+    CHECK(b.timing == "12.5 ms");
+    CHECK(b.timing_warn);
+    CHECK(b.detail.empty());
 
     Path easy = hard;
     easy.activations[0].sqinouts[0].offset_ms = -1.5;
-    b = detail_of(easy);
-    CHECK(b.detail == "hardest squeeze 1.5 ms");
-    CHECK_FALSE(b.detail_warn);
+    b = button_of(easy);
+    CHECK(b.timing == "1.5 ms");
+    CHECK_FALSE(b.timing_warn);
 }
 
 TEST_CASE("build_path_list: score groups and the all-0 dedupe rule") {
@@ -638,7 +641,7 @@ TEST_CASE("activation rows: Burnout's three activations") {
 
     ActivationsView view = build_activations(best, rec, &timing, kDefaultHitWindowMs);
     REQUIRE(view.acts.size() == 3);
-    CHECK(view.summary == "3" + kDot + "3 bars each" + kDot + "no SP left over");
+    CHECK(view.summary == "3" + kDot + "no SP left over");
 
     const ActivationRowView& a1 = view.acts[0];
     CHECK(a1.number == 1);
@@ -694,7 +697,7 @@ TEST_CASE("activation timeline: onset over the song's length, and the end measur
     REQUIRE(view.acts[0].song_fraction.has_value());
     CHECK(*view.acts[0].song_fraction == doctest::Approx(0.2));
     CHECK(view.timeline_end == "m6");  // 10 s is tick 3840, the start of measure 6
-    CHECK(view.summary == "1" + kDot + "2 bars" + kDot + "no SP left over");
+    CHECK(view.summary == "1" + kDot + "no SP left over");
 
     // No timing: no fraction, whatever the length.
     ActivationsView blind = build_activations(p, rec, nullptr, 85.0, std::nullopt,
@@ -810,11 +813,13 @@ TEST_CASE("path buttons: Burnout's list, in the mockup's groups") {
     CHECK(v.buttons[0].group == PathButtonView::Group::Optimal);
     CHECK(v.buttons[0].notation == "3- 1 2");
     CHECK(v.buttons[0].title == "378,315" + kDot + "3- 1 2");
-    CHECK(v.buttons[0].detail == "hardest squeeze 163.0 ms");
-    CHECK(v.buttons[0].detail_warn);
+    CHECK(v.buttons[0].timing == "163.0 ms");
+    CHECK(v.buttons[0].timing_warn);
+    CHECK(v.buttons[0].detail.empty());
 
     CHECK(v.buttons[1].group == PathButtonView::Group::Within);
     CHECK(v.buttons[1].title == "378,175" + kDot + "0 4 1");
+    CHECK(v.buttons[1].timing.empty());  // needs no squeeze
     CHECK(v.buttons[1].detail.empty());
     CHECK(v.buttons[2].group == PathButtonView::Group::Within);
     CHECK(v.buttons[2].title == "378,075" + kDot + "2 1 2");
@@ -822,7 +827,6 @@ TEST_CASE("path buttons: Burnout's list, in the mockup's groups") {
     CHECK(v.buttons[3].group == PathButtonView::Group::AllZero);
     CHECK(v.buttons[3].title == "375,955" + kDot + "0 0 0 0");
     CHECK(v.buttons[3].detail == "2,360 below optimal");
-    CHECK_FALSE(v.buttons[3].detail_warn);
 
     CHECK(within_label(0, 1) == "Within 1 score");
     CHECK(within_label(1, 5000) == "Within 5,000 points");

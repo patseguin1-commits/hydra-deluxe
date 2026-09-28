@@ -70,8 +70,8 @@ bool open_burnout(ImGuiTestContext* ctx) {
     return true;
 }
 
-// The path list: three headings, the buttons' titles and detail lines, and a
-// click that changes the shared selection.
+// The path list: three headings, the buttons' titles, each path's own timing
+// and the detail line, and a click that changes the shared selection.
 void test_paths_list(ImGuiTestContext* ctx) {
     Harness& h = harness(ctx);
     if (!open_burnout(ctx)) return;
@@ -81,7 +81,8 @@ void test_paths_list(ImGuiTestContext* ctx) {
     IM_CHECK(on_screen(h, "Best all-0 path"));
     IM_CHECK(!on_screen(h, "0 ms limit"));
     IM_CHECK(on_screen(h, "378,315" + dot + "3- 1 2"));
-    IM_CHECK(on_screen(h, "hardest squeeze 163.0 ms"));
+    IM_CHECK(on_screen(h, "163.0 ms"));
+    IM_CHECK(!on_screen(h, "hardest squeeze"));
     IM_CHECK(on_screen(h, "378,175" + dot + "0 4 1"));
     IM_CHECK(on_screen(h, "375,955" + dot + "0 0 0 0"));
     IM_CHECK(on_screen(h, "2,360 below optimal"));
@@ -109,7 +110,8 @@ void test_paths_rows(ImGuiTestContext* ctx) {
     if (!open_burnout(ctx)) return;
     const std::string dot = " \xC2\xB7 ";
     IM_CHECK(on_screen(h, "Activations"));
-    IM_CHECK(on_screen(h, "3" + dot + "3 bars each" + dot + "no SP left over"));
+    IM_CHECK(on_screen(h, "3" + dot + "no SP left over"));
+    IM_CHECK(!on_screen(h, "bars each"));
     IM_CHECK(on_screen(h, "m32.1.0"));
     IM_CHECK(on_screen(h, "m58.1.0"));
     IM_CHECK(on_screen(h, "m88.1.0"));
@@ -269,7 +271,8 @@ ImGuiWindow* window_named(const char* part) {
 
 // At the panel's narrowest the Paths tab still fits: with every row, a
 // backend table and "Copied!" showing, nothing in the right column runs past
-// its edge, and the path list keeps its 240 px.
+// its edge, and the path list keeps at least its 240 px (Burnout's optimal
+// row, with its timing beside it, is a little wider than that).
 void test_paths_fit_narrow(ImGuiTestContext* ctx) {
     Harness& h = harness(ctx);
     if (!open_burnout(ctx)) return;
@@ -291,7 +294,7 @@ void test_paths_fit_narrow(ImGuiTestContext* ctx) {
     IM_CHECK(details != nullptr && list != nullptr);
     if (ctx->IsError()) return;
     IM_CHECK_LE(details->ContentSize.x, details->ContentRegionRect.GetWidth() + 0.5f);
-    IM_CHECK_FLOAT_NEAR_EQ(list->Size.x, hydra::ui::px(hydra::ui::kMinPathListW), 0.5f);
+    IM_CHECK_GE(list->Size.x, hydra::ui::px(hydra::ui::kMinPathListW) - 0.5f);
 }
 
 // The scratch library's longest path (9 activations): the path list takes at

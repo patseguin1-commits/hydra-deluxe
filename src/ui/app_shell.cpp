@@ -27,8 +27,9 @@ namespace {
 
 // What hydra_ui.ini said, then what main.cpp reported since.
 WindowPlacement g_placement;
-// What hydra_ui.ini said, then what the user dragged the split to since.
-float g_library_share = kDefaultLibraryShare;
+// What hydra_ui.ini said, then what the user dragged the split to and the
+// library button set since.
+Layout g_layout;
 // The theme at scale 1, captured by setup_imgui after apply_theme().
 ImGuiStyle g_base_style;
 
@@ -50,13 +51,13 @@ bool read_int_pair(std::string_view text, int& a, int& b) {
 // it, and WriteAll whenever it saves the file.
 void* placement_read_open(ImGuiContext*, ImGuiSettingsHandler*, const char* name) {
     if (std::strcmp(name, "Window") == 0) return &g_placement;
-    if (std::strcmp(name, "Layout") == 0) return &g_library_share;
+    if (std::strcmp(name, "Layout") == 0) return &g_layout;
     return nullptr;
 }
 
 void placement_read_line(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const char* line) {
-    if (entry == &g_library_share)
-        parse_layout_line(line, g_library_share);
+    if (entry == &g_layout)
+        parse_layout_line(line, g_layout);
     else
         parse_window_placement_line(line, *static_cast<WindowPlacement*>(entry));
 }
@@ -68,7 +69,7 @@ void placement_write_all(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiText
         out->append("\n");
     }
     out->appendf("[%s][Layout]\n", handler->TypeName);
-    out->append(format_layout(g_library_share).c_str());
+    out->append(format_layout(g_layout).c_str());
     out->append("\n");
 }
 
@@ -117,27 +118,44 @@ void remember_window_placement(const WindowPlacement& p) {
     if (ImGui::GetCurrentContext()) ImGui::MarkIniSettingsDirty();
 }
 
-std::string format_layout(float library_share) {
-    char text[48];
-    std::snprintf(text, sizeof(text), "LibraryShare=%.4f\n", library_share);
+std::string format_layout(const Layout& layout) {
+    char text[64];
+    std::snprintf(text, sizeof(text), "LibraryShare=%.4f\nLibraryHidden=%d\n",
+                  layout.library_share, layout.library_hidden ? 1 : 0);
     return text;
 }
 
-void parse_layout_line(std::string_view line, float& library_share) {
+void parse_layout_line(std::string_view line, Layout& layout) {
+    if (line == "LibraryHidden=1") {
+        layout.library_hidden = true;
+        return;
+    }
+    if (line == "LibraryHidden=0") {
+        layout.library_hidden = false;
+        return;
+    }
     constexpr std::string_view kKey = "LibraryShare=";
     if (line.substr(0, kKey.size()) != kKey) return;
     const std::string value(line.substr(kKey.size()));
     char* end = nullptr;
     const float v = std::strtof(value.c_str(), &end);
     if (end == value.c_str() || *end != '\0' || !(v > 0.0f && v < 1.0f)) return;
-    library_share = v;
+    layout.library_share = v;
 }
 
-float library_share() { return g_library_share; }
+float library_share() { return g_layout.library_share; }
 
 void remember_library_share(float share) {
-    if (!(share > 0.0f && share < 1.0f) || share == g_library_share) return;
-    g_library_share = share;
+    if (!(share > 0.0f && share < 1.0f) || share == g_layout.library_share) return;
+    g_layout.library_share = share;
+    if (ImGui::GetCurrentContext()) ImGui::MarkIniSettingsDirty();
+}
+
+bool library_hidden() { return g_layout.library_hidden; }
+
+void remember_library_hidden(bool hidden) {
+    if (hidden == g_layout.library_hidden) return;
+    g_layout.library_hidden = hidden;
     if (ImGui::GetCurrentContext()) ImGui::MarkIniSettingsDirty();
 }
 
@@ -189,7 +207,7 @@ void setup_imgui(const ImGuiSetupOptions& options) {
     // frame (ImGui skips its own first-frame read once this has run), so
     // main.cpp can put the window back before it is shown.
     g_placement = WindowPlacement{};
-    g_library_share = kDefaultLibraryShare;
+    g_layout = Layout{};
     ImGuiSettingsHandler placement_handler;
     placement_handler.TypeName = "Hydra";
     placement_handler.TypeHash = ImHashStr("Hydra");

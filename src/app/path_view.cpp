@@ -377,20 +377,12 @@ ActivationsView build_activations(const Path& path, const HydraRecord& /*record*
         view.acts.push_back(std::move(av));
     }
 
-    // The line beside the heading: how many, how many bars each, what is left.
+    // The line beside the heading: how many, and what is left.
     if (!view.acts.empty()) {
-        int lo = view.acts.front().sp_bars, hi = lo;
-        for (const ActivationRowView& a : view.acts) {
-            lo = std::min(lo, a.sp_bars);
-            hi = std::max(hi, a.sp_bars);
-        }
-        const std::string bars =
-            lo == hi ? bars_text(lo) + (view.acts.size() > 1 ? " each" : "")
-                     : std::to_string(lo) + " to " + std::to_string(hi) + " bars";
         const std::string left = path.leftover_sp == 0
                                      ? std::string("no SP left over")
                                      : bars_text(path.leftover_sp) + " of SP left over";
-        view.summary = std::to_string(view.acts.size()) + kDot + bars + kDot + left;
+        view.summary = std::to_string(view.acts.size()) + kDot + left;
     }
     if (timing && song_length_ms && *song_length_ms > 0.0) {
         const int64_t end_tick = std::llround(timing->ms_index().tick_at_ms(*song_length_ms));
@@ -488,14 +480,15 @@ PathButtonsView build_path_buttons(const HydraRecord& record, int depth_mode, in
         b.group = group;
         b.notation = p->pathstring();
         b.title = group_thousands(p->totalscore()) + kDot + b.notation;
+        if (std::optional<double> hardest = p->difficulty()) {
+            b.timing = format_ms_spaced(*hardest);
+            b.timing_warn = p->is_difficult();
+        }
         if (group == PathButtonView::Group::AllZero) {
             // What the all-0 path costs against the optimal one.
             const int64_t delta = p->totalscore() - best;
             if (delta < 0) b.detail = group_thousands(-delta) + " below optimal";
             if (delta > 0) b.detail = group_thousands(delta) + " above optimal";
-        } else if (std::optional<double> hardest = p->difficulty()) {
-            b.detail = "hardest squeeze " + format_ms_spaced(*hardest);
-            b.detail_warn = p->is_difficult();
         }
         view.buttons.push_back(std::move(b));
     };
