@@ -1,5 +1,8 @@
 #include <algorithm>
+#include <cstdio>
+#include <cstring>
 #include <string>
+#include <vector>
 
 #include "uitest_harness.h"
 
@@ -393,6 +396,80 @@ void test_panel_split(ImGuiTestContext* ctx) {
     IM_CHECK_FLOAT_NEAR_EQ(library()->Size.x, (std::max)(hydra::ui::px(320.0f), 0.3f * room), 1.0f);
 }
 
+// Every window on screen whose content is wider than its room (and that has
+// no horizontal scroll bar to reach the rest): text or buttons running past
+// an edge. Tooltips and ImGui's own debug window aside.
+void overflowing_windows(const std::string& screen, std::vector<std::string>& found) {
+    for (ImGuiWindow* w : ImGui::GetCurrentContext()->Windows) {
+        if (!w->WasActive || (w->Flags & ImGuiWindowFlags_Tooltip) ||
+            (w->Flags & ImGuiWindowFlags_HorizontalScrollbar) ||
+            std::strncmp(w->Name, "Debug##", 7) == 0)
+            continue;
+        const float room = w->ContentRegionRect.GetWidth();
+        if (w->ContentSize.x > room + 0.5f) {
+            char line[512];
+            std::snprintf(line, sizeof(line), "%s: %s content %.0f px, room %.0f px",
+                          screen.c_str(), w->Name, w->ContentSize.x, room);
+            found.push_back(line);
+        }
+    }
+}
+
+// Walks the song panel's four tabs on charts with long titles and long paths,
+// at the narrowest and the widest panel, and fails naming every window whose
+// content runs past its edge.
+void test_layout_sweep(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    std::vector<std::string> found;
+    ctx->Yield(2);
+    overflowing_windows("library", found);
+
+    struct Chart {
+        const char* search;
+        const char* title;
+    };
+    const Chart charts[] = {
+        {"burnout", "Burnout"},
+        {"spiraling void", "The Spiraling Void"},
+        {"tapestry", "Tapestry of the Starless Abstract (Shortened)"},
+    };
+    for (const Chart& c : charts) {
+        open_titled(ctx, c.search, c.title);
+        if (ctx->IsError()) return;
+        analyze_open_song(ctx);
+        if (ctx->IsError()) return;
+        for (float share : {0.99f, 0.01f}) {
+            hydra::ui::remember_library_share(share);
+            h.app->library_ui.panel_was_open = false;
+            ctx->Yield(3);
+            const std::string at = std::string(c.title) + (share > 0.5f ? " narrow " : " wide ");
+            set_panel_ref(ctx);
+            ctx->ItemClick("**/##DetailsTabs/Paths");
+            ctx->Yield(2);
+            if (ctx->ItemExists("**/Expand all")) ctx->ItemClick("**/Expand all");
+            ctx->Yield(2);
+            overflowing_windows(at + "Paths", found);
+            ctx->ItemClick("**/##DetailsTabs/Preview");
+            wait_until(ctx, [&] { return h.app->preview && h.app->preview->active() &&
+                                         !h.app->preview->loading(); }, 120);
+            ctx->Yield(3);
+            overflowing_windows(at + "Preview", found);
+            ctx->ItemClick("**/##DetailsTabs/Dynamics");
+            ctx->Yield(10);
+            overflowing_windows(at + "Dynamics", found);
+            ctx->ItemClick("**/##DetailsTabs/Stars");
+            ctx->Yield(3);
+            overflowing_windows(at + "Stars", found);
+            if (ctx->IsError()) return;
+        }
+    }
+    for (const std::string& f : found) std::fprintf(stderr, "OVERFLOW %s\n", f.c_str());
+    IM_CHECK_EQ(found.size(), (size_t)0);
+}
+
 // Previous / next step through the library's rows and stop at the ends.
 void test_panel_prev_next(ImGuiTestContext* ctx) {
     Harness& h = harness(ctx);
@@ -494,6 +571,7 @@ const std::vector<TestEntry>& details_tests() {
         {"details-close-teardown", test_details_close_teardown},
         {"panel-open-close", test_panel_open_close},
         {"panel-split", test_panel_split},
+        {"layout-sweep", test_layout_sweep},
         {"panel-prev-next", test_panel_prev_next},
         {"panel-headline", test_panel_headline},
         {"panel-keeps-analysis", test_panel_keeps_analysis},
