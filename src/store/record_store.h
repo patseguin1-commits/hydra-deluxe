@@ -174,10 +174,15 @@ struct RecordLookup {
     bool stale_rules = false;  // this path layout, analyzed under other rules
     std::optional<HydraRecord> record;  // set only when Ready
     std::optional<SongTiming> timing;   // set when Ready and the song is registered
-    // The last note's onset, in ms. Empty when the song was saved before
-    // Hydra stored lengths; it fills on the chart's next analysis.
+    // The last note's onset, in ms (song_length_ms(const Song&)). Empty when
+    // the song was saved before Hydra stored lengths; opening the song fills
+    // it from the chart (set_song_length), and so does its next analysis.
     std::optional<double> song_length_ms;
 };
+
+// A song's length as the store keeps it: its last note's onset, in ms. Empty
+// for a song with no notes. The one definition every writer uses.
+std::optional<double> song_length_ms(const Song& song);
 
 // The answer to get_summary: the same status, without touching the blob.
 struct SummaryLookup {
@@ -272,6 +277,11 @@ public:
     void add_song(const std::string& hyhash, const std::string& ref_name,
                  const std::string& ref_artist, const std::string& ref_charter,
                  const Song& song);
+
+    // Fills in a registered song's length when it has none (a songmeta row
+    // written before lengths were stored). A length already there is kept,
+    // and an unregistered song is left alone. Touches no result.
+    void set_song_length(const std::string& hyhash, double length_ms);
 
     void add_record(const RecordKey& key, const HydraRecord& record);
     void add_row(const PreparedRow& row);

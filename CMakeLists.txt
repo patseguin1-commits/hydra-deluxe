@@ -273,6 +273,7 @@ add_library(hydra_ui STATIC
     src/ui/library_view.cpp
     src/ui/preview_controller.cpp
     src/ui/dynamics_load_job.cpp
+    src/ui/song_length_job.cpp
     src/ui/preview_load_job.cpp
     src/ui/preview_transport.cpp
     src/ui/theme.cpp

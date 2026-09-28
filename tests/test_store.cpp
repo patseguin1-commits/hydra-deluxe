@@ -1727,6 +1727,20 @@ TEST_CASE("a stored song keeps its length, and an old songmeta row reads none") 
         const RecordLookup got = store.get_record(key);
         REQUIRE(got.status == RecordStatus::Ready);
         CHECK_FALSE(got.song_length_ms.has_value());
+
+        // Opening the song fills it from the chart; the result is untouched.
+        store.set_song_length("h", expected);
+        const RecordLookup filled = store.get_record(key);
+        REQUIRE(filled.status == RecordStatus::Ready);
+        REQUIRE(filled.song_length_ms.has_value());
+        CHECK(*filled.song_length_ms == doctest::Approx(expected));
+        CHECK(filled.record->best_path().totalscore() == got.record->best_path().totalscore());
+
+        // A length already there is kept, and an unknown song is ignored.
+        store.set_song_length("h", expected + 1000.0);
+        CHECK(*store.get_record(key).song_length_ms == doctest::Approx(expected));
+        store.set_song_length("unknown", 5.0);
     }
+    CHECK(song_length_ms(song) == doctest::Approx(expected));
     std::remove(path.c_str());
 }

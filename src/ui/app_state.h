@@ -27,6 +27,7 @@
 #include "store/record_store.h"
 #include "ui/dm_jobs.h"
 #include "ui/dynamics_load_job.h"
+#include "ui/song_length_job.h"
 #include "ui/generation.h"
 #include "ui/library_jobs.h"
 #include "ui/library_model.h"
@@ -277,6 +278,14 @@ public:
     // another tab was up used to be thrown away at close.
     void reap_dynamics();
 
+    // Fills in the open song's length when its result has none (saved before
+    // Hydra stored lengths), so the Paths tab's timeline shows without a
+    // re-analysis: SongLengthJob reads the chart, then the length is saved
+    // (RecordStore::set_song_length) and put on the viewed lookup. tick()
+    // runs it; a chart that fails to read is not retried this session.
+    std::unique_ptr<SongLengthJob> length_job;
+    void update_song_length();
+
     // Background jobs (at most one of each kind runs at a time).
     std::unique_ptr<ScanJob> scan_job;
     std::unique_ptr<BatchJob> batch_job;
@@ -434,6 +443,9 @@ private:
     std::optional<store::RecordKey> viewed_key_;
     std::vector<std::pair<store::RecordKey, store::RecordLookup>> parked_lookups_;
     static constexpr size_t kParkedLookups = 16;
+    // The chart update_song_length last tried, so a chart it can't read is
+    // not read again every frame.
+    std::string length_tried_md5_;
     // Shows the lookup for the current settings: parked if seen, read otherwise.
     void show_record_for_settings();
 };

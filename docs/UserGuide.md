@@ -103,7 +103,7 @@ The left side lists the paths the analysis kept, grouped by score. **Optimal** c
 
 Each path shows its own hardest timing right after it, like `378,315 · 3- 1 2   163.0 ms`: the hardest squeeze or calibration fill that path needs. It turns orange past the difficult limit. A path that needs no timing shows nothing there.
 
-The right side starts with a summary, like `Activations 3 · no SP left over`. Under it, a timeline runs from the first measure to the last, with a mark for each activation. Results saved before this version show no timeline until the song is analyzed again.
+The right side starts with a summary, like `Activations 3 · no SP left over`. Under it, a timeline runs from the first measure to the last, with a mark for each activation. For a result saved before Hydra 1.9, the timeline appears a moment after you open the song: Hydra reads the chart once for its length and remembers it. Nothing is re-analyzed.
 
 Each activation is one row. It shows the activation's number, its notation, its measure (like `m32.1.0`), how many bars of SP you spend, and a badge for a squeeze, like `squeeze out 163 ms`. Click a row to open it, or use `Expand all` and `Collapse all`.
 

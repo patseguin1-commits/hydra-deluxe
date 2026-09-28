@@ -451,6 +451,31 @@ void test_paths_row_layout(ImGuiTestContext* ctx) {
     check("m1024.1.120", "m1024.1.120", "12 bars", "squeeze out 999 ms");
 }
 
+// A result saved before Hydra stored song lengths has none, so the timeline
+// has no end. Opening the song reads the chart for it and the timeline shows,
+// with no re-analysis: the same length an analysis stores, the same record.
+void test_paths_length_backfill(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_burnout(ctx)) return;
+    hydra::ui::AppState& app = *h.app;
+    IM_CHECK(app.viewed.song_length_ms.has_value());
+    if (!app.viewed.song_length_ms) return;
+    const double stored = *app.viewed.song_length_ms;
+    const hydra::HydraRecord* record = &*app.viewed.record;
+    IM_CHECK(on_screen(h, "m96"));  // the timeline's end label
+
+    // As an old result reads: no length.
+    app.viewed.song_length_ms.reset();
+    IM_CHECK(wait_until(ctx, [&] { return app.viewed.song_length_ms.has_value(); }, 10));
+    if (!app.viewed.song_length_ms) return;
+    IM_CHECK_FLOAT_NEAR_EQ(static_cast<float>(*app.viewed.song_length_ms),
+                           static_cast<float>(stored), 0.01f);
+    IM_CHECK(&*app.viewed.record == record);  // not re-read, not re-analyzed
+    IM_CHECK(!app.analyze_job);
+    ctx->Yield(2);
+    IM_CHECK(on_screen(h, "m96"));
+}
+
 }  // namespace
 
 // Registers this file's tests; register_tests() (uitest_tests.cpp) calls it.
@@ -469,6 +494,7 @@ void register_paths_tests(Harness& h) {
         {"paths-long-path", test_paths_long_path},
         {"paths-backend-fit", test_paths_backend_fit},
         {"paths-row-layout", test_paths_row_layout},
+        {"paths-length-backfill", test_paths_length_backfill},
     };
     for (const Entry& e : entries) {
         ImGuiTest* t = IM_REGISTER_TEST(h.engine, "hydra", e.name);

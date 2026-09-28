@@ -449,6 +449,11 @@ int bind_analyzed_filter(sqlite3_stmt* s, int idx, const std::string& chartmode,
 
 // ---- summarize_path / summarize_record / prepare_row -----------------------
 
+std::optional<double> song_length_ms(const Song& song) {
+    if (song.sequence.empty()) return std::nullopt;
+    return song.sequence.back().timecode.ms();
+}
+
 PathSummary summarize_path(const Path& path) {
     PathSummary s;
     const ActivationWalk acts = path.walk_activations();
@@ -680,9 +685,7 @@ void RecordStore::save_analysis(const std::string& hyhash, const std::string& re
                                 const Song& song, const PreparedRow& row,
                                 const std::optional<DynamicsEntry>& dynamics) {
     const std::vector<uint8_t> tempomap = encode_tempomap(song);  // not a sqlite call
-    const std::optional<double> length_ms =
-        song.sequence.empty() ? std::nullopt
-                              : std::optional<double>(song.sequence.back().timecode.ms());
+    const std::optional<double> length_ms = song_length_ms(song);
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     exec("BEGIN");
     try {
@@ -800,11 +803,19 @@ void RecordStore::add_song(const std::string& hyhash, const std::string& ref_nam
                            const Song& song) {
     // Encoded before the lock: the lock covers sqlite calls only.
     const std::vector<uint8_t> tempomap = encode_tempomap(song);
-    const std::optional<double> length_ms =
-        song.sequence.empty() ? std::nullopt
-                              : std::optional<double>(song.sequence.back().timecode.ms());
+    const std::optional<double> length_ms = song_length_ms(song);
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     upsert_song(hyhash, ref_name, ref_artist, ref_charter, tempomap, length_ms);
+}
+
+void RecordStore::set_song_length(const std::string& hyhash, double length_ms) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    Stmt s = prepare(db_,
+                     "UPDATE songmeta SET length_ms = ? WHERE hyhash = ? AND length_ms IS NULL");
+    sqlite3_bind_double(s, 1, length_ms);
+    bind_text(s, 2, hyhash);
+    if (sqlite3_step(s) != SQLITE_DONE)
+        throw std::runtime_error(std::string("set_song_length failed: ") + sqlite3_errmsg(db_));
 }
 
 void RecordStore::upsert_song(const std::string& hyhash, const std::string& ref_name,

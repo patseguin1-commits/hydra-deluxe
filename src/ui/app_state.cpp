@@ -176,6 +176,13 @@ void AppState::close_details() {
     dynamics_result.reset();
     dynamics_key.clear();
     dynamics_store_error.clear();
+    // Keep a length that already came in; cancel a read still running.
+    update_song_length();
+    if (length_job) {
+        length_job->cancel();
+        length_job.reset();
+        length_tried_md5_.clear();  // cut short, not failed: try again next open
+    }
     // The next open looks at the chart file at once.
     details_ui.file_checked_at = -1.0;
 }
@@ -260,6 +267,39 @@ void AppState::tick(double now) {
     details_ui.prev_open = show_details;
     update_analyze_job(now);
     reap_dynamics();
+    update_song_length();
+}
+
+void AppState::update_song_length() {
+    if (length_job && length_job->finished()) {
+        const store::ChartLibraryEntry& chart = length_job->entry();
+        const std::optional<double> length = length_job->ok() ? length_job->length_ms()
+                                                               : std::nullopt;
+        if (length) {
+            // Best effort: a failed write only means the chart is read again
+            // on its next open.
+            try {
+                store->set_song_length(chart.md5, *length);
+            } catch (const std::exception&) {
+            }
+            // Every lookup held for this song shows it now: the viewed one
+            // and the ones parked under other settings.
+            if (selected && selected->md5 == chart.md5) {
+                if (viewed.status == store::RecordStatus::Ready && !viewed.song_length_ms)
+                    viewed.song_length_ms = length;
+                for (auto& parked : parked_lookups_)
+                    if (!parked.second.song_length_ms) parked.second.song_length_ms = length;
+            }
+        }
+        length_job.reset();
+    }
+    if (length_job || !show_details || !selected) return;
+    if (viewed.status != store::RecordStatus::Ready || !viewed.timing || viewed.song_length_ms)
+        return;
+    if (length_tried_md5_ == selected->md5) return;
+    length_tried_md5_ = selected->md5;
+    length_job = std::make_unique<SongLengthJob>(*selected, settings.to_analysis_settings());
+    length_job->start();
 }
 
 void AppState::update_analyze_job(double now) {
