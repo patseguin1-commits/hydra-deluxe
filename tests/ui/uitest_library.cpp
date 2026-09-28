@@ -1,3 +1,4 @@
+#include <cstdio>
 #include <cstring>
 #include <string>
 
@@ -447,6 +448,40 @@ void test_library_layout(ImGuiTestContext* ctx) {
         IM_CHECK_EQ(ctx->ItemInfo(item).RectFull.Min.y, line_y);
 }
 
+// A hydra_ui.ini that only records a sort on Best path (what sorting by it,
+// quitting and restarting leaves) keeps the columns in their order. Dear
+// ImGui (ocornut/imgui#9519) used to move the sorted column to the front.
+void test_library_column_order(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    ImGuiTable* table = library_table();
+    IM_CHECK(table != nullptr);
+    if (table == nullptr) return;
+    const int best = 4;  // Best path's column index
+    auto load_sort = [&](int column, char dir) {
+        char ini[128];
+        std::snprintf(ini, sizeof(ini), "[Table][0x%08X,5]\nColumn %d  Sort=0%c ID=0x%08X\n",
+                      table->ID, column, dir, table->Columns[column].ID);
+        // As at startup: this line is the table's only saved entry (a load on
+        // top of an existing entry would add a second one ImGui never reads).
+        ImGui::ClearIniSettings();
+        ImGui::LoadIniSettingsFromMemory(ini);
+        ctx->Yield(3);
+    };
+
+    load_sort(best, '^');
+    IM_CHECK_EQ(table->Columns[best].SortOrder, 0);  // the line loaded
+    for (int n = 0; n < table->ColumnsCount; ++n)
+        IM_CHECK_EQ(table->Columns[n].DisplayOrder, n);
+
+    // Back to Title ascending: the table (and so its sort) outlives this test.
+    load_sort(0, 'v');
+    IM_CHECK_EQ(table->Columns[0].SortOrder, 0);
+    IM_CHECK_EQ(table->Columns[best].SortOrder, -1);
+}
+
 }  // namespace
 
 const std::vector<TestEntry>& library_tests() {
@@ -458,6 +493,7 @@ const std::vector<TestEntry>& library_tests() {
         {"view-settings", test_view_settings},
         {"library-search", test_library_search},
         {"library-sort-scroll", test_library_sort_scroll},
+        {"library-column-order", test_library_column_order},
         {"library-layout", test_library_layout},
     };
     return entries;
