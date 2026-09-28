@@ -4,7 +4,10 @@
 #include "uitest_harness.h"
 
 #include "app/config.h"
+#include "imgui_internal.h"
+#include "ui/app_shell.h"  // remember_library_share
 #include "ui/app_state.h"
+#include "ui/fonts.h"  // px()
 #include "ui/library_model.h"
 #include "ui/preview_controller.h"
 
@@ -341,6 +344,109 @@ void test_library_sort_scroll(ImGuiTestContext* ctx) {
     IM_CHECK(h.app->library_row_at(0).title == first);
 }
 
+// The Title column's table, found through its scrolling child window.
+ImGuiTable* library_table() {
+    ImGuiContext& g = *ImGui::GetCurrentContext();
+    for (int i = 0; i < g.Tables.GetMapSize(); ++i)
+        if (ImGuiTable* t = g.Tables.TryGetMapData(i))
+            if (t->InnerWindow && std::strstr(t->InnerWindow->Name, "##librarytable"))
+                return t;
+    return nullptr;
+}
+
+// The settings bar, the chips and the Title column fit their room, at the
+// narrowest library and on long data. Geometry, not text: the text log
+// records a cut-off string in full.
+void test_library_layout(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    // The window width this test changes goes back for the tests after it,
+    // however it ends.
+    struct WidthGuard {
+        Harness& h;
+        int width;
+        ~WidthGuard() { h.width = width; }
+    } guard{h, h.width};
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    IM_CHECK_EQ(h.width, 1280);
+
+    // A long title opens the song panel, clicked by its title as every test
+    // finds a row; then the library goes as narrow as it gets.
+    const std::string title = "Tapestry of the Starless Abstract (Shortened)";
+    ctx->SetRef("//Hydra");
+    ctx->ItemClick(("**/" + escape_ref(title)).c_str());
+    IM_CHECK(wait_until(ctx, [&] { return h.app->selected && h.app->selected->title == title; },
+                        5));
+    hydra::ui::remember_library_share(0.01f);
+    h.app->library_ui.panel_was_open = false;
+    ctx->Yield(3);
+
+    // The settings bar: nothing past its right edge, the lock message aside
+    // (nothing is running). The bar spans the window, so at 1,280 px its
+    // last block has wrapped under the first.
+    ImGuiWindow* bar = ctx->WindowInfo("//Hydra/##settingsbar").Window;
+    IM_CHECK(bar != nullptr);
+    if (bar == nullptr) return;
+    IM_CHECK_LE(bar->ContentSize.x, bar->ContentRegionRect.GetWidth() + 0.5f);
+    ctx->SetRef(bar);
+    const char* bar_items[] = {"##difficulty", "Pro Drums", "2x Bass", "##spcap",
+                               "##depthvalue", "##depthmode", "Path limit##mslimit",
+                               "##mslimitvalue"};
+    for (const char* item : bar_items)
+        IM_CHECK_LE(ctx->ItemInfo(item).RectFull.Max.x, bar->InnerRect.Max.x + 0.5f);
+    const float first_line_y = ctx->ItemInfo("##difficulty").RectFull.Min.y;
+    IM_CHECK_GT(ctx->ItemInfo("##mslimitvalue").RectFull.Min.y, first_line_y);
+    // A wrapped block keeps its own pieces on one line.
+    IM_CHECK_EQ(ctx->ItemInfo("Path limit##mslimit").RectFull.Min.y,
+                ctx->ItemInfo("##mslimitvalue").RectFull.Min.y);
+
+    // Score range holds six digits beside its step buttons.
+    h.app->settings.depth_value = 999999;
+    ctx->Yield(2);
+    const float six_digits =
+        ImGui::CalcTextSize("999999").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+    IM_CHECK_GE(ctx->ItemInfo("##depthvalue").RectFull.GetWidth(), six_digits);
+    IM_CHECK_LE(ctx->ItemInfo("##depthvalue/+").RectFull.Max.x,
+                ctx->ItemInfo("##depthmode").RectFull.Min.x);
+
+    // The four chips stay inside the library, wrapping as they must: at
+    // 320 px "Analyzed (0)" no longer fits after the other three.
+    ImGuiWindow* lib = ctx->WindowInfo("//Hydra/##library").Window;
+    IM_CHECK(lib != nullptr);
+    if (lib == nullptr) return;
+    IM_CHECK_LE(lib->Size.x, hydra::ui::px(321.0f));
+    ctx->SetRef("//Hydra");
+    const char* chips[] = {"**/All (97)##chipall", "**/Not analyzed (97)##chipnew",
+                           "**/Stale (0)##chipstale", "**/Analyzed (0)##chipdone"};
+    for (const char* chip : chips)
+        IM_CHECK_LE(ctx->ItemInfo(chip).RectFull.Max.x, lib->ContentRegionRect.Max.x + 0.5f);
+    IM_CHECK_GT(ctx->ItemInfo(chips[3]).RectFull.Min.y, ctx->ItemInfo(chips[0]).RectFull.Min.y);
+
+    // The long title ends inside its cell: nothing in the Title column lays
+    // out past the column's edge, while the row stays one click target
+    // across every column.
+    ImGuiTable* table = library_table();
+    IM_CHECK(table != nullptr);
+    if (table == nullptr) return;
+    const ImGuiTableColumn& title_col = table->Columns[0];
+    IM_CHECK_LT(title_col.WorkMaxX - title_col.WorkMinX, ImGui::CalcTextSize(title.c_str()).x);
+    IM_CHECK_LE(title_col.ContentMaxXUnfrozen, title_col.WorkMaxX + 0.5f);
+    const ImRect row = ctx->ItemInfo(("**/" + escape_ref(title)).c_str()).RectFull;
+    IM_CHECK_GE(row.Max.x, table->Columns[table->RightMostEnabledColumn].WorkMaxX);
+
+    // The library at its widest on a wide window: the bar is one line.
+    h.width = 1920;
+    hydra::ui::remember_library_share(0.99f);
+    h.app->library_ui.panel_was_open = false;
+    ctx->Yield(3);
+    ctx->SetRef(bar);
+    IM_CHECK_LE(bar->ContentSize.x, bar->ContentRegionRect.GetWidth() + 0.5f);
+    const float line_y = ctx->ItemInfo("##difficulty").RectFull.Min.y;
+    for (const char* item : {"##spcap", "##depthvalue", "##mslimitvalue"})
+        IM_CHECK_EQ(ctx->ItemInfo(item).RectFull.Min.y, line_y);
+}
+
 }  // namespace
 
 const std::vector<TestEntry>& library_tests() {
@@ -352,6 +458,7 @@ const std::vector<TestEntry>& library_tests() {
         {"view-settings", test_view_settings},
         {"library-search", test_library_search},
         {"library-sort-scroll", test_library_sort_scroll},
+        {"library-layout", test_library_layout},
     };
     return entries;
 }

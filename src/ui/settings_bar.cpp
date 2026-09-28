@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <iterator>
 #include <string>
+#include <type_traits>
 
 namespace hydra::ui::detail {
 
@@ -90,7 +91,12 @@ void render_score_range(AppState& app, bool locked) {
     help_marker("How many extra paths below optimal to keep: a number of scores, or of "
                 "points. More paths take longer to analyze.");
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(px(90));
+    // Room for six digits beside the two step buttons (each a frame-height
+    // square after an inner gap), never less than the old 90 px.
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float six_digits = ImGui::CalcTextSize("000000").x + style.FramePadding.x * 2.0f +
+                             (ImGui::GetFrameHeight() + style.ItemInnerSpacing.x) * 2.0f;
+    ImGui::SetNextItemWidth(std::max(px(90), six_digits));
     begin_disabled_input(locked);
     if (ImGui::InputInt("##depthvalue", &app.settings.depth_value)) {
         if (app.settings.depth_value < 0) app.settings.depth_value = 0;
@@ -136,29 +142,53 @@ void render_settings_bar(AppState& app) {
                       ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding);
     ImGui::PopStyleColor();
 
+    // The bar's right edge, in screen space: a block that would run past it
+    // starts a new line instead.
+    const float right_edge = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+
     // Two stacked caption lines; the controls sit centred on them.
     ImGui::BeginGroup();
     ImGui::TextUnformatted("Analysis settings");
     ImGui::TextDisabled(locked ? "locked" : "for every song");
     ImGui::EndGroup();
     const float caption_h = ImGui::GetItemRectSize().y;
-    bar_separator();
-    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (caption_h - ImGui::GetFrameHeight()) * 0.5f);
-    ImGui::AlignTextToFramePadding();
+    float line_end = ImGui::GetItemRectMax().x;
 
-    render_difficulty(app, locked);
-    bar_separator();
-    render_sp_cap(app, locked);
-    bar_separator();
-    render_score_range(app, locked);
-    bar_separator();
-    render_path_limit(app, locked);
+    // The four groups are blocks. A block stays on the current line when it
+    // fits, separator included, and otherwise starts a new line with no
+    // separator before it. A block's width is known only once it is drawn, so
+    // each frame places the blocks by the widths they had on the last one
+    // (0 on the very first frame: one line, corrected a frame later).
+    using Block = void (*)(AppState&, bool);
+    static constexpr Block kBlocks[] = {render_difficulty, render_sp_cap, render_score_range,
+                                        render_path_limit};
+    static_assert(std::size(kBlocks) ==
+                  std::extent_v<decltype(LibraryViewState::settings_block_w)>);
+    const float separator_w = px(14.0f) * 2.0f + 1.0f;  // gap, 1 px rule, gap
+    float* block_w = app.library_ui.settings_block_w;
+    for (size_t i = 0; i < std::size(kBlocks); ++i) {
+        if (line_end + separator_w + block_w[i] <= right_edge) {
+            bar_separator();
+            if (i == 0)
+                ImGui::SetCursorPosY(ImGui::GetCursorPosY() +
+                                     (caption_h - ImGui::GetFrameHeight()) * 0.5f);
+        }
+        ImGui::AlignTextToFramePadding();
+        ImGui::BeginGroup();
+        kBlocks[i](app, locked);
+        ImGui::EndGroup();
+        block_w[i] = ImGui::GetItemRectSize().x;
+        line_end = ImGui::GetItemRectMax().x;
+    }
 
+    // The lock message is a fifth block, right-aligned on whichever line it
+    // lands on.
     if (locked) {
         const char* why = app.batch_running() ? "Stop the batch to change these."
                                               : "Settings are locked while this song analyzes.";
         const float w = ImGui::CalcTextSize(why).x;
-        ImGui::SameLine();
+        if (line_end + ImGui::GetStyle().ItemSpacing.x + w <= right_edge) ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
         const float right = ImGui::GetContentRegionMax().x - w;
         if (right > ImGui::GetCursorPosX()) ImGui::SetCursorPosX(right);
         ImGui::PushStyleColor(ImGuiCol_Text, kSubtleTextColor);
