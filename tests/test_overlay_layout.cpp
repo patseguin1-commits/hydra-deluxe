@@ -92,3 +92,47 @@ TEST_CASE("overlay_scale: full size with room, floored when narrow, clear in bet
     // No boxes: nothing to fit.
     CHECK(overlay_scale(cfg, 300, h, OverlayBoxes{}) == 1.0f);
 }
+
+namespace {
+// 10 px per character (not per byte), "…" included: a fixed-pitch stand-in
+// for the monospace font the path picker draws with.
+float ten_per_char(const std::string& s) {
+    float w = 0.0f;
+    for (unsigned char c : s)
+        if ((c & 0xC0) != 0x80) w += 10.0f;
+    return w;
+}
+}  // namespace
+
+TEST_CASE("ellipsize: whole when it fits, cut and ended in an ellipsis when not") {
+    const std::string label = "3- 1 2  (optimal)";  // 17 characters, 170 px
+    CHECK(ellipsize(label, 170.0f, ten_per_char) == label);
+    CHECK(ellipsize(label, 500.0f, ten_per_char) == label);
+    // One px short: the end goes, an ellipsis takes its place, and the result fits.
+    const std::string cut = ellipsize(label, 169.0f, ten_per_char);
+    CHECK(cut == "3- 1 2  (optima\xE2\x80\xA6");
+    CHECK(ten_per_char(cut) <= 169.0f);
+    // A cut that lands on the two spaces drops them rather than end in "  …".
+    CHECK(ellipsize(label, 80.0f, ten_per_char) == "3- 1 2\xE2\x80\xA6");
+    // Not even one character and the ellipsis: the ellipsis alone.
+    CHECK(ellipsize(label, 15.0f, ten_per_char) == "\xE2\x80\xA6");
+    CHECK(ellipsize("", 0.0f, ten_per_char).empty());
+}
+
+TEST_CASE("ellipsize: a 40-activation path fits its line, and a cut never splits a character") {
+    // The longest real paths: 40 activations and "  (optimal)", about 100 characters.
+    std::string label;
+    for (int i = 0; i < 40; ++i) label += (i % 3 == 0 ? "2- " : "1 ");
+    label += " (optimal)";
+    for (float w : {600.0f, 420.0f, 333.0f, 95.0f}) {
+        const std::string shown = ellipsize(label, w, ten_per_char);
+        CHECK(ten_per_char(shown) <= w);
+        CHECK(shown.size() >= 3);
+        CHECK(shown.substr(shown.size() - 3) == "\xE2\x80\xA6");
+        CHECK(label.rfind(shown.substr(0, shown.size() - 3), 0) == 0);  // a prefix of it
+    }
+    // A multi-byte character is kept whole or dropped whole.
+    const std::string accented = "Caf\xC3\xA9 \xC3\xA9t\xC3\xA9";  // "Café été", 8 characters
+    CHECK(ellipsize(accented, 50.0f, ten_per_char) == "Caf\xC3\xA9\xE2\x80\xA6");
+    CHECK(ellipsize(accented, 40.0f, ten_per_char) == "Caf\xE2\x80\xA6");
+}

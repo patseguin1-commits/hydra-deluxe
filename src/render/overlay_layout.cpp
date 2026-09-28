@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 #include <DirectXMath.h>
 
@@ -59,6 +60,32 @@ float overlay_scale(const PreviewConfig& cfg, int width, int height, const Overl
         scale = std::min(scale, room / boxes.right_w);
     }
     return std::clamp(scale, min_scale, 1.0f);
+}
+
+std::string ellipsize(const std::string& text, float max_w,
+                      const std::function<float(const std::string&)>& width_of) {
+    if (width_of(text) <= max_w) return text;
+    static const std::string kEllipsis = "\xE2\x80\xA6";
+    // The places the text may be cut: every character's start, past the
+    // first character. A UTF-8 continuation byte (10xxxxxx) starts none.
+    std::vector<size_t> cuts;
+    for (size_t i = 1; i < text.size(); ++i)
+        if ((static_cast<unsigned char>(text[i]) & 0xC0) != 0x80) cuts.push_back(i);
+    auto shown = [&](size_t cut) {
+        size_t end = cut;
+        while (end > 0 && text[end - 1] == ' ') --end;
+        return text.substr(0, end) + kEllipsis;
+    };
+    // The longest cut that fits: a longer prefix is never narrower.
+    size_t lo = 0, hi = cuts.size();  // cuts[0..lo) fit; cuts[hi..) do not
+    while (lo < hi) {
+        const size_t mid = lo + (hi - lo) / 2;
+        if (width_of(shown(cuts[mid])) <= max_w)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo == 0 ? kEllipsis : shown(cuts[lo - 1]);
 }
 
 }  // namespace hydra::render

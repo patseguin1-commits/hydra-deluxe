@@ -7,9 +7,15 @@
 // narrower window leaves less room at its sides. The boxes shrink into that
 // room, never past kOverlayMinScale (below it the text stops being readable,
 // so they overlap instead) and never above 1 (their configured size).
+//
+// Also the "…" cut the Preview's path picker uses for a label too long for
+// its line (ellipsize), measured by the caller's font so it stays device-free.
 
 #ifndef HYDRA_RENDER_OVERLAY_LAYOUT_H
 #define HYDRA_RENDER_OVERLAY_LAYOUT_H
+
+#include <functional>
+#include <string>
 
 #include "render/preview_config.h"
 
@@ -53,6 +59,15 @@ inline constexpr float kOverlayMinScale = 0.6f;
 // it). Rows are measured at scale 1, so a shrunken box is only more clear.
 float overlay_scale(const PreviewConfig& cfg, int width, int height, const OverlayBoxes& boxes,
                     float min_scale = kOverlayMinScale);
+
+// `text` as a box `max_w` wide shows it: whole when it fits, otherwise cut
+// short and ended in "…" so the result fits. The cut falls between UTF-8
+// characters, never inside one, and drops the spaces it would leave before the
+// "…". When not even one character fits, the result is "…" alone. `width_of`
+// measures a string in the font the box draws with. The Preview's path picker
+// shows a path too long for its line this way.
+std::string ellipsize(const std::string& text, float max_w,
+                      const std::function<float(const std::string&)>& width_of);
 
 }  // namespace hydra::render
 

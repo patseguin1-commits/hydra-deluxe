@@ -53,13 +53,20 @@ void render_path_picker(AppState& app) {
     ImGui::SameLine();
     ImGui::PushFont(g_mono_font, 0.0f);
     // On its own line, as wide as the longest path in the list (or the
-    // line), so no path is ever cut off under the arrow.
+    // line). A path longer than the line (40 activations and "  (optimal)"
+    // run to about 100 characters) ends in "…" rather than vanish under the
+    // arrow, with the whole path a hover away; the open list shows it whole.
     float widest = 0.0f;
     for (const hydra::app::PathButtonView& b : list.buttons)
         widest = std::max(widest, ImGui::CalcTextSize(hydra::app::preview_path_label(b).c_str()).x);
-    const float fit = widest + ImGui::GetStyle().FramePadding.x * 2.0f + ImGui::GetFrameHeight();
-    ImGui::SetNextItemWidth(std::min(fit, ImGui::GetContentRegionAvail().x));
-    if (ImGui::BeginCombo("##previewpath", current.c_str())) {
+    const float chrome = ImGui::GetStyle().FramePadding.x * 2.0f + ImGui::GetFrameHeight();
+    const float box_w = std::min(widest + chrome, ImGui::GetContentRegionAvail().x);
+    const std::string shown = render::ellipsize(
+        current, box_w - chrome, [](const std::string& s) { return ImGui::CalcTextSize(s.c_str()).x; });
+    ImGui::SetNextItemWidth(box_w);
+    const bool open = ImGui::BeginCombo("##previewpath", shown.c_str());
+    if (!open && shown != current) overflow_tooltip(current.c_str());
+    if (open) {
         for (size_t i = 0; i < list.buttons.size(); ++i) {
             const hydra::app::PathButtonView& b = list.buttons[i];
             // "##<i>" keeps two paths with the same notation apart.
@@ -131,7 +138,9 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
     pc->poll();
 
     if (pc->has_error()) {
-        ImGui::TextColored(kWarningColor, "Preview failed: %s", pc->error().c_str());
+        // Wrapped: an error naming a file path runs far past the panel's edge.
+        WarnColor warn;
+        ImGui::TextWrapped("Preview failed: %s", pc->error().c_str());
         return;
     }
     if (pc->loading()) {
