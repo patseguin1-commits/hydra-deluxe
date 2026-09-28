@@ -184,7 +184,10 @@ void render_analyze_progress(AppState& app) {
         ImGui::PushStyleColor(ImGuiCol_Text, kWarningColor);
         ImGui::TextWrapped("%s", job->message().c_str());
         ImGui::PopStyleColor();
-        ImGui::TextDisabled("%s", job->error().c_str());
+        // Wrapped: the detail can carry a long file path.
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("%s", job->error().c_str());
+        ImGui::PopStyleColor();
         if (ImGui::Button("Continue")) app.analyze_job.reset();
     } else if (!app.details_ui.store_error.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, kWarningColor);

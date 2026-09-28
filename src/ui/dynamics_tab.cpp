@@ -83,15 +83,19 @@ void render_dynamics_panel(AppState& app) {
         return;
     }
     // Error state: job finished but failed (kept around for its message).
+    // Wrapped: the message can carry a long file path.
     if (app.dynamics_job && app.dynamics_job->finished() && !app.dynamics_job->ok()) {
-        ImGui::Text("Dynamics failed: %s", app.dynamics_job->error().c_str());
+        ImGui::TextWrapped("Dynamics failed: %s", app.dynamics_job->error().c_str());
         return;
     }
     if (!app.dynamics_result) return;
 
     // A put_dynamics failure is shown as a status line, not a blocker.
-    if (!app.dynamics_store_error.empty())
-        ImGui::TextColored(kWarningColor, "%s", app.dynamics_store_error.c_str());
+    if (!app.dynamics_store_error.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kWarningColor);
+        ImGui::TextWrapped("%s", app.dynamics_store_error.c_str());
+        ImGui::PopStyleColor();
+    }
 
     const app::DynamicsBreakdown& bd = *app.dynamics_result;
     bool pro = app.settings.view_prodrums;
@@ -100,7 +104,7 @@ void render_dynamics_panel(AppState& app) {
 
     // "This chart has no ghost or accent notes." above everything when no dynamics.
     if (!played.has_dynamics()) {
-        ImGui::TextUnformatted("This chart has no ghost or accent notes.");
+        ImGui::TextWrapped("This chart has no ghost or accent notes.");
         ImGui::Spacing();
     }
 
@@ -149,7 +153,7 @@ void render_dynamics_panel(AppState& app) {
         int pct = ktot.all() > 0
                       ? static_cast<int>(100.0 * k2x.all() / ktot.all())
                       : 0;
-        ImGui::Text("2x kicks: %s of %s kick notes (%d%%)",
+        ImGui::TextWrapped("2x kicks: %s of %s kick notes (%d%%)",
                     group_thousands(k2x.all()).c_str(),
                     group_thousands(ktot.all()).c_str(), pct);
     }
@@ -187,32 +191,34 @@ void render_dynamics_panel(AppState& app) {
     ImGui::SameLine();
 
     // ---- Right box ----
+    // About 37% of the panel: every line wraps inside it rather than running
+    // past its edge.
     ImGui::BeginChild("dynright", ImVec2(0, 0), ImGuiChildFlags_Borders);
 
     // Totals section.
     ImGui::SeparatorText("Totals");
-    ImGui::Text("Ghosts: %s", group_thousands(played.ghost).c_str());
-    ImGui::Text("Accents: %s", group_thousands(played.accent).c_str());
+    ImGui::TextWrapped("Ghosts: %s", group_thousands(played.ghost).c_str());
+    ImGui::TextWrapped("Accents: %s", group_thousands(played.accent).c_str());
     {
         int dyn = played.ghost + played.accent;
         int total = played.all();
         int pct = total > 0 ? static_cast<int>(100.0 * dyn / total) : 0;
-        ImGui::Text("Dynamic notes: %s of %s (%d%%)",
-                    group_thousands(dyn).c_str(),
-                    group_thousands(total).c_str(), pct);
+        ImGui::TextWrapped("Dynamic notes: %s of %s (%d%%)",
+                           group_thousands(dyn).c_str(),
+                           group_thousands(total).c_str(), pct);
     }
 
     // Chart section.
     ImGui::SeparatorText("Chart");
     if (bd.dynamics_enabled)
-        ImGui::TextUnformatted("Dynamics enabled: yes");
+        ImGui::TextWrapped("Dynamics enabled: yes");
     else
-        ImGui::TextUnformatted("Dynamics enabled: no (markings ignored by Clone Hero)");
+        ImGui::TextWrapped("Dynamics enabled: no (markings ignored by Clone Hero)");
 
     if (bass2x)
-        ImGui::TextUnformatted("2x kicks: counted (2x Bass on)");
+        ImGui::TextWrapped("2x kicks: counted (2x Bass on)");
     else
-        ImGui::TextUnformatted("2x kicks: not counted (2x Bass off)");
+        ImGui::TextWrapped("2x kicks: not counted (2x Bass off)");
 
     ImGui::EndChild();
 }

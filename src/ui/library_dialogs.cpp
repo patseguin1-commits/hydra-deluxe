@@ -509,10 +509,15 @@ void render_batch_done(AppState& app) {
         const std::string head = count_label((int64_t)s.failures.size(), "chart", "charts") +
                                  " failed##batchfailures";
         if (ImGui::TreeNode(head.c_str())) {
+            // Wrapped: a chart's name and its error can both run long.
             for (size_t i = 0; i < s.failures.size(); ++i) {
-                ImGui::TextUnformatted(s.failures[i].c_str());
-                if (i < s.failure_details.size())
-                    ImGui::TextDisabled("%s", s.failure_details[i].c_str());
+                ImGui::TextWrapped("%s", s.failures[i].c_str());
+                if (i < s.failure_details.size()) {
+                    ImGui::PushStyleColor(ImGuiCol_Text,
+                                          ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                    ImGui::TextWrapped("%s", s.failure_details[i].c_str());
+                    ImGui::PopStyleColor();
+                }
             }
             ImGui::TreePop();
         }
