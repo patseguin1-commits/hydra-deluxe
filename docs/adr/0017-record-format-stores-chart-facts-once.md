@@ -24,7 +24,7 @@ The two skipped-note counts are gone. Nothing ever set them to anything but
 zero, so the two warnings that read them could never show.
 
 The six activation fields the search always sets (skips, timecode, chord,
-SP meter, frontend points, calibration-fill offset) are plain values, with
+SP meter, frontend points, early-fill offset) are plain values, with
 no presence byte. The deactivation node, the cap-clamp tick and the
 squeeze-out tick can legitimately be missing, so they keep theirs.
 

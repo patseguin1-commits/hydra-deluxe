@@ -105,18 +105,18 @@ TEST_CASE("squeeze_difficulty and is_e0: one owner for the engine and the model"
     CHECK_FALSE(std::signbit(squeeze_difficulty(false, 0.0)));
     CHECK(SPSqueeze{SqueezeKind::SqOut, -3.5}.difficulty() == squeeze_difficulty(false, -3.5));
 
-    CHECK(is_e0(kCalibrationFillWindowMs - 0.1, 0));
-    CHECK_FALSE(is_e0(kCalibrationFillWindowMs, 0));
+    CHECK(is_e0(kEarlyFillWindowMs - 0.1, 0));
+    CHECK_FALSE(is_e0(kEarlyFillWindowMs, 0));
     CHECK_FALSE(is_e0(10.0, 1));
-    CHECK(calibration_fill_difficulty(-4.0) == 4.0);
-    CHECK_FALSE(std::signbit(calibration_fill_difficulty(0.0)));
+    CHECK(early_fill_difficulty(-4.0) == 4.0);
+    CHECK_FALSE(std::signbit(early_fill_difficulty(0.0)));
 
     Activation a;
     a.e_offset = 10.0;
     a.skips = 0;
     CHECK(a.is_E0() == is_e0(10.0, 0));
     REQUIRE(a.e_difficulty().has_value());
-    CHECK(*a.e_difficulty() == calibration_fill_difficulty(10.0));
+    CHECK(*a.e_difficulty() == early_fill_difficulty(10.0));
 }
 
 TEST_CASE("Path::is_difficult: past the difficult floor, not at it") {
@@ -139,16 +139,16 @@ TEST_CASE("Path::is_difficult: past the difficult floor, not at it") {
 TEST_CASE("Activation notationstr: E prefix, skips, symbols") {
     Activation a;
     a.skips = 2;
-    a.e_offset = 300.0;  // not e-critical (>= kCalibrationFillWindowMs)
+    a.e_offset = 300.0;  // not e-critical (>= kEarlyFillWindowMs)
     CHECK(a.notationstr() == "2");
 
-    a.e_offset = kCalibrationFillWindowMs;  // boundary: not e-critical
+    a.e_offset = kEarlyFillWindowMs;  // boundary: not e-critical
     CHECK(a.notationstr() == "2");
 
     a.e_offset = 50.0;  // e-critical
     CHECK(a.notationstr() == "E2");
 
-    a.e_offset = kCalibrationFillWindowMs - 0.1;  // boundary: e-critical
+    a.e_offset = kEarlyFillWindowMs - 0.1;  // boundary: e-critical
     CHECK(a.notationstr() == "E2");
 
     a.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, -1.0});

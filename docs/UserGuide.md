@@ -101,7 +101,7 @@ The panel has four tabs: **Paths**, **Preview**, **Dynamics** and **Stars**.
 
 The left side lists the paths the analysis kept, grouped by score. **Optimal** comes first. Then come the extra paths under a heading like **Within 2 scores**. Last is **Best all-0 path**: the best path that activates at the first chance every time, with no skips and no squeeze timing, and how far it falls below optimal. Click a path to show it on the right.
 
-Each path shows its own hardest timing right after it, like `378,315 · 3- 1 2   163.0 ms`: the hardest squeeze or calibration fill that path needs. It turns orange past the difficult limit. A path that needs no timing shows nothing there.
+Each path shows its own hardest timing right after it, like `378,315 · 3- 1 2   163.0 ms`: the hardest squeeze or early fill that path needs. It turns orange past the difficult limit. A path that needs no timing shows nothing there.
 
 The right side starts with a summary, like `Activations 3 · no SP left over`. Under it, a timeline runs from the first measure to the last, with a mark for each activation. For a result saved before Hydra 1.9, the timeline appears a moment after you open the song: Hydra reads the chart once for its length and remembers it. Nothing is re-analyzed.
 
@@ -111,7 +111,7 @@ An open row shows:
 
 - **Chord**: the chord you activate on. On a multi-note chord, do a frontend squeeze: hit the activation note first, so the other notes score with the Star Power multiplier.
 - **`Show in Preview >`**: jumps the Preview tab to this activation.
-- The calibration fill timing, when the activation has one (the `E` notation). Usually this is `0ms`. The more negative the value, the earlier you have to hit to make the fill show up.
+- The early fill timing, when the activation has one (the `E` notation). Usually this is `0ms`. The more negative the value, the earlier you have to hit to make the fill show up.
 - A plain sentence for each squeeze: which note to hit early or late, by how much, and what it's worth.
 - **Backend timings**: the notes near the end of Star Power, with a short lead-in above the table.
 

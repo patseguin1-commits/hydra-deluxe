@@ -182,7 +182,8 @@ void render_timeline(const app::ActivationsView& view) {
         const ImVec2 m_min(x - px(2.0f), top.y + px(20.0f));
         const ImVec2 m_max(x + px(2.0f), top.y + px(36.0f));
         dl->AddRectFilled(m_min, m_max, ImGui::GetColorU32(kBestPathColor), px(1.0f));
-        // A mark whose activation needs a squeeze gets the badge's outline.
+        // A mark whose activation has a badge (a squeeze or an early fill)
+        // gets the badge's outline.
         if (!a.badge.empty())
             dl->AddRect(ImVec2(m_min.x - px(2.0f), m_min.y - px(2.0f)),
                         ImVec2(m_max.x + px(2.0f), m_max.y + px(2.0f)),
@@ -354,7 +355,7 @@ void render_backend_table(const app::ActivationRowView& a) {
     ImGui::PopFont();
 }
 
-// What an opened row shows: the chord and "Show in Preview", the calibration
+// What an opened row shows: the chord and "Show in Preview", the early fill
 // line, the squeeze sentences, the scale and overfill notes with their hover
 // hints, and the folded backend table.
 void render_activation_body(size_t i, const app::ActivationRowView& a, app::PathsTabUi& ui) {
@@ -369,7 +370,7 @@ void render_activation_body(size_t i, const app::ActivationRowView& a, app::Path
     align_right(button_width("Show in Preview >"));
     if (ImGui::SmallButton(show)) ui.preview_jump = i;
 
-    if (!a.calibration.empty()) ImGui::TextUnformatted(a.calibration.c_str());
+    if (!a.early_fill.empty()) ImGui::TextUnformatted(a.early_fill.c_str());
     for (size_t k = 0; k < a.squeeze_sentences.size(); ++k)
         squeeze_box(a.number, k, a.squeeze_sentences[k]);
     if (!a.scale_warning.empty()) {

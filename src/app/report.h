@@ -34,7 +34,7 @@ struct ReportRow {
     std::optional<double> ms;
     std::string tier;
     std::string tok;
-    // Hardest calibration fill among the path's E0 activations, in the same
+    // Hardest early fill among the path's E0 activations, in the same
     // difficulty convention as `ms` (e_difficulty = -e_offset: positive means
     // you must hit that much early, negative is slack). Skipped E activations
     // don't count — their fill is irrelevant to the path. Unset when the path

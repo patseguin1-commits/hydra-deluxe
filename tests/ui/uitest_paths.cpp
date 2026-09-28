@@ -447,7 +447,7 @@ void test_paths_row_layout(ImGuiTestContext* ctx) {
         if (text_w(a.measure.c_str(), mono) > text_w(widest.c_str(), mono)) widest = a.measure;
     IM_CHECK(!view.acts.empty());
     for (const hydra::app::ActivationRowView& a : view.acts) check(widest, a.measure, a.bars, a.badge);
-    check("m1024.1.120", "m1024.1.120", "12 bars", "calibration fill 999 ms");
+    check("m1024.1.120", "m1024.1.120", "12 bars", "early fill 999 ms");
     check("m1024.1.120", "m1024.1.120", "12 bars", "squeeze out 999 ms");
 }
 

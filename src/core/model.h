@@ -55,7 +55,7 @@ std::string color_notationstr(NoteColor c); // "K"/"R"/"Y"/"B"/"G"
 // be a repeated literal; the value is the interface, so a change here is a
 // deliberate rule change, not a stray edit.
 
-// A squeeze (or calibration fill) tighter than this many ms counts as
+// A squeeze (or early fill) tighter than this many ms counts as
 // difficult: it turns on warning colors, and it is the "Normal" floor of the
 // report's timing tiers.
 constexpr double kDifficultMs = 2.0;
@@ -74,14 +74,14 @@ constexpr double kDefaultHitWindowMs = 85.0;
 // limit setting narrows the display from here. hydra_batch prints it.
 constexpr double kSqueezeWindowMs = 500.0;
 
-// Calibration-fill (E) timing window, applied to e_offset in both directions:
+// Early-fill (E) timing window, applied to e_offset in both directions:
 // an activation with e_offset < -window is illegal (the fill can't be
 // summoned), and one with e_offset < +window is E-critical. 60 since 2026-09
 // (was 85 from 1.5.0, +/-70 before that): across 18,773 analyzed charts the
 // hardest E0 on any best path was 57.7 ms, so nothing past 60 earns its
 // place. Search-load-bearing, so it is a constant, never the hit_window_ms
 // setting.
-constexpr double kCalibrationFillWindowMs = 60.0;
+constexpr double kEarlyFillWindowMs = 60.0;
 
 // ---- note value ----------------------------------------------------------
 // What one note is worth before any multiplier. ChordNote::basescore and
@@ -172,13 +172,13 @@ inline double squeeze_difficulty(bool is_sqin, double offset_ms) {
     return is_sqin ? offset_ms : (-offset_ms + 0.0);
 }
 
-// E0: the calibration fill lands inside its window and nothing was skipped.
+// E0: the early fill lands inside its window and nothing was skipped.
 inline bool is_e0(double e_offset, int skips) {
-    return e_offset < kCalibrationFillWindowMs && skips == 0;
+    return e_offset < kEarlyFillWindowMs && skips == 0;
 }
 
-// How hard an E0 activation's calibration fill is, in ms.
-inline double calibration_fill_difficulty(double e_offset) { return -e_offset + 0.0; }
+// How hard an E0 activation's early fill is, in ms.
+inline double early_fill_difficulty(double e_offset) { return -e_offset + 0.0; }
 
 // A SqIn (+) or SqOut (-): which way the note is squeezed across the SP end,
 // and by how many ms.
@@ -316,7 +316,7 @@ struct Activation {
 
     std::string notationstr() const;
     std::string notationstr_verbose() const;
-    bool is_e_critical() const;  // e_offset < kCalibrationFillWindowMs
+    bool is_e_critical() const;  // e_offset < kEarlyFillWindowMs
     bool is_E0() const;
     std::optional<double> e_difficulty(bool verbose = false) const;
     std::optional<double> difficulty() const;
@@ -480,7 +480,7 @@ struct HydraRecord {
 
     // The best all-0 path: the highest-scoring path whose activations all
     // record skips == 0, found under a 0 ms timing limit, plus the tied
-    // variations a calibration fill or a squeeze in/out produces. The main
+    // variations a early fill or a squeeze in/out produces. The main
     // search keeps paths by score band, not by shape, so this path is usually
     // below the band and absent from `paths`. Empty when the search did not run
     // or found nothing. Deliberately NOT part of all_paths(): the reports and

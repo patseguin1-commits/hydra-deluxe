@@ -35,11 +35,15 @@ std::string format_measure(const SongTiming& timing, int64_t tick) {
 }
 
 std::string activation_badge(const Activation& act) {
-    const std::optional<double> hardest = act.difficulty();
+    std::optional<double> hardest = act.difficulty();
+    // An E activation that skips fills has an optional early fill, which
+    // difficulty() leaves out. It still gets the badge: its timing decides
+    // whether the first fill shows up, and so how the skips are counted.
+    if (!hardest && act.is_e_critical()) hardest = act.e_difficulty(/*verbose=*/true);
     if (!hardest) return {};
     // difficulty() is the max over the SqIns/SqOuts and a required fill, so
     // the squeeze that produced it compares equal; a tie names the squeeze.
-    const char* what = "calibration fill";
+    const char* what = "early fill";
     for (const SPSqueeze& sq : act.sqinouts)
         if (sq.difficulty() == *hardest) {
             what = sq.kind == SqueezeKind::SqIn ? "squeeze in" : "squeeze out";
@@ -201,7 +205,7 @@ ActivationsView build_activations(const Path& path, const HydraRecord& /*record*
         if (act.is_e_critical()) {
             // Positive = hit early, the same sign as the report:
             // e_difficulty(true) is -e_offset for every E-critical activation.
-            av.calibration = "Calibration fill: " +
+            av.early_fill = "Early fill: " +
                              format_ms(*act.e_difficulty(/*verbose=*/true)) +
                              (act.is_E0() ? " (required)" : " (optional)");
         }

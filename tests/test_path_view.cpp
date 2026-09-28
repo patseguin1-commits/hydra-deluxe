@@ -139,7 +139,7 @@ TEST_CASE("display format: ms text is one decimal and a unit") {
     CHECK(format_ms(0.0) == "0.0ms");
 }
 
-TEST_CASE("build_activations: the calibration fill reads positive = early on both lines") {
+TEST_CASE("build_activations: the early fill reads positive = early on both lines") {
     HydraRecord rec;  // only feeds the footer
     auto view_of = [&rec](const Activation& act) {
         Path p;
@@ -160,19 +160,20 @@ TEST_CASE("build_activations: the calibration fill reads positive = early on bot
     // activation always has one now (record format v7, docs/adr/0017).
     CHECK(av.notation == "E0");
     CHECK(av.measure == "m1.1.0");
-    CHECK(av.badge == "calibration fill 12 ms");
-    CHECK(av.calibration == "Calibration fill: 12.3ms (required)");
+    CHECK(av.badge == "early fill 12 ms");
+    CHECK(av.early_fill == "Early fill: 12.3ms (required)");
 
-    // E-critical but not E0: no ms in the header, and the details line uses
-    // the same sign rule, so 20 ms late reads negative.
+    // E-critical but not E0: the badge and the details line use the same
+    // sign rule, so 20 ms late reads negative. Optional, so never warn-coloured.
     Activation e1;
     e1.skips = 1;
     e1.sp_meter = 2;
     e1.e_offset = 20.0;
     av = view_of(e1);
     CHECK(av.notation == "E1");
-    CHECK(av.badge.empty());
-    CHECK(av.calibration == "Calibration fill: -20.0ms (optional)");
+    CHECK(av.badge == "early fill -20 ms");
+    CHECK_FALSE(av.difficult);
+    CHECK(av.early_fill == "Early fill: -20.0ms (optional)");
 }
 
 TEST_CASE("path buttons: each path's own hardest timing, warn past the difficult floor") {
@@ -706,7 +707,7 @@ TEST_CASE("activation timeline: onset over the song's length, and the end measur
     CHECK(blind.timeline_end.empty());
 }
 
-TEST_CASE("activation badge: shown only when the activation needs a squeeze") {
+TEST_CASE("activation badge: shown for a squeeze or an early fill") {
     Activation none;
     none.skips = 0;
     none.e_offset = 300.0;  // not e-critical
@@ -720,18 +721,22 @@ TEST_CASE("activation badge: shown only when the activation needs a squeeze") {
     sqout.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -163.0});
     CHECK(activation_badge(sqout) == "squeeze out 163 ms");
 
-    // A required (E0) calibration fill is a squeeze too; the hardest one names the badge.
+    // A required (E0) early fill is a squeeze too; the hardest one names the badge.
     Activation e0 = none;
     e0.e_offset = -30.0;
-    CHECK(activation_badge(e0) == "calibration fill 30 ms");
+    CHECK(activation_badge(e0) == "early fill 30 ms");
     e0.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -5.0});
-    CHECK(activation_badge(e0) == "calibration fill 30 ms");
+    CHECK(activation_badge(e0) == "early fill 30 ms");
 
-    // An optional (E1) fill is not required, so no badge.
+    // An optional (E1) fill still gets a badge: its timing decides whether the
+    // first fill shows up, which is how the skips are counted.
     Activation e1 = none;
     e1.skips = 1;
     e1.e_offset = -30.0;
-    CHECK(activation_badge(e1).empty());
+    CHECK(activation_badge(e1) == "early fill 30 ms");
+    // A squeeze the activation needs outranks an optional fill.
+    e1.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, -5.0});
+    CHECK(activation_badge(e1) == "squeeze out 5 ms");
 }
 
 TEST_CASE("squeeze sentences: SqIn, SqOut, and what a squeeze-out costs") {

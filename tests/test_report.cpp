@@ -679,9 +679,9 @@ TEST_CASE("report pages number their rows in a # column") {
 
 TEST_CASE("path report explains and renames its columns") {
     const std::string html = report::build_html({}, "sub", "foot", 85.0);
-    CHECK(html.find("t:'Cal fill (ms)'") != std::string::npos);
+    CHECK(html.find("t:'Early fill (ms)'") != std::string::npos);
     CHECK(html.find("t:'Avg multiplier'") != std::string::npos);
-    CHECK(html.find("t:'Cal fill',") == std::string::npos);
+    CHECK(html.find("t:'Early fill',") == std::string::npos);
     CHECK(html.find("t:'Avg mult',") == std::string::npos);
     for (const char* key : {"mode", "path", "score", "acts", "skip", "ms", "tier", "efill",
                             "mult", "sqin", "sqout", "notes"}) {

@@ -4,8 +4,8 @@
 //
 // Widths here are the app's fonts at scale 1, as the GUI harness measures
 // them: Courier Prime (the measure) is 9.6 px a character ("m1024.1.120" is
-// 105.6 px); the other text averages under 6 px a character ("calibration
-// fill 999 ms" is 129 px), taken here at a generous 7. The GUI test
+// 105.6 px); the other text averages under 6 px a character, taken here at
+// a generous 7. The GUI test
 // paths-row-layout checks the same with the real fonts.
 
 #include "doctest.h"
@@ -53,7 +53,7 @@ TEST_CASE("activation row: the layout scales with the DPI") {
 TEST_CASE("activation row: the badge sits flush right, its pill clear of long bars") {
     // The narrowest details column, less a scrollbar.
     const float row_w = hydra::ui::kMinPathDetailsW - 16.0f;
-    const float badge_w = text(23);  // "calibration fill 999 ms", the longest wording
+    const float badge_w = text(18);  // "squeeze out 999 ms", the longest wording
     const ActivationRowLayout l = activation_row_layout(mono(11), badge_w, row_w, 1.0f);
     CHECK(l.badge_x + badge_w == doctest::Approx(row_w - hydra::ui::kRowBadgeRight));
     CHECK(l.badge_pill_min == doctest::Approx(l.badge_x - hydra::ui::kRowBadgePad));

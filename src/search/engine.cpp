@@ -537,7 +537,7 @@ bool Engine::branch_activate(Path& p, Path* child) {
     const ScoreGraphEdge* eo = eobj(n.branch_edge);
 
     const double e_offset = e.activation_fill_deadline_ms - p.sp_ready_ms;
-    if (e_offset < -kCalibrationFillWindowMs) return false;
+    if (e_offset < -kEarlyFillWindowMs) return false;
 
     // activation_initial_end_times, keyed by SP meter. The flat form was a list
     // with NO_TIME gaps in range [0, top]; here the map has meters 2..max.
@@ -688,7 +688,7 @@ double Engine::act_difficulty(int32_t act) const {
         if (!has_value(best) || d > best) best = d;
     }
     if (is_e0(a.e_offset, a.skips)) {
-        const double d = calibration_fill_difficulty(a.e_offset);
+        const double d = early_fill_difficulty(a.e_offset);
         if (!has_value(best) || d > best) best = d;
     }
     return best;
@@ -887,7 +887,7 @@ void Engine::reduce_iteration_paths() {
 
         // Group by what decides the path's future: its SP meter, or its SP end
         // while active. sp_ready_ms is left out, although branch_activate reads
-        // it for the calibration-fill window. Measured 2026-09 over the corpus
+        // it for the early-fill window. Measured 2026-09 over the corpus
         // with sp_ready_ms added to the key: 0 score changes and 0
         // variant-list changes across 96 charts (the corpus's 97, less one
         // that hydra_replay could not open, skipped on both sides).

@@ -15,7 +15,7 @@ double py_round3(double v);
 std::string format_avg_mult(double v);
 
 // A timing in ms, one decimal, with the unit: "12.3ms". The caller decides
-// the sign; the calibration fill passes Activation::e_difficulty(true), which
+// the sign; the early fill passes Activation::e_difficulty(true), which
 // is positive when the fill is hit early.
 std::string format_ms(double ms);
 

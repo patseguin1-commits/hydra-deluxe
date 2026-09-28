@@ -85,7 +85,7 @@ std::vector<Path> search_allzero(const ScoreGraph& graph,
         return {};
     }
 
-    // A chart can also refuse every activation opportunity (the calibration
+    // A chart can also refuse every activation opportunity (the early
     // fill can never be summoned in time). The search then returns a single
     // path with no activations, whose pathstring is empty.
     if (paths.size() == 1 && !paths[0].has_activations()) paths.clear();

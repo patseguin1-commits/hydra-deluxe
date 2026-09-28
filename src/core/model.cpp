@@ -399,13 +399,13 @@ std::string MultSqueeze::howto() const {
 // ---- Activation ---------------------------------------------------------
 
 bool Activation::is_e_critical() const {
-    return e_offset < kCalibrationFillWindowMs;
+    return e_offset < kEarlyFillWindowMs;
 }
 
 bool Activation::is_E0() const { return is_e0(e_offset, skips); }
 
 std::optional<double> Activation::e_difficulty(bool verbose) const {
-    if (is_E0() || verbose) return calibration_fill_difficulty(e_offset);
+    if (is_E0() || verbose) return early_fill_difficulty(e_offset);
     return std::nullopt;
 }
 

@@ -89,7 +89,7 @@ struct ActivationRowView {
 
     // The opened row.
     std::string chord;           // Chord::rowstr(), e.g. "[Kick - GreenCym]"
-    std::string calibration;    // "Calibration fill: " + format_ms(positive = early); empty when not E-critical
+    std::string early_fill;      // "Early fill: " + format_ms(positive = early); empty when not E-critical
     std::vector<TextLine> squeeze_sentences;  // one per SqIn/SqOut, see squeeze_sentences()
     std::string scale_warning;  // the transfer-scale prose; empty when immaterial
     std::string overfill_warning;  // cap-clamped anchor prose; empty when not clamped
@@ -120,11 +120,14 @@ ActivationsView build_activations(const Path& path, const HydraRecord& record,
                                   const core::Rules& rules = core::default_rules(),
                                   std::optional<double> song_length_ms = std::nullopt);
 
-// The badge on an activation row. It shows exactly when the activation needs
-// a squeeze, which is when Activation::difficulty() has a value: a SqIn, a
-// SqOut, or a required (E0) calibration fill. It names the hardest of them,
+// The badge on an activation row. It shows when the activation needs a
+// squeeze, which is when Activation::difficulty() has a value: a SqIn, a
+// SqOut, or a required (E0) early fill. It names the hardest of them,
 // the one difficulty() reports, in whole ms: "squeeze out 163 ms",
-// "squeeze in 12 ms", "calibration fill 30 ms". Empty otherwise.
+// "squeeze in 12 ms", "early fill 30 ms". With none of those, an optional
+// early fill (an E activation that skips fills) still gets one, same
+// wording; is_difficult() ignores it, so it is never warn-coloured. Empty
+// otherwise.
 std::string activation_badge(const Activation& act);
 
 // One plain sentence per SqIn/SqOut of `act`, in its order, warn-coloured when
