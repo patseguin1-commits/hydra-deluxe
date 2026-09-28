@@ -17,7 +17,7 @@
 cmake_minimum_required(VERSION 3.21)
 # The single source of the version: window titles, the record staleness stamp,
 # and the HTTP User-Agent all derive from it via src/core/version.h.
-project(Hydra VERSION 1.9.1 LANGUAGES C CXX RC)
+project(Hydra VERSION 1.9.2 LANGUAGES C CXX RC)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
