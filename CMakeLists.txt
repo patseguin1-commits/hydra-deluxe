@@ -409,6 +409,7 @@ add_executable(hydra_tests
     tests/test_library_model.cpp
     tests/test_app_shell.cpp
     tests/test_label_layout.cpp
+    tests/test_activation_row_layout.cpp
     tests/test_preview_controller.cpp
     tests/test_utf8_paths.cpp
 )

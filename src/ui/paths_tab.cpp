@@ -22,6 +22,7 @@
 #include "core/model.h"
 #include "imgui.h"
 #include "imgui_internal.h"  // RenderArrow
+#include "ui/activation_row_layout.h"
 #include "ui/app_state.h"
 #include "ui/details_view.h"
 #include "ui/fonts.h"
@@ -211,8 +212,12 @@ void render_timeline(const app::ActivationsView& view) {
 
 // One activation's line: a full-width Selectable (##act<number>) with the fold
 // arrow, the number in a circle, the notation, the measure, the bars and the
-// badge laid over it. A click opens it alone, or closes it.
-void render_activation_row(size_t i, const app::ActivationRowView& a, app::PathsTabUi& ui) {
+// badge laid over it. A click opens it alone, or closes it. The bars start
+// after `widest_measure_w`, the widest measure in the path's list, so a long
+// measure never runs into them and every row's bars line up
+// (activation_row_layout.h).
+void render_activation_row(size_t i, const app::ActivationRowView& a, app::PathsTabUi& ui,
+                           float widest_measure_w) {
     const bool open = i < ui.act_open.size() && ui.act_open[i];
     const float h = px(34.0f);
     char id[32];
@@ -233,13 +238,16 @@ void render_activation_row(size_t i, const app::ActivationRowView& a, app::Paths
     text_at(ImVec2(dot.x - ImGui::CalcTextSize(num.c_str()).x * 0.5f, text_y), text_color(),
             num.c_str());
     text_at(ImVec2(top.x + px(52.0f), text_y), kBestPathColor, a.notation.c_str(), g_mono_font);
-    text_at(ImVec2(top.x + px(104.0f), text_y), text_color(), a.measure.c_str(), g_mono_font);
-    text_at(ImVec2(top.x + px(200.0f), text_y), dim_color(), a.bars.c_str());
+    const ImVec2 badge_sz =
+        a.badge.empty() ? ImVec2(0.0f, 0.0f) : ImGui::CalcTextSize(a.badge.c_str());
+    const ActivationRowLayout l = activation_row_layout(widest_measure_w, badge_sz.x, width, px(1.0f));
+    text_at(ImVec2(top.x + l.measure_x, text_y), text_color(), a.measure.c_str(), g_mono_font);
+    text_at(ImVec2(top.x + l.bars_x, text_y), dim_color(), a.bars.c_str());
     if (!a.badge.empty()) {
-        const ImVec2 sz = ImGui::CalcTextSize(a.badge.c_str());
-        const float bx = top.x + width - sz.x - px(14.0f);
-        const ImVec2 b_min(bx - px(8.0f), text_y - px(2.0f));
-        const ImVec2 b_max(bx + sz.x + px(8.0f), text_y + sz.y + px(2.0f));
+        const ImVec2 sz = badge_sz;
+        const float bx = top.x + l.badge_x;
+        const ImVec2 b_min(top.x + l.badge_pill_min, text_y - px(2.0f));
+        const ImVec2 b_max(bx + sz.x + px(kRowBadgePad), text_y + sz.y + px(2.0f));
         dl->AddRectFilled(b_min, b_max, IM_COL32(51, 38, 26, 255), px(9.0f));
         dl->AddRect(b_min, b_max, IM_COL32(106, 69, 32, 255), px(9.0f));
         text_at(ImVec2(bx, text_y), a.difficult ? kWarningColor : dim_color(), a.badge.c_str());
@@ -276,15 +284,31 @@ void render_backend_table(const app::ActivationRowView& a) {
         ImGui::TextDisabled("None.");
         return;
     }
-    char id[32];
-    std::snprintf(id, sizeof(id), "##backends%d", a.number);
     ImGui::PushFont(g_mono_font, 0.0f);
+    // Timing, Chord and Points are as wide as their widest cell or heading, so
+    // Rating keeps the rest. A table's column widths are set only when it is
+    // first made (after that they are the user's to drag), so the id carries
+    // the widths: a row list that needs other widths gets a fresh table.
+    float w_timing = ImGui::CalcTextSize("Timing").x;
+    float w_chord = ImGui::CalcTextSize("Chord").x;
+    float w_points = ImGui::CalcTextSize("Points").x;
+    for (const app::BackendRowView& row : a.backends) {
+        w_timing = std::max(w_timing, ImGui::CalcTextSize(row.timing.c_str()).x);
+        w_chord = std::max(w_chord, ImGui::CalcTextSize(row.chord.c_str()).x);
+        w_points = std::max(w_points, ImGui::CalcTextSize(row.points.c_str()).x);
+    }
+    w_timing = std::ceil(w_timing);
+    w_chord = std::ceil(w_chord);
+    w_points = std::ceil(w_points);
+    char id[64];
+    std::snprintf(id, sizeof(id), "##backends%d_%d_%d_%d", a.number, static_cast<int>(w_timing),
+                  static_cast<int>(w_chord), static_cast<int>(w_points));
     if (ImGui::BeginTable(id, 4,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_Resizable |
                               ImGuiTableFlags_SizingFixedFit)) {
-        ImGui::TableSetupColumn("Timing", ImGuiTableColumnFlags_WidthFixed, px(80));
-        ImGui::TableSetupColumn("Chord", ImGuiTableColumnFlags_WidthFixed, px(80));
-        ImGui::TableSetupColumn("Points", ImGuiTableColumnFlags_WidthFixed, px(80));
+        ImGui::TableSetupColumn("Timing", ImGuiTableColumnFlags_WidthFixed, w_timing);
+        ImGui::TableSetupColumn("Chord", ImGuiTableColumnFlags_WidthFixed, w_chord);
+        ImGui::TableSetupColumn("Points", ImGuiTableColumnFlags_WidthFixed, w_points);
         ImGui::TableSetupColumn("Rating", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableHeadersRow();
         for (const app::BackendRowView& row : a.backends) {
@@ -298,8 +322,12 @@ void render_backend_table(const app::ActivationRowView& a) {
             ImGui::TableSetColumnIndex(2);
             ImGui::TextUnformatted(row.points.c_str());
             ImGui::TableSetColumnIndex(3);
+            // Rating wraps inside its cell: at the narrowest panel the
+            // squeezed-out note is longer than the column is wide.
             if (row.warn) ImGui::PushStyleColor(ImGuiCol_Text, kWarningColor);
+            ImGui::PushTextWrapPos(0.0f);
             ImGui::TextUnformatted(row.rating.c_str());
+            ImGui::PopTextWrapPos();
             if (row.warn) ImGui::PopStyleColor();
         }
         ImGui::EndTable();
@@ -380,9 +408,14 @@ void render_activations(const app::ActivationsView& view, app::PathsTabUi& ui) {
 
     render_timeline(view);
     ImGui::Spacing();
+    float widest_measure = 0.0f;
+    ImGui::PushFont(g_mono_font, 0.0f);
+    for (const app::ActivationRowView& a : view.acts)
+        widest_measure = std::max(widest_measure, ImGui::CalcTextSize(a.measure.c_str()).x);
+    ImGui::PopFont();
     for (size_t i = 0; i < view.acts.size(); ++i) {
         const app::ActivationRowView& a = view.acts[i];
-        render_activation_row(i, a, ui);
+        render_activation_row(i, a, ui, widest_measure);
         if (i < ui.act_open.size() && ui.act_open[i]) render_activation_body(i, a, ui);
     }
 }

@@ -3,6 +3,9 @@
 // table and its limit, the two folds under the list, and Copy path. Labels are
 // the plan's label contract (docs/superpowers/plans/2026-09-27-ui-redesign.md).
 
+#include <cfloat>
+#include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -13,6 +16,7 @@
 #include "app/path_view.h"
 #include "core/model.h"
 #include "imgui_internal.h"
+#include "ui/activation_row_layout.h"
 #include "ui/app_state.h"
 #include "ui/details_view.h"
 #include "ui/fonts.h"  // px()
@@ -320,6 +324,130 @@ void test_paths_long_path(ImGuiTestContext* ctx) {
     }
 }
 
+// A width in the font the app draws with (`font` null: the default one).
+float text_w(const char* s, ImFont* font = nullptr) {
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const float size = st.FontSizeBase * st.FontScaleMain * st.FontScaleDpi;
+    if (!font) font = ImGui::GetIO().FontDefault ? ImGui::GetIO().FontDefault : ImGui::GetFont();
+    return font->CalcTextSizeA(size, FLT_MAX, 0.0f, s).x;
+}
+
+// The narrowest song panel: the library as wide as it goes.
+bool narrowest_panel(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    hydra::ui::remember_library_share(0.99f);
+    h.app->library_ui.panel_was_open = false;  // the split sets its width next frame
+    ctx->Yield(3);
+    ImGuiWindow* panel = ctx->WindowInfo("//Hydra/##songpanel").Window;
+    IM_CHECK_RETV(panel != nullptr, false);
+    IM_CHECK_RETV(std::fabs(panel->Size.x - hydra::ui::px(hydra::ui::kMinSongPanelW)) <= 1.0f,
+                  false);
+    return true;
+}
+
+// The backend table drawn this frame for activation `number` (its id starts
+// "##backends<number>_"; the rest is its column widths).
+ImGuiTable* backend_table(int number) {
+    ImGuiContext& g = *ImGui::GetCurrentContext();
+    ImGuiWindow* details = window_named("##pathdetails");
+    if (!details) return nullptr;
+    const std::string prefix = "##backends" + std::to_string(number) + "_";
+    for (int n = 0; n < g.Tables.GetMapSize(); ++n) {
+        ImGuiTable* t = g.Tables.TryGetMapData(n);
+        if (!t || t->ColumnsCount != 4 || t->LastFrameActive < g.FrameCount - 2) continue;
+        if (t->OuterWindow != details) continue;
+        // Match by id, rebuilt from the widths the table was set up with.
+        char id[64];
+        std::snprintf(id, sizeof(id), "%s%d_%d_%d", prefix.c_str(),
+                      static_cast<int>(t->Columns[0].InitStretchWeightOrWidth),
+                      static_cast<int>(t->Columns[1].InitStretchWeightOrWidth),
+                      static_cast<int>(t->Columns[2].InitStretchWeightOrWidth));
+        if (t->ID == details->GetID(id)) return t;
+    }
+    return nullptr;
+}
+
+// At the narrowest panel, Burnout's first backend table: Timing, Chord and
+// Points are as wide as their text, and the squeezed-out rating, the longest
+// line, wraps inside its Rating cell instead of running past it.
+void test_paths_backend_fit(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_burnout(ctx)) return;
+    if (!narrowest_panel(ctx)) return;
+    ctx->ItemClick("**/Backend timings##act1");
+    ctx->Yield(3);
+    IM_CHECK(on_screen(h, "Insane SqOut <-- squeezed out (-260)"));
+    ImGuiTable* t = backend_table(1);
+    IM_CHECK(t != nullptr);
+    if (ctx->IsError()) return;
+    // Rating's content never reaches past its cell's right edge.
+    const ImGuiTableColumn& rating = t->Columns[3];
+    const float content_max = (std::max)(rating.ContentMaxXUnfrozen, rating.ContentMaxXFrozen);
+    ctx->LogInfo("rating column %.1f..%.1f, content to %.1f", rating.WorkMinX, rating.WorkMaxX,
+                 content_max);
+    IM_CHECK_LE(content_max, rating.WorkMaxX + 0.5f);
+    // The squeezed-out line is longer than the cell, so it did wrap: the
+    // cell is narrower than the line.
+    const float line_w = text_w("Insane SqOut <-- squeezed out (-260)", hydra::ui::g_mono_font);
+    IM_CHECK_LT(rating.WorkMaxX - rating.WorkMinX, line_w);
+    // The three fixed columns fit their text: no cell runs past its column.
+    for (int c = 0; c < 3; ++c) {
+        const ImGuiTableColumn& col = t->Columns[c];
+        IM_CHECK_LE((std::max)(col.ContentMaxXUnfrozen, col.ContentMaxXFrozen), col.WorkMaxX + 0.5f);
+        IM_CHECK_LT(col.WidthGiven, hydra::ui::px(80.0f));
+    }
+    // And the table stays inside the details column.
+    ImGuiWindow* details = window_named("##pathdetails");
+    IM_CHECK_LE(details->ContentSize.x, details->ContentRegionRect.GetWidth() + 0.5f);
+    ctx->LogInfo("fixed widths %.1f %.1f %.1f", t->Columns[0].WidthGiven, t->Columns[1].WidthGiven,
+                 t->Columns[2].WidthGiven);
+}
+
+// The activation rows at the narrowest panel: the measure, the bars and the
+// badge never overlap, on Burnout's own rows and on the longest pieces real
+// charts have (an 11-character measure, a two-digit bar count, the longest
+// badge wording with a 3-digit time).
+void test_paths_row_layout(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_burnout(ctx)) return;
+    if (!narrowest_panel(ctx)) return;
+    const float row_w = ctx->ItemInfo("**/##act1").RectFull.GetWidth();
+    IM_CHECK_GT(row_w, 0.0f);
+    const float scale = hydra::ui::px(1.0f);
+    const float gap = hydra::ui::px(hydra::ui::kRowBarsGap);
+    ImFont* mono = hydra::ui::g_mono_font;
+
+    auto check = [&](const std::string& widest_measure, const std::string& measure,
+                     const std::string& bars, const std::string& badge) {
+        const hydra::ui::ActivationRowLayout l = hydra::ui::activation_row_layout(
+            text_w(widest_measure.c_str(), mono), badge.empty() ? 0.0f : text_w(badge.c_str()),
+            row_w, scale);
+        const float measure_end = l.measure_x + text_w(measure.c_str(), mono);
+        const float bars_end = l.bars_x + text_w(bars.c_str());
+        ctx->LogInfo("measure %s ends %.1f, bars at %.1f..%.1f, badge pill from %.1f (row %.1f)",
+                     measure.c_str(), measure_end, l.bars_x, bars_end, l.badge_pill_min, row_w);
+        IM_CHECK_LE(measure_end + gap, l.bars_x + 0.01f);
+        IM_CHECK_GE(l.bars_x, hydra::ui::px(hydra::ui::kRowMinBarsX));
+        if (!badge.empty()) IM_CHECK_LT(bars_end, l.badge_pill_min);
+    };
+    // The same call the tab makes, so this is the cached view it draws.
+    hydra::ui::AppState& app = *h.app;
+    const hydra::app::ActivationsView& view =
+        app.details_ui.paths_tab
+            .details(*app.details_ui.selected_path, *app.viewed.record, app.record_generation.n,
+                     app.viewed.timing ? &*app.viewed.timing : nullptr,
+                     static_cast<double>(app.settings.hit_window_ms), app.settings.backend_limit(),
+                     app.settings.rules, app.viewed.song_length_ms)
+            .activations;
+    std::string widest;
+    for (const hydra::app::ActivationRowView& a : view.acts)
+        if (text_w(a.measure.c_str(), mono) > text_w(widest.c_str(), mono)) widest = a.measure;
+    IM_CHECK(!view.acts.empty());
+    for (const hydra::app::ActivationRowView& a : view.acts) check(widest, a.measure, a.bars, a.badge);
+    check("m1024.1.120", "m1024.1.120", "12 bars", "calibration fill 999 ms");
+    check("m1024.1.120", "m1024.1.120", "12 bars", "squeeze out 999 ms");
+}
+
 }  // namespace
 
 // Registers this file's tests; register_tests() (uitest_tests.cpp) calls it.
@@ -336,6 +464,8 @@ void register_paths_tests(Harness& h) {
         {"paths-uncounted", test_paths_uncounted},
         {"paths-fit-narrow", test_paths_fit_narrow},
         {"paths-long-path", test_paths_long_path},
+        {"paths-backend-fit", test_paths_backend_fit},
+        {"paths-row-layout", test_paths_row_layout},
     };
     for (const Entry& e : entries) {
         ImGuiTest* t = IM_REGISTER_TEST(h.engine, "hydra", e.name);
