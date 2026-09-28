@@ -127,7 +127,7 @@ TEST_CASE("mix_stems resamples to the output rate and unifies channels") {
     CHECK(out.sample_rate == 48000);
     // Resampled 24k -> 48k over ~1 s lands near 48000 frames (resampler latency
     // trims a few).
-    CHECK(out.frames() == doctest::Approx(48000).epsilon(0.02));
+    CHECK(static_cast<double>(out.frames()) == doctest::Approx(48000).epsilon(0.02));
     CHECK(estimate_freq_hz(out, 0) == doctest::Approx(300.0).epsilon(0.05));
     // A mono stem upmixed to stereo puts the same signal in both channels.
     for (int64_t i = 100; i < out.frames() - 100; i += 977) {

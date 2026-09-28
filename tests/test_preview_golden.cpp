@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -31,6 +32,7 @@
 #include "json.hpp"
 #include "parse/song.h"
 #include "core/winstr.h"
+#include "env_util.h"
 #include "render/preview_renderer.h"
 #include "warp_util.h"
 
@@ -134,7 +136,7 @@ TEST_CASE("preview golden: a Hydra frame matches the Onyx screenshot") {
     nlohmann::json spec = nlohmann::json::parse(spec_text);
     const std::string chart = kFixtureDir + "/" + spec.value("chart", "notes.mid");
     double time_ms = spec.value("time_ms", 0.0);
-    if (const char* t = std::getenv("HYDRA_PREVIEW_GOLDEN_TIME")) time_ms = std::atof(t);  // dev aid
+    if (const auto t = read_env("HYDRA_PREVIEW_GOLDEN_TIME")) time_ms = std::atof(t->c_str());  // dev aid
     const int w = spec.value("width", 0), h = spec.value("height", 0);
     const bool pro = spec.value("pro", true), bass2x = spec.value("bass2x", true);
     const double tolerance = spec.value("tolerance", 20.0);
@@ -166,7 +168,7 @@ TEST_CASE("preview golden: a Hydra frame matches the Onyx screenshot") {
     REQUIRE(golden.height == h);
 
     std::vector<uint8_t> actual = render_chart(chart, time_ms, w, h, pro, bass2x);
-    if (std::getenv("HYDRA_PREVIEW_GOLDEN_DUMP")) {
+    if (read_env("HYDRA_PREVIEW_GOLDEN_DUMP")) {
         write_bmp("preview_actual.bmp", actual, w, h);
         write_bmp("preview_golden.bmp", golden.rgba, w, h);
     }
@@ -202,17 +204,17 @@ TEST_CASE("preview golden: a Hydra frame matches the Onyx screenshot") {
 }
 
 TEST_CASE("preview dump (dev aid, HYDRA_PREVIEW_DUMP)") {
-    const char* env = std::getenv("HYDRA_PREVIEW_DUMP");
+    const std::optional<std::string> env = read_env("HYDRA_PREVIEW_DUMP");
     if (!env) return;
-    std::string s = env;
-    size_t a = s.find('|'), b = s.rfind('|');
+    const std::string& spec = *env;
+    size_t a = spec.find('|'), b = spec.rfind('|');
     REQUIRE(a != std::string::npos);
     REQUIRE(b != a);
-    const std::string chart = s.substr(0, a);
-    const double time_ms = std::atof(s.substr(a + 1, b - a - 1).c_str());
-    const std::string out = s.substr(b + 1);
+    const std::string chart = spec.substr(0, a);
+    const double time_ms = std::atof(spec.substr(a + 1, b - a - 1).c_str());
+    const std::string out = spec.substr(b + 1);
     const int w = 900, h = 800;
-    const bool bass2x = std::getenv("HYDRA_PREVIEW_DUMP_NO2X") == nullptr;
+    const bool bass2x = !read_env("HYDRA_PREVIEW_DUMP_NO2X");
     std::vector<uint8_t> px = render_chart(chart, time_ms, w, h, true, bass2x);
     write_bmp(out, px, w, h);
     MESSAGE("wrote " << out);

@@ -43,9 +43,11 @@ add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/d1trimfile:${HYDRA_SOURCE_PREFI
 # literals (em dashes, arrows). Without it MSVC reads them in the system code
 # page, which works on an English Windows only by luck. C++ only, so the
 # resource compiler never sees it.
+# /WX: our code builds with zero warnings, so any new one fails the build
+# instead of scrolling past. Third-party targets don't link this.
 add_library(hydra_warnings INTERFACE)
 target_compile_options(hydra_warnings INTERFACE
-    /W4 /EHsc $<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
+    /W4 /WX /EHsc $<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
 
 # ---- third_party: Dear ImGui (core + Win32/DX11 backends) ----------------
 add_library(imgui STATIC

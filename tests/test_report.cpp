@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -24,6 +25,7 @@
 #include "app/analysis.h"
 #include "app/config.h"
 #include "app/dm_report.h"
+#include "env_util.h"
 #include "app/fill_report.h"
 #include "app/html_page.h"
 #include "app/report.h"
@@ -395,9 +397,9 @@ TEST_CASE("records_by_hash keys every listed record by its lower-case hash") {
 // checked in a real browser before and after (docs/adr/0016). Run it with
 //   hydra_tests.exe --no-skip -tc="report pages: write samples*"
 TEST_CASE("report pages: write samples for the browser check" * doctest::skip()) {
-    const char* dir = std::getenv("HYDRA_PAGE_SAMPLES");
-    REQUIRE(dir != nullptr);
-    const std::filesystem::path out = std::filesystem::u8path(dir);
+    const std::optional<std::string> dir = read_env("HYDRA_PAGE_SAMPLES");
+    REQUIRE(dir.has_value());
+    const std::filesystem::path out = std::filesystem::u8path(*dir);
     std::filesystem::create_directories(out);
 
     std::vector<report::ReportRow> paths;
