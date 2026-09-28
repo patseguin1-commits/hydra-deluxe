@@ -435,6 +435,9 @@ void test_layout_sweep(ImGuiTestContext* ctx) {
         {"burnout", "Burnout"},
         {"spiraling void", "The Spiraling Void"},
         {"tapestry", "Tapestry of the Starless Abstract (Shortened)"},
+        // A MIDI chart without [ENABLE_CHART_DYNAMICS]: the Dynamics tab's
+        // right box carries its longest line.
+        {"themata", "Themata"},
     };
     for (const Chart& c : charts) {
         open_titled(ctx, c.search, c.title);
@@ -459,6 +462,12 @@ void test_layout_sweep(ImGuiTestContext* ctx) {
             overflowing_windows(at + "Preview", found);
             ctx->ItemClick("**/##DetailsTabs/Dynamics");
             ctx->Yield(10);
+            if (std::strcmp(c.title, "Themata") == 0)
+                IM_CHECK(wait_until(ctx, [&] {
+                    return visible_text(h).find(
+                               "Dynamics enabled: no (markings ignored by Clone Hero)") !=
+                           std::string::npos;
+                }, 60));
             overflowing_windows(at + "Dynamics", found);
             ctx->ItemClick("**/##DetailsTabs/Stars");
             ctx->Yield(3);
@@ -466,6 +475,50 @@ void test_layout_sweep(ImGuiTestContext* ctx) {
             if (ctx->IsError()) return;
         }
     }
+    for (const std::string& f : found) std::fprintf(stderr, "OVERFLOW %s\n", f.c_str());
+    IM_CHECK_EQ(found.size(), (size_t)0);
+}
+
+// A long error message wraps inside its window instead of running past the
+// panel's edge. The Dynamics tab's "Dynamics failed: ..." line is the one the
+// harness can reach: pointing the open song at a long path with an unknown
+// extension makes the parse fail with that path in its message.
+void test_long_error_wraps(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    open_titled(ctx, "burnout", "Burnout");
+    if (ctx->IsError()) return;
+    hydra::ui::remember_library_share(0.99f);  // the narrowest panel
+    h.app->library_ui.panel_was_open = false;
+    ctx->Yield(3);
+    set_panel_ref(ctx);
+    ctx->ItemClick("**/##DetailsTabs/Dynamics");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->dynamics_result.has_value(); }, 60));
+
+    std::string long_path = "C:\\Songs";
+    for (int i = 0; i < 8; ++i)
+        long_path += "\\A Rather Long Folder Name Kept For Testing " + std::to_string(i);
+    long_path += "\\notes.txt";
+    h.app->selected->notespath = long_path;
+    h.app->selected->md5 = "ffffffffffffffffffffffffffffffff";  // no stored counts
+    IM_CHECK(wait_until(ctx, [&] {
+        return h.app->dynamics_job && h.app->dynamics_job->finished() &&
+               !h.app->dynamics_job->ok();
+    }, 30));
+    ctx->Yield(3);
+    const std::string line = "Dynamics failed: " + h.app->dynamics_job->error();
+    IM_CHECK(visible_text(h).find(line) != std::string::npos);
+    // Unwrapped, the line would be wider than the whole screen.
+    IM_CHECK_GT(ImGui::CalcTextSize(line.c_str()).x, ImGui::GetIO().DisplaySize.x);
+
+    // Only the song panel and its children: the settings bar is another
+    // task's (layout-sweep covers it).
+    std::vector<std::string> all, found;
+    overflowing_windows("long error", all);
+    for (const std::string& f : all)
+        if (f.find("##songpanel") != std::string::npos) found.push_back(f);
     for (const std::string& f : found) std::fprintf(stderr, "OVERFLOW %s\n", f.c_str());
     IM_CHECK_EQ(found.size(), (size_t)0);
 }
@@ -572,6 +625,7 @@ const std::vector<TestEntry>& details_tests() {
         {"panel-open-close", test_panel_open_close},
         {"panel-split", test_panel_split},
         {"layout-sweep", test_layout_sweep},
+        {"long-error-wraps", test_long_error_wraps},
         {"panel-prev-next", test_panel_prev_next},
         {"panel-headline", test_panel_headline},
         {"panel-keeps-analysis", test_panel_keeps_analysis},
