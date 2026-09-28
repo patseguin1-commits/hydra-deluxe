@@ -276,6 +276,14 @@ hydra::app::PreviewNextActBox PreviewController::next_act_box() const {
     return hydra::app::build_next_act_box(scene_, transport_.now_ms());
 }
 
+std::vector<hydra::app::PreviewNextActBox> PreviewController::next_act_boxes() const {
+    std::vector<hydra::app::PreviewNextActBox> boxes;
+    boxes.reserve(scene_.activations.size());
+    for (const hydra::app::PreviewActivation& a : scene_.activations)
+        boxes.push_back(hydra::app::build_next_act_box(scene_, a.ms));
+    return boxes;
+}
+
 std::string PreviewController::sp_meter_readout() const {
     return hydra::app::sp_meter_readout(scene_.sp_meter, transport_.now_ms());
 }

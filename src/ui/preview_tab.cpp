@@ -53,13 +53,20 @@ void render_path_picker(AppState& app) {
     ImGui::SameLine();
     ImGui::PushFont(g_mono_font, 0.0f);
     // On its own line, as wide as the longest path in the list (or the
-    // line), so no path is ever cut off under the arrow.
+    // line). A path longer than the line (40 activations and "  (optimal)"
+    // run to about 100 characters) ends in "…" rather than vanish under the
+    // arrow, with the whole path a hover away; the open list shows it whole.
     float widest = 0.0f;
     for (const hydra::app::PathButtonView& b : list.buttons)
         widest = std::max(widest, ImGui::CalcTextSize(hydra::app::preview_path_label(b).c_str()).x);
-    const float fit = widest + ImGui::GetStyle().FramePadding.x * 2.0f + ImGui::GetFrameHeight();
-    ImGui::SetNextItemWidth(std::min(fit, ImGui::GetContentRegionAvail().x));
-    if (ImGui::BeginCombo("##previewpath", current.c_str())) {
+    const float chrome = ImGui::GetStyle().FramePadding.x * 2.0f + ImGui::GetFrameHeight();
+    const float box_w = std::min(widest + chrome, ImGui::GetContentRegionAvail().x);
+    const std::string shown = render::ellipsize(
+        current, box_w - chrome, [](const std::string& s) { return ImGui::CalcTextSize(s.c_str()).x; });
+    ImGui::SetNextItemWidth(box_w);
+    const bool open = ImGui::BeginCombo("##previewpath", shown.c_str());
+    if (!open && shown != current) overflow_tooltip(current.c_str());
+    if (open) {
         for (size_t i = 0; i < list.buttons.size(); ++i) {
             const hydra::app::PathButtonView& b = list.buttons[i];
             // "##<i>" keeps two paths with the same notation apart.
@@ -131,7 +138,9 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
     pc->poll();
 
     if (pc->has_error()) {
-        ImGui::TextColored(kWarningColor, "Preview failed: %s", pc->error().c_str());
+        // Wrapped: an error naming a file path runs far past the panel's edge.
+        WarnColor warn;
+        ImGui::TextWrapped("Preview failed: %s", pc->error().c_str());
         return;
     }
     if (pc->loading()) {
@@ -336,11 +345,22 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
             fit.right_edge = gauge_left - d_gap - origin.x;
             fit.right_top = v_margin;
         }
-        if (next.shown) {
-            const float next_w1 = std::max(text_width(size1, next.header.c_str()),
-                                           text_width(size1, next.detail.c_str()));
-            fit.left_w = std::max(fit.left_w, margin1 + next_w1 + pad1 * 2.0f);
-        }
+        // The next-activation box stands on the image's bottom edge, where
+        // the highway is widest, and wraps its lines to the room there. So
+        // the scale needs room only for its widest word, taken over every box
+        // this path shows: the same all through playback, whichever
+        // activation is next, and after the last one.
+        auto width_at = [&](float sz) {
+            return [&text_width, sz](const std::string& s) { return text_width(sz, s.c_str()); };
+        };
+        // The header's count ("2 of 3") stays on one line.
+        constexpr size_t kHeaderCountWords = 3;
+        float next_word_w1 = 0.0f;
+        for (const hydra::app::PreviewNextActBox& b : pc->next_act_boxes())
+            next_word_w1 = std::max({next_word_w1,
+                                     render::widest_word(b.header, width_at(size1), kHeaderCountWords),
+                                     render::widest_word(b.detail, width_at(size1))});
+        if (next_word_w1 > 0.0f) fit.bottom_left_w = margin1 + next_word_w1 + pad1 * 2.0f;
         fit.gap = gap1;
         const float scale = render::overlay_scale(pcfg, w, h, fit);
         pc->set_overlay_scale(scale);
@@ -390,17 +410,34 @@ void render_preview_panel(AppState& app, const Path* selected_path) {
 
         // The next activation, bottom-left in the same panel style: its number
         // in gold, then where it is and its chord. Hidden past the last one.
+        // A line too wide for the room beside the highway at the bottom
+        // wraps at its spaces, so the box grows up rather than over the lane.
         if (next.shown) {
-            const float nw = std::max(text_width(size, next.header.c_str()),
-                                      text_width(size, next.detail.c_str()));
-            const ImVec2 n_min(origin.x, img_max.y - (pad * 2.0f + line_h * 2.0f));
+            const float text_room =
+                render::bottom_left_room(pcfg, w, h, gap1) - margin - pad * 2.0f;
+            const std::vector<std::string> head =
+                render::wrap_words(next.header, text_room, width_at(size), kHeaderCountWords);
+            const std::vector<std::string> body =
+                render::wrap_words(next.detail, text_room, width_at(size));
+            float nw = 0.0f;
+            for (const std::string& l : head) nw = std::max(nw, text_width(size, l.c_str()));
+            for (const std::string& l : body) nw = std::max(nw, text_width(size, l.c_str()));
+            const float n_lines = static_cast<float>(head.size() + body.size());
+            const ImVec2 n_min(origin.x, img_max.y - (pad * 2.0f + line_h * n_lines));
             const ImVec2 n_max(origin.x + margin + nw + pad * 2.0f, img_max.y);
             dl->AddRectFilled(n_min, n_max, IM_COL32(0, 0, 0, 128), corner,
                               ImDrawFlags_RoundCornersTopRight);
-            dl->AddText(font, size, ImVec2(origin.x + margin, n_min.y + pad),
-                        IM_COL32(255, 204, 51, 255), next.header.c_str());
-            dl->AddText(font, size, ImVec2(origin.x + margin, n_min.y + pad + line_h),
-                        IM_COL32(255, 255, 255, 255), next.detail.c_str());
+            float y = n_min.y + pad;
+            for (const std::string& l : head) {
+                dl->AddText(font, size, ImVec2(origin.x + margin, y), IM_COL32(255, 204, 51, 255),
+                            l.c_str());
+                y += line_h;
+            }
+            for (const std::string& l : body) {
+                dl->AddText(font, size, ImVec2(origin.x + margin, y), IM_COL32(255, 255, 255, 255),
+                            l.c_str());
+                y += line_h;
+            }
         }
 
         // The Star Power meter: a gauge down the image's right edge, filling

@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <cfloat>
+#include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -528,6 +530,38 @@ void test_preview_path_picker(ImGuiTestContext* ctx) {
         IM_CHECK_FLOAT_NEAR_EQ(combo.GetWidth(), fit, 1.0f);
     }
 
+    // A path too long for its line (40 activations run to about 100
+    // characters) ends in "…" inside the box, in the picker's own font, at
+    // the narrowest panel. The picker draws its label through this same cut.
+    {
+        hydra::ui::remember_library_share(0.99f);
+        h.app->library_ui.panel_was_open = false;
+        ctx->Yield(3);
+        const ImGuiTestItemInfo combo = ctx->ItemInfo(preview_path_combo(ctx));
+        ImGuiWindow* win = combo.Window;
+        IM_CHECK(win != nullptr);
+        if (win == nullptr) return;
+        const ImGuiStyle& s = ImGui::GetStyle();
+        const float size = s.FontSizeBase * s.FontScaleMain * s.FontScaleDpi;
+        const float line = win->WorkRect.Max.x - combo.RectFull.Min.x;  // the most the box gets
+        const float chrome = s.FramePadding.x * 2.0f + combo.RectFull.GetHeight();
+        auto width_of = [&](const std::string& t) {
+            return hydra::ui::g_mono_font->CalcTextSizeA(size, FLT_MAX, 0.0f, t.c_str()).x;
+        };
+        std::string long_label;
+        for (int i = 0; i < 40; ++i) long_label += (i % 3 == 0 ? "2- " : "1 ");
+        long_label += " (optimal)";
+        IM_CHECK(width_of(long_label) > line - chrome);  // too long for the line
+        const std::string shown = hydra::render::ellipsize(long_label, line - chrome, width_of);
+        IM_CHECK(shown != long_label);
+        IM_CHECK(width_of(shown) <= line - chrome);
+        IM_CHECK(shown.size() > 3 && shown.substr(shown.size() - 3) == "\xE2\x80\xA6");
+        IM_CHECK(hydra::ui::g_mono_font->IsGlyphInFont(0x2026));  // drawn, not a "?"
+        hydra::ui::remember_library_share(0.5f);
+        h.app->library_ui.panel_was_open = false;
+        ctx->Yield(3);
+    }
+
     ctx->ItemClick(preview_path_combo(ctx));
     ctx->Yield(1);
     IM_CHECK(visible_text(h).find("0 0 0 0  (best all-0)") != std::string::npos);
@@ -559,6 +593,88 @@ void test_preview_path_picker(ImGuiTestContext* ctx) {
     IM_CHECK(pc.position_ms() > 0.0);
     IM_CHECK_STR_EQ(pc.next_act_box().header.c_str(), "Next: activation 1 of 3");
     IM_CHECK(pc.next_act_box().detail.rfind("at m32.1.0", 0) == 0);
+}
+
+// "Preview failed: …" wraps inside the panel. An error naming a long file
+// path used to run on past the panel's edge, cut off with no way to read it.
+void test_preview_error_wraps(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_preview(ctx)) return;
+    auto& pc = *h.app->preview;
+    // The selection now names a chart whose file is gone, in a deep folder,
+    // so the Preview reloads and fails on a message carrying that long path.
+    IM_CHECK(h.app->selected.has_value());
+    if (!h.app->selected) return;
+    std::string folder = h.app->selected->rootfolder;
+    for (int i = 0; i < 6; ++i) folder += "\\A folder with a long name to push the path past the edge";
+    h.app->selected->notespath = folder + "\\notes.chart";
+    h.app->selected->md5 = "0123456789abcdef0123456789abcdef";
+    IM_CHECK(wait_until(ctx, [&] { return pc.has_error(); }, 30));
+    ctx->Yield(3);
+
+    // The message is wider than the whole screen, so on one line it could fit
+    // in no window: nothing overflowing below means it wrapped.
+    const std::string message = "Preview failed: " + pc.error();
+    IM_CHECK(visible_text(h).find("Preview failed:") != std::string::npos);
+    IM_CHECK_GT(ImGui::CalcTextSize(message.c_str()).x, ImGui::GetIO().DisplaySize.x);
+    // The song panel's windows, the message's among them. (The settings bar
+    // above the library is another task's.)
+    int checked = 0;
+    int overflowing = 0;
+    for (ImGuiWindow* w : ImGui::GetCurrentContext()->Windows) {
+        if (!w->WasActive || (w->Flags & ImGuiWindowFlags_Tooltip) ||
+            (w->Flags & ImGuiWindowFlags_HorizontalScrollbar) ||
+            std::strstr(w->Name, "##songpanel") == nullptr)
+            continue;
+        ++checked;
+        if (w->ContentSize.x > w->ContentRegionRect.GetWidth() + 0.5f) {
+            ++overflowing;
+            std::fprintf(stderr, "OVERFLOW %s: content %.0f px, room %.0f px\n", w->Name,
+                         w->ContentSize.x, w->ContentRegionRect.GetWidth());
+        }
+    }
+    IM_CHECK_GT(checked, 0);
+    IM_CHECK_EQ(overflowing, 0);
+}
+
+// The text boxes keep one size all through a path. The next-activation box
+// used to count toward the shared scale with whatever line it showed, so on
+// Burnout's long second chord every box shrank and grew back later. Checked
+// at the default split and with the song panel at its narrowest.
+void test_preview_overlay_steady(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_burnout_preview(ctx)) return;
+    auto& pc = *h.app->preview;
+    for (float share : {0.5f, 0.99f}) {
+        hydra::ui::remember_library_share(share);
+        h.app->library_ui.panel_was_open = false;
+        ctx->Yield(3);
+        pc.seek_ms(0.0);
+        ctx->Yield(2);
+        const float scale = pc.overlay_scale();
+        IM_CHECK(scale >= hydra::render::kOverlayMinScale);
+        std::fprintf(stderr, "library share %.2f: overlay scale %.4f\n", share, scale);
+        for (int act = 1; act <= 3; ++act) {
+            IM_CHECK(pc.jump_activation(+1));
+            ctx->Yield(2);
+            if (act == 1) IM_CHECK_STR_EQ(pc.time_box().position.c_str(), "m32.1.0");
+            if (act == 2) {
+                IM_CHECK_STR_EQ(pc.time_box().position.c_str(), "m58.1.0");
+                // The long chord's box, wrapped beside the lane.
+                IM_CHECK(screenshot(ctx, share > 0.9f ? "overlay-steady-narrow.png"
+                                                      : "overlay-steady-split.png"));
+            }
+            IM_CHECK_EQ(pc.overlay_scale(), scale);
+        }
+        // Past the last activation the box is gone; the scale stays.
+        pc.seek_ms(pc.length_ms());
+        ctx->Yield(2);
+        IM_CHECK(!pc.next_act_box().shown);
+        IM_CHECK_EQ(pc.overlay_scale(), scale);
+    }
+    hydra::ui::remember_library_share(0.5f);
+    h.app->library_ui.panel_was_open = false;
+    ctx->Yield(3);
 }
 
 // Activation jumps by button and key, the scrubber marks, the next-activation
@@ -627,6 +743,8 @@ const std::vector<TestEntry>& preview_tests() {
         {"layout-drift", test_layout_drift},
         {"preview-path-picker", test_preview_path_picker},
         {"preview-activation-jumps", test_preview_activation_jumps},
+        {"preview-error-wraps", test_preview_error_wraps},
+        {"preview-overlay-steady", test_preview_overlay_steady},
     };
     return entries;
 }
