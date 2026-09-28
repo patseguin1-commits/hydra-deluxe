@@ -59,7 +59,77 @@ float overlay_scale(const PreviewConfig& cfg, int width, int height, const Overl
             boxes.right_edge - highway_span_at(cfg, width, height, bottom).right - boxes.gap;
         scale = std::min(scale, room / boxes.right_w);
     }
+    if (boxes.bottom_left_w > 0.0f)
+        scale = std::min(scale, bottom_left_room(cfg, width, height, boxes.gap) / boxes.bottom_left_w);
     return std::clamp(scale, min_scale, 1.0f);
+}
+
+float bottom_left_room(const PreviewConfig& cfg, int width, int height, float gap) {
+    return highway_span_at(cfg, width, height, static_cast<float>(std::max(1, height))).left - gap;
+}
+
+namespace {
+// Where the last `n` words of `text` begin: no line break falls after it.
+// The text's end when n is 0.
+size_t tail_start(const std::string& text, size_t n) {
+    size_t pos = text.size();
+    while (pos > 0 && text[pos - 1] == ' ') --pos;
+    if (n == 0) return pos;
+    for (size_t words = 0; words < n && pos > 0; ++words) {
+        while (pos > 0 && text[pos - 1] != ' ') --pos;  // to this word's start
+        if (words + 1 < n)
+            while (pos > 0 && text[pos - 1] == ' ') --pos;  // to the previous word's end
+    }
+    return pos;
+}
+}  // namespace
+
+std::vector<std::string> wrap_words(const std::string& text, float max_w,
+                                    const std::function<float(const std::string&)>& width_of,
+                                    size_t keep_last) {
+    std::vector<std::string> lines;
+    const size_t tail = tail_start(text, keep_last);
+    const size_t text_end = tail_start(text, 0);  // the last word's end
+    size_t start = 0;
+    while (start < text.size() && text[start] == ' ') ++start;
+    while (start < text.size()) {
+        // The ends of the words from `start` on: each space that follows a word, then the text's end.
+        size_t best = std::string::npos;
+        size_t end = start;
+        while (end < text.size()) {
+            size_t next = text.find(' ', end);
+            if (next == std::string::npos) next = text.size();
+            // A word ends here, and a line may: outside the kept tail, or at the text's end.
+            if (next > start && text[next - 1] != ' ' && (next < tail || next == text_end)) {
+                if (best != std::string::npos && width_of(text.substr(start, next - start)) > max_w)
+                    break;
+                best = next;  // the first word always goes, even too wide
+            }
+            end = next + 1;
+        }
+        lines.push_back(text.substr(start, best - start));
+        start = best;
+        while (start < text.size() && text[start] == ' ') ++start;
+    }
+    if (lines.empty()) lines.push_back(text);
+    return lines;
+}
+
+float widest_word(const std::string& text,
+                  const std::function<float(const std::string&)>& width_of, size_t keep_last) {
+    float widest = 0.0f;
+    const size_t tail = tail_start(text, keep_last);
+    size_t tail_end = text.size();
+    while (tail_end > tail && text[tail_end - 1] == ' ') --tail_end;
+    if (tail_end > tail) widest = width_of(text.substr(tail, tail_end - tail));
+    size_t start = 0;
+    while (start < tail) {
+        size_t end = text.find(' ', start);
+        if (end == std::string::npos) end = text.size();
+        if (end > start) widest = std::max(widest, width_of(text.substr(start, end - start)));
+        start = end + 1;
+    }
+    return widest;
 }
 
 std::string ellipsize(const std::string& text, float max_w,

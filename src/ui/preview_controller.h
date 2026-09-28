@@ -161,6 +161,11 @@ public:
     // The box at the highway's bottom-left (app::build_next_act_box).
     hydra::app::PreviewNextActBox next_act_box() const;
 
+    // Every box that one shows over the drawn path, one per activation: what
+    // it reads with the playhead on each activation in turn. The panel fits
+    // the text scale to all of them at once, so it holds still during play.
+    std::vector<hydra::app::PreviewNextActBox> next_act_boxes() const;
+
     // The number under the SP gauge, "2.5/4" (app::sp_meter_readout).
     std::string sp_meter_readout() const;
 

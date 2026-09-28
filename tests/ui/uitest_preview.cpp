@@ -637,6 +637,46 @@ void test_preview_error_wraps(ImGuiTestContext* ctx) {
     IM_CHECK_EQ(overflowing, 0);
 }
 
+// The text boxes keep one size all through a path. The next-activation box
+// used to count toward the shared scale with whatever line it showed, so on
+// Burnout's long second chord every box shrank and grew back later. Checked
+// at the default split and with the song panel at its narrowest.
+void test_preview_overlay_steady(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    if (!open_burnout_preview(ctx)) return;
+    auto& pc = *h.app->preview;
+    for (float share : {0.5f, 0.99f}) {
+        hydra::ui::remember_library_share(share);
+        h.app->library_ui.panel_was_open = false;
+        ctx->Yield(3);
+        pc.seek_ms(0.0);
+        ctx->Yield(2);
+        const float scale = pc.overlay_scale();
+        IM_CHECK(scale >= hydra::render::kOverlayMinScale);
+        std::fprintf(stderr, "library share %.2f: overlay scale %.4f\n", share, scale);
+        for (int act = 1; act <= 3; ++act) {
+            IM_CHECK(pc.jump_activation(+1));
+            ctx->Yield(2);
+            if (act == 1) IM_CHECK_STR_EQ(pc.time_box().position.c_str(), "m32.1.0");
+            if (act == 2) {
+                IM_CHECK_STR_EQ(pc.time_box().position.c_str(), "m58.1.0");
+                // The long chord's box, wrapped beside the lane.
+                IM_CHECK(screenshot(ctx, share > 0.9f ? "overlay-steady-narrow.png"
+                                                      : "overlay-steady-split.png"));
+            }
+            IM_CHECK_EQ(pc.overlay_scale(), scale);
+        }
+        // Past the last activation the box is gone; the scale stays.
+        pc.seek_ms(pc.length_ms());
+        ctx->Yield(2);
+        IM_CHECK(!pc.next_act_box().shown);
+        IM_CHECK_EQ(pc.overlay_scale(), scale);
+    }
+    hydra::ui::remember_library_share(0.5f);
+    h.app->library_ui.panel_was_open = false;
+    ctx->Yield(3);
+}
+
 // Activation jumps by button and key, the scrubber marks, the next-activation
 // box, the SP readout, the one measure format, and the key hint.
 void test_preview_activation_jumps(ImGuiTestContext* ctx) {
@@ -704,6 +744,7 @@ const std::vector<TestEntry>& preview_tests() {
         {"preview-path-picker", test_preview_path_picker},
         {"preview-activation-jumps", test_preview_activation_jumps},
         {"preview-error-wraps", test_preview_error_wraps},
+        {"preview-overlay-steady", test_preview_overlay_steady},
     };
     return entries;
 }
