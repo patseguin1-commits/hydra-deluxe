@@ -4,7 +4,6 @@
 // hide the result it had just made.
 
 #include "imgui.h"
-#include "imgui_internal.h"  // SeparatorEx (vertical)
 #include "ui/app_state.h"
 #include "ui/fonts.h"
 #include "ui/library_parts.h"
@@ -20,10 +19,16 @@ namespace hydra::ui::detail {
 
 namespace {
 
-void bar_separator() {
-    ImGui::SameLine(0.0f, px(14.0f));
-    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-    ImGui::SameLine(0.0f, px(14.0f));
+// The gap each side of a divider, and the divider's width.
+float separator_gap() { return px(14.0f); }
+constexpr float kSeparatorW = 1.0f;
+
+// A 1 px divider at screen x, from top to bottom, drawn straight onto the
+// window: as an item (SeparatorEx) it would take the line's height, and the
+// dividers on the caption's line should span both caption lines.
+void draw_divider(float x, float top, float bottom) {
+    ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(x, top), ImVec2(x + kSeparatorW, bottom),
+                                              ImGui::GetColorU32(ImGuiCol_Separator));
 }
 
 void render_difficulty(AppState& app, bool locked) {
@@ -146,32 +151,60 @@ void render_settings_bar(AppState& app) {
     // starts a new line instead.
     const float right_edge = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
 
-    // Two stacked caption lines; the controls sit centred on them.
+    // Two stacked caption lines; the controls on their line sit centred on
+    // them.
     ImGui::BeginGroup();
     ImGui::TextUnformatted("Analysis settings");
     ImGui::TextDisabled(locked ? "locked" : "for every song");
     ImGui::EndGroup();
-    const float caption_h = ImGui::GetItemRectSize().y;
+    const float caption_top = ImGui::GetItemRectMin().y;
+    const float caption_bottom = ImGui::GetItemRectMax().y;
+    const float frame_h = ImGui::GetFrameHeight();
     float line_end = ImGui::GetItemRectMax().x;
+    // The line the blocks are on, for the dividers' height: the caption's
+    // until a block wraps.
+    float line_top = caption_top, line_bottom = caption_bottom;
 
     // The four groups are blocks. A block stays on the current line when it
-    // fits, separator included, and otherwise starts a new line with no
-    // separator before it. A block's width is known only once it is drawn, so
-    // each frame places the blocks by the widths they had on the last one
-    // (0 on the very first frame: one line, corrected a frame later).
+    // fits, divider included, and otherwise starts a new line with no divider
+    // before it. A block's width is known only once it is drawn, so each
+    // frame places the blocks by the widths they had on the last one (0 on
+    // the very first frame: one line, corrected a frame later).
+    //
+    // The first block on the caption's line starts a fresh line of its own at
+    // the centred height, rather than SameLine after the caption: an item
+    // that continues a line is placed from the line's top whatever the
+    // cursor says (ImGui's ItemSize), so a nudge there moved only the first
+    // label and left the rest of the row at the top.
     using Block = void (*)(AppState&, bool);
     static constexpr Block kBlocks[] = {render_difficulty, render_sp_cap, render_score_range,
                                         render_path_limit};
     static_assert(std::size(kBlocks) ==
                   std::extent_v<decltype(LibraryViewState::settings_block_w)>);
-    const float separator_w = px(14.0f) * 2.0f + 1.0f;  // gap, 1 px rule, gap
+    const float gap = separator_gap();
+    const float separator_w = gap * 2.0f + kSeparatorW;
     float* block_w = app.library_ui.settings_block_w;
     for (size_t i = 0; i < std::size(kBlocks); ++i) {
         if (line_end + separator_w + block_w[i] <= right_edge) {
-            bar_separator();
-            if (i == 0)
-                ImGui::SetCursorPosY(ImGui::GetCursorPosY() +
-                                     (caption_h - ImGui::GetFrameHeight()) * 0.5f);
+            const float divider_x = line_end + gap;
+            draw_divider(divider_x, line_top, line_bottom);
+            const float x = divider_x + kSeparatorW + gap;
+            if (i == 0) {
+                // A fresh line at the centred height (the caption group
+                // already ended its own line).
+                ImGui::SetCursorScreenPos(
+                    ImVec2(x, caption_top + (caption_bottom - caption_top - frame_h) * 0.5f));
+            } else {
+                ImGui::SameLine();  // keeps this line's top
+                ImGui::SetCursorScreenPos(ImVec2(x, ImGui::GetCursorScreenPos().y));
+            }
+        } else {
+            // A new line, below the caption when it would reach up beside it.
+            const ImVec2 at = ImGui::GetCursorScreenPos();
+            const float below = caption_bottom + ImGui::GetStyle().ItemSpacing.y;
+            if (at.y < below) ImGui::SetCursorScreenPos(ImVec2(at.x, below));
+            line_top = ImGui::GetCursorScreenPos().y;
+            line_bottom = line_top + frame_h;
         }
         ImGui::AlignTextToFramePadding();
         ImGui::BeginGroup();

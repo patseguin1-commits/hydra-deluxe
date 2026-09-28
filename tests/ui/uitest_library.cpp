@@ -444,8 +444,15 @@ void test_library_layout(ImGuiTestContext* ctx) {
     ctx->SetRef(bar);
     IM_CHECK_LE(bar->ContentSize.x, bar->ContentRegionRect.GetWidth() + 0.5f);
     const float line_y = ctx->ItemInfo("##difficulty").RectFull.Min.y;
-    for (const char* item : {"##spcap", "##depthvalue", "##mslimitvalue"})
+    for (const char* item : {"Pro Drums", "2x Bass", "##spcap", "##depthvalue", "##mslimitvalue"})
         IM_CHECK_EQ(ctx->ItemInfo(item).RectFull.Min.y, line_y);
+    // The whole row sits centred on the two caption lines ("Analysis
+    // settings" over "for every song"), not level with the first of them.
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float caption_top = bar->Pos.y + style.WindowPadding.y;
+    const float caption_h = ImGui::GetTextLineHeight() * 2.0f + style.ItemSpacing.y;
+    IM_CHECK_FLOAT_NEAR_EQ(line_y, caption_top + (caption_h - ImGui::GetFrameHeight()) * 0.5f,
+                           1.0f);
 }
 
 // A hydra_ui.ini that only records a sort on Best path (what sorting by it,
