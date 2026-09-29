@@ -91,7 +91,8 @@ struct ActivationRowView {
     std::string chord;           // Chord::rowstr(), e.g. "[Kick - GreenCym]"
     std::string early_fill;      // "Early fill: " + format_ms(positive = early); empty when not E-critical
     std::vector<TextLine> squeeze_sentences;  // one per SqIn/SqOut, see squeeze_sentences()
-    std::string scale_warning;  // the transfer-scale prose; empty when immaterial
+    std::string scale_warning;  // the transfer-scale line; empty when every scale prints x1.00
+    bool scale_warn = false;    // orange: a shown scale moves a squeeze or backend figure
     std::string overfill_warning;  // cap-clamped anchor prose; empty when not clamped
     std::string backends_label;  // "3 notes near the SP end": the rows below, after the backend limit
     std::vector<BackendRowView> backends;

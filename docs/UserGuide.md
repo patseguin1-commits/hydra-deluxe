@@ -44,7 +44,7 @@ For example, say you analyzed a song with 2x Bass on and want to see it with 1x 
 
 **Score range.** How many extra paths below optimal to keep. The dropdown picks the unit. `scores` keeps the next few distinct scores under optimal. `points` keeps every path within that many points of optimal. These paths are a little worse, but handy when the optimal path is awkward to play. More paths make the analysis slower.
 
-**Path limit.** When ticked, an extra path is kept only when its hardest squeeze is within this many milliseconds. That keeps alternates you can realistically hit. Lower or negative values demand more slack. The limit compares raw squeeze milliseconds at the SP end. It does not account for frontend timing scaling (see the Paths tab), so a kept path can be a bit harder than its number suggests where an activation shows a scale warning.
+**Path limit.** When ticked, an extra path is kept only when its hardest squeeze is within this many milliseconds. That keeps alternates you can realistically hit. Lower or negative values demand more slack. The limit compares raw squeeze milliseconds at the SP end. It does not account for frontend timing scaling (see the Paths tab), so a kept path can be a bit harder than its number suggests where an activation's scale line is orange.
 
 ## Searching the library
 
@@ -117,7 +117,7 @@ An open row shows:
 
 A backend squeeze means hitting the note at the SP end early, so it lands inside Star Power. The note at `0ms` is exactly where SP ends; the others are the notes just before and after it. If the last activation's SP runs past the end of the chart, the table lists the notes before that end, so every timing is negative. The rating beside each note is a rough guide to how hard it is to fit into Star Power. For double backend squeezes, look for notes in the `3ms` to `85ms` range (the upper edge follows the hit-window setting).
 
-Star Power length is measured in measures, not milliseconds. If the SP end falls where measures last a different time than at the activation (a tempo or time signature change), frontend timing only partly carries to the SP end. Hitting the activation 50 ms late might move the SP end only 25 ms. When that matters, the row shows a scale warning such as `x0.51`, and the affected backend rows show an effective timing (`eff.`). Late and early hits can even scale differently when the activation or the SP end sits right on a change.
+Star Power length is measured in measures, not milliseconds. If the SP end falls where measures last a different time than at the activation (a tempo or time signature change), frontend timing only partly carries to the SP end. Hitting the activation 50 ms late might move the SP end only 25 ms. Whenever the scale isn't x1.00, the opened row shows it, early first: `Frontend timing scales x0.99 (early) / x4.45 (late) at the SP end.` Late and early hits can scale differently when the activation or the SP end sits right on a change. A side that is x1.00 is left out. If a SqIn moved the SP end, that earlier end gets its own clause. The line is orange when the scale changes a squeeze or backend figure, and those backend rows show an effective timing (`eff.`). Otherwise it is gray.
 
 Sometimes a phrase collected during Star Power fills the meter up to the SP cap. Then the row shows an overfill warning. It means the note that filled the meter, not the activation, is now the one whose timing moves the SP end. The squeeze numbers are unaffected; only the note you would move has changed.
 

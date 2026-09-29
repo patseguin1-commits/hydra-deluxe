@@ -218,83 +218,45 @@ ActivationsView build_activations(const Path& path, const HydraRecord& /*record*
 
         ActivationRating rate = rate_activation(act, W, rules.backend_leeway_ms);
 
-        // The line prints the scale(s) that actually tripped the warn:
-        // backend rows are judged at the post (deact-node) end, SqIn/SqOut
-        // phrase notes at the pre (pre-extension) end -- different numbers
-        // when a SqIn extended SP. A scale that still displays as x1.00 has
-        // nothing to say (a bare over-budget gap trips materiality too), so
-        // it is dropped; with no claims left there is no line at all.
-        struct ScaleClaim { double r; bool late; bool note; };
-        std::vector<ScaleClaim> claims;
-        auto claim = [&claims](double r, bool late, bool note) {
-            if (std::abs(r - 1.0) < 0.005) return;  // renders as x1.00
-            // 0.005 is half the last digit of %.2f: two scales that print the same are one claim.
-            for (const ScaleClaim& c : claims)
-                if (c.late == late && std::abs(c.r - r) <= 0.005) return;
-            claims.push_back({r, late, note});
+        // The line shows every scale that isn't x1.00, early first. Backend
+        // rows are judged at the post (deact-node) end, SqIn/SqOut phrase
+        // notes at the pre (pre-extension) end; the two differ only when a
+        // SqIn extended SP, and then the SqIn's end gets its own clause.
+        // 0.005 is half the last digit of %.2f: a scale within it prints as
+        // x1.00, and two scales within it print the same.
+        auto shows = [](double r) { return std::abs(r - 1.0) >= 0.005; };
+        auto same = [](double a, double b) { return std::abs(a - b) < 0.005; };
+        auto sides = [&shows](const TransferScale& s) {
+            char buf[64];
+            std::string out;
+            if (shows(s.early)) {
+                std::snprintf(buf, sizeof(buf), "x%.2f (early)", s.early);
+                out = buf;
+            }
+            if (shows(s.late)) {
+                std::snprintf(buf, sizeof(buf), "x%.2f (late)", s.late);
+                if (!out.empty()) out += " / ";
+                out += buf;
+            }
+            return out;
         };
-        if (rate.late_backend_warns) claim(rate.scales.post.late, true, false);
-        if (rate.late_note_warns) claim(rate.scales.pre.late, true, true);
-        if (rate.early_backend_warns) claim(rate.scales.post.early, false, false);
-        if (rate.early_note_warns) claim(rate.scales.pre.early, false, true);
-
-        // A note claim needs its end named only when the post end disagrees.
-        auto ends_agree = [&rate](const ScaleClaim& c) {
-            double post = c.late ? rate.scales.post.late : rate.scales.post.early;
-            // Same %.2f rounding rule as the claim dedupe above.
-            return std::abs(c.r - post) <= 0.005;
-        };
-
-        char buf[192];
-        if (claims.size() == 1) {
-            const ScaleClaim& c = claims[0];
-            if (!c.note || ends_agree(c)) {
-                // 10 ms is an example step, not a rule: the SP-end shift is
-                // linear in the frontend shift, so any amount gives the same scale.
-                std::snprintf(buf, sizeof(buf),
-                              "Frontend timing scales x%.2f to the SP end: "
-                              "%s at the frontend moves the SP end %s%s%.1fms.",
-                              c.r, c.late ? "+10ms (late)" : "-10ms (early)",
-                              c.r < 1.0 ? "only " : "", c.late ? "+" : "-",
-                              10.0 * c.r);
-            } else {
-                std::snprintf(buf, sizeof(buf),
-                              "Frontend timing scales x%.2f at the %s's SP end: "
-                              "%s at the frontend moves that end %s%s%.1fms.",
-                              c.r, c.late ? "SqIn" : "SqOut",
-                              c.late ? "+10ms (late)" : "-10ms (early)",
-                              c.r < 1.0 ? "only " : "", c.late ? "+" : "-",
-                              10.0 * c.r);
-            }
-            av.scale_warning = buf;
-        } else if (claims.size() == 2 && claims[0].late != claims[1].late &&
-                   ends_agree(claims[0]) && ends_agree(claims[1])) {
-            const ScaleClaim& lc = claims[0].late ? claims[0] : claims[1];
-            const ScaleClaim& ec = claims[0].late ? claims[1] : claims[0];
-            // Same %.2f rounding rule as the claim dedupe above.
-            if (std::abs(lc.r - ec.r) > 0.005) {
-                std::snprintf(buf, sizeof(buf),
-                              "Frontend timing scales x%.2f (late) / x%.2f "
-                              "(early) at the SP end.",
-                              lc.r, ec.r);
-            } else {
-                std::snprintf(buf, sizeof(buf),
-                              "Frontend timing scales x%.2f to the SP end: "
-                              "10ms at the frontend moves the SP end %s%.1fms.",
-                              lc.r, lc.r < 1.0 ? "only " : "", 10.0 * lc.r);
-            }
-            av.scale_warning = buf;
-        } else if (!claims.empty()) {
-            std::string parts;
-            for (const ScaleClaim& c : claims) {
-                std::snprintf(buf, sizeof(buf), "x%.2f (%s, %s)", c.r,
-                              c.late ? "late" : "early",
-                              c.note ? (c.late ? "SqIn" : "SqOut") : "backends");
-                if (!parts.empty()) parts += " / ";
-                parts += buf;
-            }
-            av.scale_warning = "Frontend timing scales " + parts + ".";
+        const TransferScale& post = rate.scales.post;
+        const TransferScale& pre = rate.scales.pre;
+        const std::string post_part = sides(post);
+        const bool pre_differs = !same(pre.early, post.early) || !same(pre.late, post.late);
+        const std::string pre_part = pre_differs ? sides(pre) : std::string();
+        std::string clauses;
+        if (!post_part.empty()) clauses = post_part + " at the SP end";
+        if (!pre_part.empty()) {
+            if (!clauses.empty()) clauses += "; ";
+            clauses += pre_part + " at the SqIn's SP end";
         }
+        if (!clauses.empty()) av.scale_warning = "Frontend timing scales " + clauses + ".";
+        // Orange only when a shown scale moves a figure on screen.
+        av.scale_warn = (rate.late_backend_warns && shows(post.late)) ||
+                        (rate.early_backend_warns && shows(post.early)) ||
+                        (rate.late_note_warns && shows(pre.late)) ||
+                        (rate.early_note_warns && shows(pre.early));
 
         // When the SP window was cap-clamped and this activation lists a
         // squeeze the frontend decides, warn that the anchor is the

@@ -262,58 +262,75 @@ TEST_CASE("build_activations: rows and backend rows line up") {
     CHECK(!view.summary.empty());
 }
 
-TEST_CASE("build_activations: the scale warning prints the end that warned") {
+TEST_CASE("build_activations: the scale line shows every multiplier, early first") {
     HydraRecord rec;  // only feeds the footer; irrelevant here
-    auto warning_of = [&rec](const Activation& act) {
+    auto row_of = [&rec](const Activation& act) {
         Path p;
         p.activations.push_back(act);
         ActivationsView v = build_activations(p, rec, nullptr, 85.0);
         REQUIRE(v.acts.size() == 1);
-        return v.acts[0].scale_warning;
+        return v.acts[0];
     };
 
     Activation base;
     base.skips = 0;
     base.e_offset = 300.0;  // not e-critical
 
-    // A SqIn is judged at the pre (pre-extension) end. With post at identity,
-    // the line must print the pre scale and name the SqIn's end -- the old
-    // code printed post's meaningless x1.00.
-    Activation sqin = base;
-    sqin.transfer_pre = TransferScale{1.0, 0.5};
-    sqin.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, 50.0});
-    std::string warn = warning_of(sqin);
-    CHECK(warn ==
-          "Frontend timing scales x0.50 at the SqIn's SP end: "
-          "+10ms (late) at the frontend moves that end only +5.0ms.");
-
-    // A gap past the combined budget trips materiality even at identity
-    // scales. With nothing but x1.00 to report, no line at all.
+    // Identity scales: nothing to say, even with a gap past the combined
+    // budget (which trips materiality on its own).
     Activation overbudget = base;
     overbudget.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, 250.0});
-    CHECK(warning_of(overbudget).empty());
+    CHECK(row_of(overbudget).scale_warning.empty());
 
-    // Backend rows still read the post end, worded exactly as before.
+    // Gore act 4: the only row sits exactly on the SP end, so no number on
+    // screen moves -- the line still shows both sides, early first, plain.
+    Activation gore = base;
+    gore.transfer_post = TransferScale{8.59, 8.76};
+    gore.transfer_pre = gore.transfer_post;
+    BackendSqueeze on_end;
+    on_end.offset_ms = 0.0;
+    gore.backends.push_back(on_end);
+    ActivationRowView av = row_of(gore);
+    CHECK(av.scale_warning ==
+          "Frontend timing scales x8.59 (early) / x8.76 (late) at the SP end.");
+    CHECK_FALSE(av.scale_warn);
+
+    // A side that prints as x1.00 is left out.
+    Activation late_only = base;
+    late_only.transfer_post = TransferScale{1.0, 6.33};
+    late_only.transfer_pre = late_only.transfer_post;
+    CHECK(row_of(late_only).scale_warning ==
+          "Frontend timing scales x6.33 (late) at the SP end.");
+
+    // A backend row the late scale moves turns the line orange.
     Activation backend = base;
     backend.transfer_post = TransferScale{1.0, 0.5};
+    backend.transfer_pre = backend.transfer_post;
     BackendSqueeze row;
     row.offset_ms = 50.0;
     backend.backends.push_back(row);
-    warn = warning_of(backend);
-    CHECK(warn ==
-          "Frontend timing scales x0.50 to the SP end: "
-          "+10ms (late) at the frontend moves the SP end only +5.0ms.");
+    av = row_of(backend);
+    CHECK(av.scale_warning == "Frontend timing scales x0.50 (late) at the SP end.");
+    CHECK(av.scale_warn);
 
-    // Both ends warning in the same direction with different scales are
-    // listed separately, labeled by what each end judges.
+    // A SqIn is judged at the pre (pre-extension) end. With post at identity,
+    // the line names only the SqIn's end.
+    Activation sqin = base;
+    sqin.transfer_pre = TransferScale{1.0, 0.5};
+    sqin.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, 50.0});
+    av = row_of(sqin);
+    CHECK(av.scale_warning == "Frontend timing scales x0.50 (late) at the SqIn's SP end.");
+    CHECK(av.scale_warn);
+
+    // Both ends with different scales: the SP end first, then the SqIn's.
     Activation both = base;
     both.transfer_pre = TransferScale{1.0, 0.5};
-    both.transfer_post = TransferScale{1.0, 0.8};
+    both.transfer_post = TransferScale{1.25, 0.8};
     both.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, 50.0});
     both.backends.push_back(row);
-    warn = warning_of(both);
-    CHECK(warn ==
-          "Frontend timing scales x0.80 (late, backends) / x0.50 (late, SqIn).");
+    CHECK(row_of(both).scale_warning ==
+          "Frontend timing scales x1.25 (early) / x0.80 (late) at the SP end; "
+          "x0.50 (late) at the SqIn's SP end.");
 }
 
 TEST_CASE("build_activations: overfill warning text") {

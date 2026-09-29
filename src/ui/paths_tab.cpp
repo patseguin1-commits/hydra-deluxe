@@ -374,12 +374,14 @@ void render_activation_body(size_t i, const app::ActivationRowView& a, app::Path
     for (size_t k = 0; k < a.squeeze_sentences.size(); ++k)
         squeeze_box(a.number, k, a.squeeze_sentences[k]);
     if (!a.scale_warning.empty()) {
-        {
-            WarnColor warn;
-            ImGui::PushTextWrapPos(0.0f);
-            ImGui::TextUnformatted(a.scale_warning.c_str());
-            ImGui::PopTextWrapPos();
-        }
+        // Orange when the scale moves a figure on screen, gray otherwise.
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              a.scale_warn ? kWarningColor
+                                           : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextUnformatted(a.scale_warning.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
         hint(app::kTransferScaleHint);
     }
     if (!a.overfill_warning.empty()) {
