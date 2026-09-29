@@ -430,6 +430,43 @@ TEST_CASE("MultSqueeze accepts exactly the 2- and 3-note chords that straddle a 
                       "n=4 combo=" << combo);
 }
 
+// A 3-note chord splits two and one across the step. When one end holds a
+// single note, the advice names that note whichever side of the step the
+// chord falls on; only three different values need direction-specific advice.
+TEST_CASE("MultSqueeze::howto names the lone note of a 3-note chord") {
+    // Kick (50) + two cymbals (65): the kick is the lone cheap note.
+    Chord kyb;
+    kyb.add_note(NoteColor::Kick);
+    kyb.add_note(NoteColor::Yellow);
+    kyb.add_note(NoteColor::Blue);
+    kyb.apply_cymbal(NoteColor::Yellow);
+    kyb.apply_cymbal(NoteColor::Blue);
+    for (int combo : {17, 18, 27, 28})
+        CHECK_MESSAGE(MultSqueeze(kyb, combo).howto() == "Hit [Kick] first.",
+                      "combo=" << combo);
+
+    // Kick + Red (50) + one cymbal (65): the cymbal is the lone dear note.
+    Chord kry;
+    kry.add_note(NoteColor::Kick);
+    kry.add_note(NoteColor::Red);
+    kry.add_note(NoteColor::Yellow);
+    kry.apply_cymbal(NoteColor::Yellow);
+    for (int combo : {17, 18, 27, 28})
+        CHECK_MESSAGE(MultSqueeze(kry, combo).howto() == "Hit [YellowCym] last.",
+                      "combo=" << combo);
+
+    // Kick (50) + cymbal (65) + accented Red (100): three values, so the
+    // direction decides. Combo 17 carries one note over; 18 leaves one behind.
+    Chord kya;
+    kya.add_note(NoteColor::Kick);
+    kya.add_note(NoteColor::Red);
+    kya.add_note(NoteColor::Yellow);
+    kya.apply_cymbal(NoteColor::Yellow);
+    kya.apply_accent(NoteColor::Red);
+    CHECK(MultSqueeze(kya, 17).howto() == "Hit [Red (Accent)] last.");
+    CHECK(MultSqueeze(kya, 18).howto() == "Hit [Kick] first.");
+}
+
 // The graph asks applies() of every chord instead of catching a throw.
 // It must answer exactly as the constructor decides, for every shape.
 TEST_CASE("MultSqueeze::applies answers exactly when the constructor accepts") {

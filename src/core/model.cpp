@@ -383,6 +383,18 @@ std::string MultSqueeze::howto() const {
     // chord that alone accomplishes the squeeze when hit last/first.
     std::vector<ChordNote> ordered = chord_.notes(/*basesorted=*/true);
     bool high = direction() == "high";
+    // A 3-note chord splits two and one across the step. When only one end
+    // holds a single note, placing that note settles the squeeze from either
+    // side of the step, so name it: Kick + two cymbals is "Hit [Kick] first."
+    // whether the kick is the one left behind or a cymbal is the one carried
+    // over. With three different values the direction decides, as above.
+    if (ordered.size() == 3) {
+        const int lo = ordered[0].basescore();
+        const int mid = ordered[1].basescore();
+        const int hi = ordered[2].basescore();
+        if (lo != mid && mid == hi) high = false;
+        if (lo == mid && mid != hi) high = true;
+    }
     int edge_score = high ? ordered.back().basescore() : ordered.front().basescore();
 
     std::string joined;
