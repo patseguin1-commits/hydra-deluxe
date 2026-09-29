@@ -548,6 +548,67 @@ TEST_CASE("rate_activation: free squeezes read the opposite scale direction") {
     CHECK_FALSE(r.late_note_warns);
     CHECK(r.early_warns);
     CHECK_FALSE(r.late_warns);
+    // The SqIn has no backend row, so its eff. figure lives on the rating:
+    // 50 ms of margin on the early x0.5 scale.
+    REQUIRE(r.note_effective_ms.size() == 1);
+    REQUIRE(r.note_effective_ms[0].has_value());
+    CHECK(*r.note_effective_ms[0] == doctest::Approx(effective_backend_ms(50.0, 0.5)));
+}
+
+TEST_CASE("rate_activation: counted rows before the SP end read the early scale") {
+    // Sun of Nothing act 5: a row 400 ms inside SP already counts, and only
+    // an early frontend hit (x1.60 here) pulls the end back over it. Its
+    // margin is effectively 400 * 2 / 2.6 = 307.7 ms, like the free SqIn's.
+    Activation act;
+    act.skips = 0;
+    act.transfer_pre = TransferScale{1.6, 1.0};
+    act.transfer_post = act.transfer_pre;
+    BackendSqueeze inside;
+    inside.offset_ms = -400.0;
+    act.backends.push_back(inside);
+    BackendSqueeze at_end;
+    at_end.offset_ms = 0.0;
+    act.backends.push_back(at_end);
+
+    ActivationRating r = rate_activation(act, 85.0);
+    REQUIRE(r.backends.size() == 2);
+    CHECK_FALSE(r.backends[0].squeezed_out);
+    CHECK(r.backends[0].scale == doctest::Approx(1.6));
+    REQUIRE(r.backends[0].effective_ms.has_value());
+    CHECK(*r.backends[0].effective_ms == doctest::Approx(307.692).epsilon(1e-4));
+    CHECK(r.early_backend_warns);
+    CHECK_FALSE(r.late_backend_warns);
+    // A row at the SP end has no margin to scale: no figure.
+    CHECK_FALSE(r.backends[1].effective_ms.has_value());
+
+    // At a flat early scale the figure would repeat the raw ms.
+    act.transfer_pre = TransferScale{1.0, 1.0};
+    act.transfer_post = act.transfer_pre;
+    r = rate_activation(act, 85.0);
+    CHECK_FALSE(r.backends[0].effective_ms.has_value());
+}
+
+TEST_CASE("rate_activation: SqIn/SqOut eff. figures, one per squeeze") {
+    // Sun of Nothing act 5: a SqIn free by 400 ms, the activation on a 5/8 ->
+    // 4/4 change, so an early frontend hit reaches the SP end x1.60. The
+    // margin is effectively 400 * 2 / 2.6 = 307.7 ms.
+    Activation act;
+    act.skips = 0;
+    act.transfer_pre = TransferScale{1.6, 1.0};
+    act.transfer_post = act.transfer_pre;
+    act.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, -400.0});
+    ActivationRating r = rate_activation(act, 85.0);
+    REQUIRE(r.note_effective_ms.size() == 1);
+    REQUIRE(r.note_effective_ms[0].has_value());
+    CHECK(*r.note_effective_ms[0] == doctest::Approx(307.692).epsilon(1e-4));
+
+    // At a flat x1.00 the figure would repeat the raw ms, so it stays unset,
+    // even when the gap is past the budget (same rule as a backend row).
+    act.transfer_pre = TransferScale{1.0, 1.0};
+    act.transfer_post = act.transfer_pre;
+    r = rate_activation(act, 85.0);
+    REQUIRE(r.note_effective_ms.size() == 1);
+    CHECK_FALSE(r.note_effective_ms[0].has_value());
 }
 
 TEST_CASE("rate_activation: the stored scales are the only scales") {

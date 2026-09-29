@@ -769,6 +769,17 @@ TEST_CASE("squeeze sentences: SqIn, SqOut, and what a squeeze-out costs") {
                        "lands before Star Power ends.", 0) == 0);
     CHECK_FALSE(s.warn);
 
+    // A SqIn whose margin the frontend scale moves carries its eff. figure,
+    // the one a squeezed-out row shows in the backend table (Sun of Nothing
+    // act 5: free by 400 ms, early hits scale x1.60 -> eff. 307.7 ms).
+    Activation scaled_in = base;
+    scaled_in.transfer_pre = TransferScale{1.6, 1.0};
+    scaled_in.transfer_post = scaled_in.transfer_pre;
+    scaled_in.sqinouts.push_back(SPSqueeze{SqueezeKind::SqIn, -400.0});
+    s = sentence_of(scaled_in);
+    CHECK(s.text.rfind("Hit the SP phrase's last note no more than 400.0 ms late "
+                       "(eff. 307.7 ms) so it lands before Star Power ends.", 0) == 0);
+
     // A SqOut with no stored squeezed-out row names no chord and no cost.
     Activation bare_out = base;
     bare_out.sqinouts.push_back(SPSqueeze{SqueezeKind::SqOut, 60.0});
@@ -806,6 +817,33 @@ TEST_CASE("squeeze sentences: SqIn, SqOut, and what a squeeze-out costs") {
           "Hit the [ RY  ] note more than 5.0 ms late so it lands after Star Power ends. "
           "It scores 200 fewer points, and its SP phrase banks for later.");
     CHECK(s.warn);
+}
+
+TEST_CASE("backend table: a counted row inside SP shows its early-scale eff. figure") {
+    // Sun of Nothing act 5: early frontend hits reach the SP end x1.60, so
+    // the note 400 ms inside SP is effectively 307.7 ms from being lost.
+    HydraRecord rec;
+    Activation act;
+    act.skips = 0;
+    act.e_offset = 300.0;  // not e-critical
+    act.transfer_pre = TransferScale{1.6, 1.0};
+    act.transfer_post = act.transfer_pre;
+    BackendSqueeze row;
+    row.chord.add_note(NoteColor::Green);
+    row.points = 260;
+    row.offset_ms = -400.0;
+    act.backends.push_back(row);
+    Path p;
+    p.activations.push_back(act);
+
+    ActivationsView v = build_activations(p, rec, nullptr, 85.0);
+    REQUIRE(v.acts.size() == 1);
+    REQUIRE(v.acts[0].backends.size() == 1);
+    const BackendRowView& r = v.acts[0].backends[0];
+    CHECK(r.timing == "-400.0");
+    CHECK(r.rating.find(" (eff. 307.7ms)") != std::string::npos);
+    CHECK_FALSE(r.tooltip.empty());
+    CHECK(v.acts[0].scale_warning.find("x1.60") != std::string::npos);
 }
 
 TEST_CASE("path buttons: Burnout's list, in the mockup's groups") {

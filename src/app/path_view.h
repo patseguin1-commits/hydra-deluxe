@@ -134,10 +134,13 @@ std::string activation_badge(const Activation& act);
 // that squeeze is difficult. `squeezed_out` is the backend row the rating
 // flagged as the squeezed-out note (nullptr when the record names none); it
 // supplies the SqOut's chord and what the squeeze-out costs.
-// `leeway_ms` is Rules::backend_leeway_ms.
+// `leeway_ms` is Rules::backend_leeway_ms. `note_effective_ms` is
+// ActivationRating::note_effective_ms: a SqIn's sentence prints its figure as
+// "(eff. N ms)" after the timing; a SqOut's figure is on its backend row.
 std::vector<TextLine> squeeze_sentences(const Activation& act,
                                         const BackendRating* squeezed_out,
-                                        double leeway_ms);
+                                        double leeway_ms,
+                                        const std::vector<std::optional<double>>& note_effective_ms);
 
 // The line above a backend table, explaining its columns in plain words.
 extern const char* const kBackendTimingsLead;

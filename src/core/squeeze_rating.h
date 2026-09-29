@@ -125,6 +125,10 @@ struct ActivationRating {
     bool cap_clamped = false;
     // One entry per act.display_backends() row, in that order.
     std::vector<BackendRating> backends;
+    // One entry per act.sqinouts, in that order: the phrase note's margin as
+    // effective ms on the nominal scale, set under the same rule as a
+    // backend row's effective_ms (material, and it moves the number).
+    std::vector<std::optional<double>> note_effective_ms;
 };
 
 // The display's whole view of an activation's squeezes: it builds the backend

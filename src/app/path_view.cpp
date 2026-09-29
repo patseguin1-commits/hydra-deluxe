@@ -56,9 +56,11 @@ std::string activation_badge(const Activation& act) {
 
 std::vector<TextLine> squeeze_sentences(const Activation& act,
                                         const BackendRating* squeezed_out,
-                                        double leeway_ms) {
+                                        double leeway_ms,
+                                        const std::vector<std::optional<double>>& note_effective_ms) {
     std::vector<TextLine> out;
-    for (const SPSqueeze& sq : act.sqinouts) {
+    for (size_t i = 0; i < act.sqinouts.size(); ++i) {
+        const SPSqueeze& sq = act.sqinouts[i];
         // timing() is the edge SPSqueeze::description() prints: a SqOut must
         // be hit later than it, a SqIn earlier than it.
         const double t = sq.timing();
@@ -92,9 +94,13 @@ std::vector<TextLine> squeeze_sentences(const Activation& act,
                 text += " Its SP phrase banks for later.";
             }
         } else {
-            const std::string when = t <= 0.0
-                                         ? "more than " + format_ms_spaced(std::fabs(t)) + " early"
-                                         : "no more than " + format_ms_spaced(std::fabs(t)) + " late";
+            std::string when = t <= 0.0
+                                   ? "more than " + format_ms_spaced(std::fabs(t)) + " early"
+                                   : "no more than " + format_ms_spaced(std::fabs(t)) + " late";
+            // A SqIn has no backend row to carry its eff. figure (a SqOut's
+            // sits on its squeezed-out row), so the sentence carries it.
+            if (i < note_effective_ms.size() && note_effective_ms[i])
+                when += " (eff. " + format_ms_spaced(*note_effective_ms[i]) + ")";
             text = "Hit the SP phrase's last note " + when +
                    " so it lands before Star Power ends. The phrase then counts while Star "
                    "Power runs, which makes Star Power last longer.";
@@ -305,7 +311,8 @@ ActivationsView build_activations(const Path& path, const HydraRecord& /*record*
         const BackendRating* squeezed_out = nullptr;
         for (const BackendRating& br : rate.backends)
             if (br.squeezed_out) squeezed_out = &br;
-        av.squeeze_sentences = squeeze_sentences(act, squeezed_out, rules.backend_leeway_ms);
+        av.squeeze_sentences = squeeze_sentences(act, squeezed_out, rules.backend_leeway_ms,
+                                                 rate.note_effective_ms);
 
         av.backends.reserve(rate.backends.size());
         for (const BackendRating& br : rate.backends) {

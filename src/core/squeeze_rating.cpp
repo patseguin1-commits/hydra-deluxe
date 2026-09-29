@@ -90,7 +90,8 @@ ActivationRating rate_activation(const Activation& act,
     // achieved by an early frontend hit, so it reads the early scale; a sqout
     // row already past the SP end (offset > 0) is free, and the only thing
     // that can destroy it is a late frontend hit dragging the end over it, so
-    // it reads the late scale. Plain positive rows want a late frontend hit.
+    // it reads the late scale. Plain positive rows want a late frontend hit;
+    // plain rows inside SP (offset < 0) are lost only to an early one.
     // All of them live at the (possibly SqIn-extended) SP end, so they read
     // `post`. effective_ms maps the row's raw ms onto the nominal 2*W budget
     // the ratings assume (the real combined budget is W*(1+r)); it engages
@@ -120,6 +121,14 @@ ActivationRating rate_activation(const Activation& act,
                 applies = transfer_is_material(*bsq.offset_ms, row.scale,
                                                hit_window_ms);
                 out.late_backend_warns |= applies;
+            } else if (*bsq.offset_ms < 0.0) {
+                // A plain row inside SP already counts. Like a free SqIn, the
+                // only thing that can lose it is an early frontend hit pulling
+                // the end back over it, so its margin reads the early scale.
+                row.scale = out.scales.post.early;
+                applies = transfer_is_material(*bsq.offset_ms, row.scale,
+                                               hit_window_ms);
+                out.early_backend_warns |= applies;
             }
             if (applies) {
                 double eff = effective_backend_ms(*bsq.offset_ms, row.scale);
@@ -137,18 +146,26 @@ ActivationRating rate_activation(const Activation& act,
     // SqOut, late (+) for a SqIn. A free one (difficulty <= 0) is already
     // yours, so the direction that matters is the opposite one -- the frontend
     // error that would move the SP end far enough to take it away. They have
-    // no display row of their own, so they only feed the warning line.
+    // no display row of their own, so they feed the warning line and carry
+    // their own effective ms, for the squeeze sentence to print.
+    out.note_effective_ms.reserve(act.sqinouts.size());
     for (const SPSqueeze& sq : act.sqinouts) {
         bool achieved_early = (sq.kind == SqueezeKind::SqOut);
         // At difficulty 0 the gap is 0 and nothing can be material, so the
         // achievement direction stands.
         bool early = sq.difficulty() >= 0.0 ? achieved_early : !achieved_early;
+        double scale = early ? out.scales.pre.early : out.scales.pre.late;
+        bool applies = transfer_is_material(sq.difficulty(), scale, hit_window_ms);
         if (early)
-            out.early_note_warns |= transfer_is_material(
-                sq.difficulty(), out.scales.pre.early, hit_window_ms);
+            out.early_note_warns |= applies;
         else
-            out.late_note_warns |= transfer_is_material(
-                sq.difficulty(), out.scales.pre.late, hit_window_ms);
+            out.late_note_warns |= applies;
+        std::optional<double> eff_ms;
+        if (applies) {
+            double eff = effective_backend_ms(sq.difficulty(), scale);
+            if (std::abs(eff - std::abs(sq.difficulty())) > kTransferImpactMs) eff_ms = eff;
+        }
+        out.note_effective_ms.push_back(eff_ms);
     }
 
     out.late_warns = out.late_backend_warns || out.late_note_warns;
