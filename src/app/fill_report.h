@@ -8,9 +8,10 @@
 // Short fills therefore got stricter and long fills got looser, so most charts
 // lose or tie under 1.1 and a few gain.
 //
-// The rule is not part of a record's identity (docs/adr/0010), so the two
-// answers live in two separate database files. This joins them by chart hash
-// and emits a self-contained sortable HTML page.
+// Each result carries its rule in its key (store::Lens::legacy_fills,
+// docs/adr/0010). This reads the 1.0 results from one store and the 1.1
+// results from another -- the same file twice works too -- joins them by
+// chart hash and emits a self-contained sortable HTML page.
 
 #ifndef HYDRA_APP_FILL_REPORT_H
 #define HYDRA_APP_FILL_REPORT_H
@@ -38,7 +39,9 @@ struct FillCompareRow {
     std::string status;
 };
 
-// Joins the two stores' records for identical settings, indexed by lowercased
+// Joins the two stores' records for identical settings but the fill rule
+// (old_store's 1.0 results, new_store's 1.1 ones; lens.legacy_fills is
+// ignored), indexed by lowercased
 // hyhash, over the union of both key sets — a chart stored on one side only
 // still gets a row. Song/artist/charter prefer the 1.1 (new) side and are run
 // through report::plain to strip Clone Hero color markup.

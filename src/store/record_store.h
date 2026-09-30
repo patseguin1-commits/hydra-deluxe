@@ -2,11 +2,11 @@
 // store/serialize.h. Old
 // Python-era .db files are not read; a fresh scan populates a new one.
 //
-// Three tables carry an analysis (schema user_version 2):
+// Three tables carry an analysis (schema user_version 3):
 //
 //   * `results` — one row per run, keyed by the FULL settings it ran under:
-//     the chart, the chart mode, the SP cap, and the Lens (ms limit + score
-//     range). Summary columns are denormalized onto it so a sortable library
+//     the chart, the chart mode, the SP cap, and the Lens (ms limit, score
+//     range and fill rule). Summary columns are denormalized onto it so a sortable library
 //     listing never has to inflate anything. The row holds a *structure* blob
 //     (the path tree's shape) rather than the paths themselves.
 //   * `paths` — every distinct path node, content-addressed by its hash and
@@ -81,9 +81,9 @@ struct CapQuery {
     bool operator!=(const CapQuery& other) const { return !(*this == other); }
 };
 
-// The rest of the settings a run happened under: the ms limit and the score
-// range. Two runs of the same chart at the same cap under different lenses
-// are two results, neither overwriting the other.
+// The rest of the settings a run happened under: the ms limit, the score
+// range and the fill rule. Two runs of the same chart at the same cap under
+// different lenses are two results, neither overwriting the other.
 //
 // Canonical form, so equal settings always compare equal: a disabled ms limit
 // stores value 0, because the engine ignores the number when the limit is off
@@ -95,21 +95,28 @@ struct Lens {
     int ms_value = 0;
     int depth_mode = 0;  // 0 = scores, 1 = points -- the INI's own ints
     int depth_value = 0;
+    // 1 = fills spawn by Clone Hero 1.0's deadline, 0 = by 1.1's, the normal
+    // rule (search/graph.h FillDeadlineRule). Part of the key since the GUI
+    // got a switch for it; docs/adr/0010 has the history.
+    int legacy_fills = 0;
 
     // `ms` is Settings::mslimit_value when the limit is on, nullopt when off.
-    static Lens from(std::optional<int> ms, int depth_mode, int depth_value) {
+    static Lens from(std::optional<int> ms, int depth_mode, int depth_value,
+                     bool legacy_fills = false) {
         Lens lens;
         lens.ms_enabled = ms ? 1 : 0;
         lens.ms_value = ms ? *ms : 0;
         lens.depth_mode = depth_mode;
         lens.depth_value = depth_value;
+        lens.legacy_fills = legacy_fills ? 1 : 0;
         return lens;
     }
 
     // Spelled out rather than defaulted: this project builds as C++17.
     bool operator==(const Lens& other) const {
         return ms_enabled == other.ms_enabled && ms_value == other.ms_value &&
-               depth_mode == other.depth_mode && depth_value == other.depth_value;
+               depth_mode == other.depth_mode && depth_value == other.depth_value &&
+               legacy_fills == other.legacy_fills;
     }
     bool operator!=(const Lens& other) const { return !(*this == other); }
 };
@@ -147,9 +154,9 @@ struct PreparedRow {
 
 // Throws std::invalid_argument if the record carries no sp_cap (every
 // analyzer result does), if the key's cap isn't the cap the record was
-// analyzed at, or if the key's lens has the ms limit on at a value the record
-// wasn't analyzed under -- each mismatch would file the result under settings
-// it doesn't belong to.
+// analyzed at, if the key's lens has the ms limit on at a value the record
+// wasn't analyzed under, or if the lens names the other fill rule -- each
+// mismatch would file the result under settings it doesn't belong to.
 PreparedRow prepare_row(const RecordKey& key, const HydraRecord& record);
 
 // The results version this build stamps on a row and accepts (ADR 0018; not
@@ -393,12 +400,13 @@ public:
     // {songs, results} row counts.
     std::pair<int64_t, int64_t> counts();
 
-    // Which fill-spawn rule wrote this file: "ch11" (Clone Hero 1.1, the
-    // normal one) or "ch10" (the legacy CLI mode, search/graph.h
+    // Which fill-spawn rule hydra_batch last wrote this file with: "ch11"
+    // (Clone Hero 1.1, the normal one) or "ch10" (--legacy-fills, search/graph.h
     // FillDeadlineRule). Unset on a db nothing has stamped yet, which reads as
-    // "assume the normal rule". This is only a label on the file — the rule is
-    // NOT part of a record's identity, so the two rules must never share a
-    // database (docs/adr/0010). hydra_batch stamps every run.
+    // "assume the normal rule". Only a label on the file: each result carries
+    // its own rule in its Lens. The one decision it still feeds is the schema
+    // 3 migration, which files a ch10-stamped database's older rows under the
+    // 1.0 rule (docs/adr/0010).
     std::optional<std::string> engine_mode();
     void set_engine_mode(const std::string& mode);
 
@@ -442,6 +450,12 @@ private:
     void exec(const char* sql);
     bool has_column(const char* table, const char* column);
     void create_result_tables();
+    // Schema 2 -> 3: a results table from before the fill rule was part of
+    // the key gets its legacy_fills column. The column joins the UNIQUE
+    // constraint, which SQLite cannot alter, so the table is rebuilt with
+    // every row and its result_id kept (path_refs point at them). Rows go
+    // under the 1.0 rule when hydra_batch stamped the file ch10, else 1.1.
+    void add_fill_rule_column();
     // Fills the stars column of every Ready row that lacks it (rows written
     // before the column existed). Runs on every open; with nothing to fill
     // it reads only small columns. Returns rows filled.

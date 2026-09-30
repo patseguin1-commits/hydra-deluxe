@@ -24,7 +24,8 @@ The search that computes a chart's paths and stores the result as a record.
 **Record**:
 The stored result of one analysis: the kept paths, their scores, and the
 settings the analysis ran with. Its key is the chart and its analysis
-settings: the chart mode, the SP cap, the path limit and the score range. A chart
+settings: the chart mode, the SP cap, the fill rule, the path limit and the
+score range. A chart
 keeps one record per settings combination; records share their stored paths,
 so a path found under several combinations is stored once. A record is stale
 unless both hold: it carries a results stamp this build accepts (a stamp that
@@ -42,9 +43,10 @@ scores are not achievable in game.
 _Avoid_: edition, uncapped, SP meter
 
 **Analysis settings**:
-The six settings that make up a record's identity, shown together in the
+The seven settings that make up a record's identity, shown together in the
 settings bar and applied to every song: difficulty, Pro Drums and 2x Bass
-(together the chart mode), the SP cap, the score range, and the path limit.
+(together the chart mode), the SP cap, 1.0 fills (the fill spawn deadline),
+the score range, and the path limit.
 Changing one shows the records made under the new combination; changing it
 back brings the old ones back without analyzing again. The backend limit is
 not one of them: it only hides backend rows on screen and never re-analyzes.
@@ -111,13 +113,13 @@ hitting early; its window is fixed, not the hit-window setting.
 
 **Fill spawn deadline (CH 1.1)**:
 The latest your SP meter can fill up and still have a fill appear. Clone Hero
-1.1 puts it a flat 4 beats before the fill starts. This is what Hydra scores
-by, always.
+1.1 puts it a flat 4 beats before the fill starts. Hydra's default rule.
 
 **Fill spawn deadline (CH 1.0)**:
 The older rule: roughly one fill-length of lead time before the fill, clamped
 to 250..10000 ms. Short fills got stricter in 1.1 and long fills got looser.
-CLI only (`hydra_batch --legacy-fills`), needs its own database, and
+The "1.0 fills" analysis setting, or `hydra_batch --legacy-fills` into its own
+database. Part of a record's key, so 1.0 and 1.1 records sit side by side;
 `hydra_fillcompare` diffs the two. See docs/adr/0010.
 
 **Hit window**:

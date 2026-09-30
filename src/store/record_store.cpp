@@ -201,6 +201,7 @@ constexpr const char* kResultsColumnDefs =
     "  ms_value    INTEGER NOT NULL,"
     "  depth_mode  INTEGER NOT NULL,"
     "  depth_value INTEGER NOT NULL,"
+    "  legacy_fills INTEGER NOT NULL DEFAULT 0,"
     "  bestpath    TEXT NOT NULL,"
     "  structure   BLOB NOT NULL,"
     "  score       INTEGER,"
@@ -213,7 +214,15 @@ constexpr const char* kResultsColumnDefs =
     "  sqout_count INTEGER,"
     "  pathcount   INTEGER,"
     "  stars       INTEGER,"
-    "  UNIQUE (hyhash, chartmode, sp_cap, ms_enabled, ms_value, depth_mode, depth_value)";
+    "  UNIQUE (hyhash, chartmode, sp_cap, ms_enabled, ms_value, depth_mode, depth_value,"
+    "          legacy_fills)";
+
+// The schema 2 results table's columns, in table order: what the schema 3
+// rebuild copies across (add_fill_rule_column).
+constexpr const char* kSchema2ResultsColumns =
+    "result_id, hyhash, chartmode, hyversion, sp_cap, ms_enabled, ms_value, depth_mode,"
+    " depth_value, bestpath, structure, score, actcount, maxskip, hardest_ms, avgmult,"
+    " notecount, sqin_count, sqout_count, pathcount, stars";
 
 // The summary columns, in the order bind_summary/read_summary use.
 constexpr const char* kSummaryColumnList =
@@ -233,19 +242,20 @@ constexpr size_t kHashesPerQuery = 10000;
 // settings are unknown". No lens has -1, so those rows are never candidates
 // and read as no row at all (user decision 2026-09-26).
 
-// "the row at alias `a` carries exactly this lens". Four bound parameters, in
+// "the row at alias `a` carries exactly this lens". Five bound parameters, in
 // Lens's field order. `a` is "" or "r.".
 std::string lens_match(const char* a) {
     std::string p = a;
     return "(" + p + "ms_enabled=? AND " + p + "ms_value=? AND " + p +
-           "depth_mode=? AND " + p + "depth_value=?)";
+           "depth_mode=? AND " + p + "depth_value=? AND " + p + "legacy_fills=?)";
 }
 int bind_lens(sqlite3_stmt* s, int idx, const Lens& lens) {
     sqlite3_bind_int(s, idx, lens.ms_enabled);
     sqlite3_bind_int(s, idx + 1, lens.ms_value);
     sqlite3_bind_int(s, idx + 2, lens.depth_mode);
     sqlite3_bind_int(s, idx + 3, lens.depth_value);
-    return idx + 4;
+    sqlite3_bind_int(s, idx + 4, lens.legacy_fills);
+    return idx + 5;
 }
 
 // The first 12 bytes a structure blob starts with: the u32 path format, then
@@ -409,7 +419,7 @@ void append_candidate_filter(std::string& sql, const char* a,
     sql += " AND " + lens_match(a);
     sql += " AND " + p + "sp_cap=?";
 }
-// Binds the lens's four parameters, then the cap.
+// Binds the lens's five parameters, then the cap.
 int bind_candidate_filter(sqlite3_stmt* s, int idx, const CapQuery& cap, const Lens& lens) {
     idx = bind_lens(s, idx, lens);
     sqlite3_bind_int(s, idx++, cap.exact);
@@ -512,6 +522,11 @@ PreparedRow prepare_row(const RecordKey& key, const HydraRecord& record) {
             "prepare_row: key asks for an ms limit of " +
             std::to_string(key.lens.ms_value) + " but the record was analyzed " +
             (record.ms_limit ? "at " + std::to_string(*record.ms_limit) : "without one"));
+    if (key.lens.legacy_fills != (record.legacy_fills ? 1 : 0))
+        throw std::invalid_argument(
+            std::string("prepare_row: key asks for Clone Hero ") +
+            (key.lens.legacy_fills ? "1.0" : "1.1") + " fills but the record was analyzed "
+            "under the " + (record.legacy_fills ? "1.0" : "1.1") + " rule");
 
     PreparedRow row;
     row.hyhash = key.hyhash;
@@ -597,16 +612,41 @@ RecordStore::RecordStore(const std::string& dbpath, core::RulesStamp rules_finge
     // Nothing reads it (user decision 2026-09-26), so its charts read Not
     // analyzed until they are analyzed again.
     create_result_tables();
+    // A results table from before the stars summary has no column for it.
+    // Its Ready rows are filled below, from their stored paths; nothing is
+    // analyzed again. A row that isn't Ready (another build, other rules) is
+    // left alone and filled on a later open once it reads Ready. Added before
+    // the schema 3 rebuild, which copies the column across.
+    if (!has_column("results", "stars")) exec("ALTER TABLE results ADD COLUMN stars INTEGER");
+    // Schema 3 = the fill rule joins a result's key.
+    add_fill_rule_column();
     // Auto was removed (2026-09-27). Its results go the first time this
     // build opens the file, before the stars backfill below.
     delete_auto_results();
-    // A results table from before the stars summary has no column for it.
-    // Its Ready rows are filled now, from their stored paths; nothing is
-    // analyzed again. A row that isn't Ready (another build, other rules) is
-    // left alone and filled on a later open once it reads Ready.
-    if (!has_column("results", "stars")) exec("ALTER TABLE results ADD COLUMN stars INTEGER");
     fill_missing_stars();
-    exec("PRAGMA user_version = 2");
+    exec("PRAGMA user_version = 3");
+}
+
+void RecordStore::add_fill_rule_column() {
+    if (has_column("results", "legacy_fills")) return;
+    // hydra_batch --legacy-fills stamps its file "ch10" (search/graph.h
+    // engine_mode_stamp); everything else in a schema 2 file ran under 1.1.
+    const std::optional<std::string> mode = meta_get("engine_mode");
+    const std::string legacy = mode && *mode == "ch10" ? "1" : "0";
+    exec("BEGIN");
+    try {
+        exec("ALTER TABLE results RENAME TO results_schema2");
+        create_result_tables();
+        exec((std::string("INSERT INTO results (") + kSchema2ResultsColumns +
+              ", legacy_fills) SELECT " + kSchema2ResultsColumns + ", " + legacy +
+              " FROM results_schema2")
+                 .c_str());
+        exec("DROP TABLE results_schema2");
+        exec("COMMIT");
+    } catch (...) {
+        rollback_if_open(db_);
+        throw;
+    }
 }
 
 RecordStore::~RecordStore() { close(); }
@@ -905,8 +945,7 @@ void RecordStore::write_row(const PreparedRow& row) {
     // (2) The row this one replaces, deleted explicitly rather than by
     //     INSERT OR REPLACE: the refs bookkeeping has to be ours, and the
     //     re-insert must take a fresh result_id so the newest write ranks first.
-    purge("hyhash=? AND chartmode=? AND sp_cap=? AND ms_enabled=? AND ms_value=?"
-          " AND depth_mode=? AND depth_value=?",
+    purge("hyhash=? AND chartmode=? AND sp_cap=? AND " + lens_match(""),
           [&](sqlite3_stmt* s) {
               bind_text(s, 1, row.hyhash);
               bind_text(s, 2, row.chartmode);
@@ -921,17 +960,17 @@ void RecordStore::write_row(const PreparedRow& row) {
         Stmt s = prepare(db_,
             (std::string("INSERT INTO results "
                          "(hyhash, chartmode, hyversion, sp_cap, ms_enabled, ms_value,"
-                         " depth_mode, depth_value, bestpath, structure, ") +
-             kSummaryColumnList + ") VALUES (?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?)")
+                         " depth_mode, depth_value, legacy_fills, bestpath, structure, ") +
+             kSummaryColumnList + ") VALUES (?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?)")
                 .c_str());
         bind_text(s, 1, row.hyhash);
         bind_text(s, 2, row.chartmode);
         bind_text(s, 3, row.hyversion);
         sqlite3_bind_int(s, 4, row.sp_cap);
         bind_lens(s, 5, row.lens);
-        bind_text(s, 9, row.bestpath);
-        bind_blob(s, 10, row.structure);
-        bind_summary(s, 11, row.summary);
+        bind_text(s, 10, row.bestpath);
+        bind_blob(s, 11, row.structure);
+        bind_summary(s, 12, row.summary);
         run(s, "insert");
     }
     const int64_t result_id = sqlite3_last_insert_rowid(db_);
@@ -1167,6 +1206,8 @@ RecordLookup RecordStore::get_record(const RecordKey& key) {
             auto it = nodes.find(hash);
             return it == nodes.end() ? nullptr : &it->second;
         });
+    // The row matched the key's lens, so its rule is the key's.
+    record.legacy_fills = key.lens.legacy_fills == 1;
     // The tempomap is decoded once, here, and handed back with the record --
     // the display layer needs the same timing and must not query for it again.
     if (songmeta) {

@@ -307,14 +307,62 @@ TEST_CASE("hydra_fillcompare compares a 1.0 and a 1.1 database") {
     CHECK(!contains(r.output, "Warning"));
     CHECK(fs::exists(page));
 
-    // Swapped files: each stamp disagrees with the side it was passed as,
-    // which warns but still runs.
+    // Swapped files: each stamp disagrees with the side it was passed as, so
+    // it warns. Each result carries its rule, so the 1.1 file has no 1.0
+    // results to offer and the 1.0 file no 1.1 ones: nothing to compare.
     RunResult swapped = run_exe(box.fillcompare,
                                 {"--old", ch11, "--new", ch10, "--out",
                                  (box.dir / "swapped.html").u8string(), "--no-open"});
     INFO(swapped.output);
-    CHECK(swapped.exit_code == 0);
+    CHECK(swapped.exit_code == 1);
     CHECK(contains(swapped.output, "is stamped engine_mode=" + kCh11 + ", not " + kCh10));
+    CHECK(contains(swapped.output, "No records to compare"));
 
     CHECK(run_exe(box.fillcompare, {"--old", ch10}).exit_code == 2);
+}
+
+TEST_CASE("hydra_fillcompare compares both rules out of one database") {
+    // The app's "1.0 fills" setting keeps both rules' results in one file.
+    CliSandbox box("fillcompare_one");
+    const std::string db = box.db("both.db");
+    {
+        const std::string chart = (box.songs / "fixture" / "notes.chart").u8string();
+        const std::string md5 = hydra::app::hash_chart_file(chart);
+        hydra::store::RecordStore store(db);
+        for (bool legacy : {false, true}) {
+            hydra::app::Settings settings{};  // the defaults the sandboxed exe reads
+            settings.legacy_fills = legacy;
+            hydra::app::AnalysisResult ar =
+                hydra::app::analyze_chart_file(chart, settings.to_analysis_settings());
+            store.add_song(md5, "CLI Fixture", "Tester", "Nobody", ar.song);
+            store.add_row(hydra::store::prepare_row(settings.record_key(md5), ar.record));
+        }
+        REQUIRE(store.counts().second == 2);
+    }
+
+    RunResult r = run_exe(box.fillcompare, {"--old", db, "--new", db, "--out",
+                                            (box.dir / "one.html").u8string(), "--no-open"});
+    INFO(r.output);
+    CHECK(r.exit_code == 0);
+    CHECK(contains(r.output, "Compared 1 charts"));
+    CHECK(contains(r.output, "0 only in 1.0, 0 only in 1.1"));
+}
+
+TEST_CASE("hydra_report reports a --legacy-fills database under the 1.0 rule") {
+    // The app's own setting is 1.1 (the sandbox's defaults), but a file that
+    // hydra_batch --legacy-fills filled holds only 1.0 results.
+    CliSandbox box("report_legacy");
+    const std::string db = box.db("ch10.db");
+    REQUIRE(run_exe(box.batch, {"--legacy-fills", "--db", db, box.folder()}).exit_code == 0);
+
+    const fs::path page = box.dir / "legacy.html";
+    RunResult r = run_exe(box.report, {"--db", db, "--out", page.u8string(), "--no-open"});
+    INFO(r.output);
+    CHECK(r.exit_code == 0);
+    REQUIRE(fs::exists(page));
+    std::ifstream f(page, std::ios::binary);
+    const std::string html((std::istreambuf_iterator<char>(f)),
+                           std::istreambuf_iterator<char>());
+    CHECK(contains(html, "CLI Fixture"));
+    CHECK(contains(html, "Clone Hero 1.0 fills"));
 }

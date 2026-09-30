@@ -30,6 +30,7 @@
 #include "app/report_files.h"
 #include "core/model.h"
 #include "core/winstr.h"
+#include "search/graph.h"
 #include "store/record_store.h"
 
 int main() {
@@ -73,11 +74,18 @@ int main() {
     hydra::app::report::ReportOptions options;
     options.max_paths = max_paths;
     options.cap = settings.cap_query();
-    options.lens = settings.lens();
     options.hit_window_ms = settings.hit_window_ms;
     options.db_path = db;
 
     std::unique_ptr<hydra::store::RecordStore> store = hydra::app::open_store(db, hydra::core::RulesStamp::of(settings.rules));
+    // A database hydra_batch --legacy-fills filled holds only 1.0 results, so
+    // it reports under that rule whatever the app's "1.0 fills" setting says,
+    // as it did before results carried their rule. Any other file follows the
+    // app's setting.
+    if (store->engine_mode() == std::string(
+            hydra::engine_mode_stamp(hydra::FillDeadlineRule::Ch10)))
+        settings.legacy_fills = true;
+    options.lens = settings.lens();
     hydra::app::report::GeneratedReport report =
         hydra::app::report::generate_report(*store, options);
     store->close();

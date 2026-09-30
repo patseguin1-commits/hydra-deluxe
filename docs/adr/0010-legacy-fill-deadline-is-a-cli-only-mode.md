@@ -1,5 +1,9 @@
 # The legacy fill deadline is a CLI-only mode, split by database file
 
+**Superseded 2026-09-29 by the user's decision: the rule is now part of a
+result's key, and the GUI has a "1.0 fills" setting.** See the note at the
+end. The rest of this page is the original decision, kept for its reasoning.
+
 A drum fill only appears in-game if your Star Power meter filled up in time.
 Clone Hero 1.1 sets that deadline a flat 4 beats before the fill starts. Clone
 Hero 1.0 set it about one fill-length earlier, clamped to between 250 ms and 10
@@ -79,3 +83,40 @@ A user can still put legacy results in the wrong file by naming one explicitly
 (`--db` at some path, then later reusing that path for a normal run). The stamp
 turns that into a warning rather than a silent wrong answer, which is the most a
 file-level split can do.
+
+## Note, 2026-09-29: the rule joins the key
+
+The user asked for a GUI switch. Of the two ways to give it one, they chose
+the key over a second database file: the song list lives in the database too,
+so a second file would have started empty and needed its own scan.
+
+What changed:
+
+- `store::Lens` gained `legacy_fills`, and the `results` table a
+  `legacy_fills` column inside its UNIQUE constraint (schema 3). Every lookup
+  already passes a Lens, so the library, the Paths tab, the path report and
+  the leaderboard comparison each find only the rule the settings name. The
+  worry above, that legacy rows would need filtering out everywhere, is
+  answered by construction, the same way the SP cap's was (ADR-0003).
+- The schema 3 rebuild files a file's older rows under 1.1, unless hydra_batch
+  stamped the file `ch10`; then under 1.0. So a `--legacy-fills` database
+  from before still reads as 1.0.
+- `prepare_row` refuses a key that names the other rule. `HydraRecord` carries
+  the rule in memory (`legacy_fills`), not in its stored bytes; `get_record`
+  sets it from the key.
+- The app's setting is `legacy_fills` in hydra_settings.ini, a checkbox
+  beside the SP cap. "Compare with dmleaderboards" is disabled while it is on.
+- `hydra_fillcompare` reads 1.0 results from `--old` and 1.1 results from
+  `--new`, so both may name one file. Swapped files now find nothing to
+  compare instead of a page with the sides mislabelled.
+- `hydra_report` follows the app's setting, except on a file stamped `ch10`,
+  which it reports under 1.0 as before.
+
+What stayed: `hydra_batch` goes by `--legacy-fills` alone, never by the app's
+setting, and still refuses to write `hydra.db` or a file stamped with the
+other rule. Those guards are no longer needed for correctness. They were kept
+because the request was for the GUI only.
+
+The byte-for-byte point above still holds: 1.0 results interpolate between
+ticks in floating point. They now share a table with 1.1 results, but never a
+key, so no lookup can mix the two.

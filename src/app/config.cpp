@@ -90,6 +90,7 @@ Settings Settings::load_file(const std::string& path) {
             // the default 4, like zero and junk.
             if (int v = std::atoi(value.c_str()); v >= 1) s.sp_cap = v;
         }
+        else if (key == "legacy_fills") s.legacy_fills = (value == "1");
         else if (key == "auto_open_report") s.auto_open_report = (value == "1");
         else if (key == "dm_last_user") s.dm_last_user = value;
     }
@@ -118,6 +119,7 @@ bool Settings::save_file(const std::string& path) const {
     f << "hit_window_ms=" << hit_window_ms << "\n";
     f << "preview_volume=" << preview_volume << "\n";
     f << "sp_cap=" << sp_cap << "\n";
+    f << "legacy_fills=" << (legacy_fills ? 1 : 0) << "\n";
     f << "auto_open_report=" << (auto_open_report ? 1 : 0) << "\n";
     if (!dm_last_user.empty()) f << "dm_last_user=" << dm_last_user << "\n";
     for (const std::string& folder : chartfolders) f << "chartfolder=" << folder << "\n";
@@ -149,6 +151,7 @@ AnalysisSettings Settings::to_analysis_settings() const {
     s.depth_value = depth_value;
     s.ms_filter = mslimit_enabled ? std::optional<double>(mslimit_value) : std::nullopt;
     s.sp_cap = sp_cap;
+    s.legacy_fill_deadline = legacy_fills;
     s.rules = rules;
     return s;
 }
@@ -166,7 +169,7 @@ store::CapQuery Settings::cap_query() const {
 store::Lens Settings::lens() const {
     return store::Lens::from(
         mslimit_enabled ? std::optional<int>(mslimit_value) : std::nullopt,
-        depth_mode, depth_value);
+        depth_mode, depth_value, legacy_fills);
 }
 
 store::RecordKey Settings::record_key(const std::string& hyhash) const {

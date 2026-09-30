@@ -27,8 +27,9 @@ struct SearchSettings {
     // The SP meter ceiling in bars (4 = Clone Hero's rule).
     int sp_cap = kCloneHeroSpCap;
     // Score fills by Clone Hero 1.0's spawn deadline instead of 1.1's flat 4
-    // beats (FillDeadlineRule in search/graph.h). CLI-only: it is not part of
-    // a record's identity, so a legacy run needs its own db (docs/adr/0010).
+    // beats (FillDeadlineRule in search/graph.h). The app's "1.0 fills"
+    // setting or hydra_batch --legacy-fills; the result is filed under it
+    // (store::Lens::legacy_fills, docs/adr/0010).
     bool legacy_fill_deadline = false;
     // The user's rule choices (hydra_rules.ini). Defaults are today's rules.
     core::Rules rules = core::default_rules();

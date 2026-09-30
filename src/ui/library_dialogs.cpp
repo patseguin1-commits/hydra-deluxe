@@ -81,6 +81,7 @@ BatchSettingsSummary batch_settings_summary(const app::Settings& s) {
     if (s.effective_bass2x()) out.difficulty += " \xC2\xB7 2x Bass";
     out.sp_cap = count_label(s.sp_cap, "bar", "bars") +
                  (s.sp_cap == kCloneHeroSpCap ? " (Clone Hero's rule)" : " (a what-if)");
+    out.fills = s.legacy_fills ? "Clone Hero 1.0" : "Clone Hero 1.1";
     out.score_range = s.depth_mode == 0 ? count_label(s.depth_value, "score", "scores")
                                         : count_label(s.depth_value, "point", "points");
     out.path_limit = s.mslimit_enabled ? std::to_string(s.mslimit_value) + " ms" : "off";
@@ -305,6 +306,7 @@ void render_batch_confirm(AppState& app) {
         };
         row("Difficulty", d.difficulty);
         row("SP cap", d.sp_cap);
+        row("Fills", d.fills);
         row("Score range", d.score_range);
         row("Path limit", d.path_limit);
         ImGui::EndTable();

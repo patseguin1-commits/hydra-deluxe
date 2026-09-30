@@ -190,6 +190,7 @@ HydraRecord analyze_chart(const Song& song, const SearchSettings& settings,
                        settings.ms_filter, build_cap, settings.legacy_fill_deadline,
                        settings.rules, /*want_allzero=*/true, on_progress);
     record.rules_fingerprint = settings.rules.fingerprint();
+    record.legacy_fills = settings.legacy_fill_deadline;
     return record;
 }
 

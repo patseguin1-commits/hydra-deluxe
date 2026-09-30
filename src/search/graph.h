@@ -31,9 +31,9 @@ namespace hydra {
 //   * Ch10 — Clone Hero 1.0, as Python Hydra 1.2 modelled it: roughly one
 //     fill-length of lead time before the fill, clamped to 250..10000 ms.
 //
-// Ch10 exists only so the CLI can answer "what could a 1.0 player have
-// reached?". It is never part of a stored record's identity (docs/adr/0010),
-// so a legacy run must be written to its own database file.
+// Ch10 answers "what could a 1.0 player have reached?": the app's "1.0 fills"
+// setting and hydra_batch --legacy-fills. A stored result carries the rule it
+// ran under in its key (store::Lens::legacy_fills, docs/adr/0010).
 enum class FillDeadlineRule { Ch11, Ch10 };
 
 // The engine_mode string hydra_batch stamps into a database's meta table so

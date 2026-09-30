@@ -44,6 +44,8 @@ For example, say you analyzed a song with 2x Bass on and want to see it with 1x 
 
 **SP cap.** The most bars of Star Power the meter can hold during the analysis. 4 is Clone Hero's rule and the default. Leave it at 4 for paths you mean to play. Any other number is a what-if: its scores can't be reached in the game. Results are kept per cap, so a 4-bar result and a 16-bar result for the same song sit side by side. The leaderboard comparison only runs at 4 bars.
 
+**1.0 fills.** Spawn drum fills by Clone Hero 1.0's rule instead of 1.1's. A fill only appears if your Star Power was ready in time. Clone Hero 1.1 wants it ready 4 beats before the fill. 1.0 wanted it about one fill-length before, so short fills were looser and long fills stricter. Leave it off for current Clone Hero. Tick it to price a run played on 1.0. Results are kept per rule, so a song can hold a 1.1 result and a 1.0 result side by side. The leaderboard comparison needs it off.
+
 **Score range.** How many extra paths below optimal to keep. The dropdown picks the unit. `scores` keeps the next few distinct scores under optimal. `points` keeps every path within that many points of optimal. These paths are a little worse, but handy when the optimal path is awkward to play. More paths make the analysis slower.
 
 **Path limit.** When ticked, an extra path is kept only when its hardest squeeze is within this many milliseconds. That keeps alternates you can realistically hit. Lower or negative values demand more slack. The limit compares raw squeeze milliseconds at the SP end. It does not account for frontend timing scaling (see the Paths tab), so a kept path can be a bit harder than its number suggests where an activation's scale line is orange.
@@ -219,7 +221,7 @@ When it's done, the window counts the scores that matched, the ones above optima
 
 Rows above optimal are expected, not errors. Hydra's optimal leaves out several score backends on purpose. Many leaderboard scores were also set on older Clone Hero versions, whose fill rules allowed totals that are impossible now.
 
-The comparison needs Expert and an SP cap of 4, because the leaderboard only holds Expert scores played under Clone Hero's rule. Only songs analyzed under the current settings can match, so analyze your library first for a full comparison.
+The comparison needs Expert, an SP cap of 4 and `1.0 fills` off, because the leaderboard only holds Expert scores played under Clone Hero's rules. Only songs analyzed under the current settings can match, so analyze your library first for a full comparison.
 
 The first request after a while can take tens of seconds, because the leaderboard's server has to wake up.
 
@@ -260,8 +262,8 @@ Every result remembers the rules it was made with. After you change the file, re
 
 Three console programs ship alongside the app and share its settings and library:
 
-- **`hydra_batch`** runs the same batch analysis as `Analyze library...`, printing one line per chart. Flags: `--redo` (re-analyze existing results), `--reindex`, `--db <path>`, `--rules <path>`, `--legacy-fills`. `--legacy-fills` prices charts under Clone Hero 1.0's fill rule instead of 1.1's. It is a command-line-only mode, and it refuses to write the app's own database, so give it its own `--db`.
+- **`hydra_batch`** runs the same batch analysis as `Analyze library...`, printing one line per chart. Flags: `--redo` (re-analyze existing results), `--reindex`, `--db <path>`, `--rules <path>`, `--legacy-fills`. `--legacy-fills` prices charts under Clone Hero 1.0's fill rule instead of 1.1's. It refuses to write the app's own database, so give it its own `--db`. To put 1.0 results in the app's database, use the `1.0 fills` setting instead. `hydra_batch` ignores that setting and goes by the flag.
 - **`hydra_report`** rebuilds the HTML path report from stored results. Flags: `--paths N`, `--all-paths`, `--out <path>`, `--no-open`, `--db <path>`, `--rules <path>`.
-- **`hydra_fillcompare`** compares a Clone Hero 1.0 database with a 1.1 one and writes a sortable page of every chart where the fill rules disagree. Flags: `--old <path>`, `--new <path>`, `--out <path>`, `--no-open`, `--rules <path>`.
+- **`hydra_fillcompare`** reads the 1.0 results from `--old` and the 1.1 results from `--new`, and writes a sortable page of every chart where the fill rules disagree. Both flags can name the same file, such as `hydra.db` once you've analyzed with `1.0 fills` both on and off. Flags: `--old <path>`, `--new <path>`, `--out <path>`, `--no-open`, `--rules <path>`.
 
 All three use the analysis settings from the app's settings file. All three read the scoring rules from `hydra_rules.ini` next to Hydra.exe, or from the file `--rules` names. If that file has an error, they print it and stop with exit code 2.

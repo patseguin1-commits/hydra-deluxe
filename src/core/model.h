@@ -471,6 +471,12 @@ struct HydraRecord {
     // stamps the real one. An older blob reads back core::kNoRulesFingerprint,
     // which matches no rules, so it can never pass as current.
     uint64_t rules_fingerprint = core::default_stamp().fixed;
+    // True when fills spawned by Clone Hero 1.0's deadline, not 1.1's.
+    // analyze_chart sets it. It is not in the stored bytes: the result's row
+    // carries the rule in its key (store::Lens::legacy_fills), prepare_row
+    // refuses a key that names the other rule, and get_record sets it back
+    // from the key that found the row.
+    bool legacy_fills = false;
     std::vector<Path> paths;
 
     // The chart's multiplier squeezes, in chart order. They depend on the

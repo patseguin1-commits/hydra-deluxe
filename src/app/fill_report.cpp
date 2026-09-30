@@ -144,12 +144,17 @@ std::vector<FillCompareRow> collect_fill_rows(store::RecordStore& old_store,
                                               const std::string& chartmode,
                                               const store::CapQuery& cap,
                                               const store::Lens& lens) {
-    // One query per store under identical settings. RecordListing already
-    // carries the best path and its summary, so no blob is ever inflated.
+    // One query per store under identical settings but the fill rule: the old
+    // side asks for 1.0 results, the new side for 1.1, whatever `lens` says.
+    // RecordListing already carries the best path and its summary, so no blob
+    // is ever inflated.
+    store::Lens old_lens = lens, new_lens = lens;
+    old_lens.legacy_fills = 1;
+    new_lens.legacy_fills = 0;
     const std::unordered_map<std::string, store::RecordListing> old_by_hash =
-        report::records_by_hash(old_store, chartmode, cap, lens);
+        report::records_by_hash(old_store, chartmode, cap, old_lens);
     const std::unordered_map<std::string, store::RecordListing> new_by_hash =
-        report::records_by_hash(new_store, chartmode, cap, lens);
+        report::records_by_hash(new_store, chartmode, cap, new_lens);
 
     // Walk the union of both key sets so a chart in only one database still
     // gets a row. Ordered so the page's rows come out deterministically.

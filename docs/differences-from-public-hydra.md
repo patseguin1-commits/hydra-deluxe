@@ -73,7 +73,7 @@ Two changes affect only the display, never the path search. The hit window is 85
 
 **Change the judgment calls.** A few rules are Hydra's own choices, not facts read from Clone Hero. Examples are the backend leeway, what a squeeze-out costs, and how many tied paths to keep. `hydra_rules.ini` lets you change them. The [user guide](UserGuide.md#scoring-rules-hydra_rulesini) lists every key.
 
-**Score by Clone Hero 1.0's fill rule.** Clone Hero 1.1 changed when a drum fill appears. `hydra_batch --legacy-fills` analyzes under the old 1.0 rule into its own database, and `hydra_fillcompare` shows every chart where the two rules disagree. It's for pricing runs recorded on 1.0.
+**Score by Clone Hero 1.0's fill rule.** Clone Hero 1.1 changed when a drum fill appears. The `1.0 fills` setting analyzes under the old 1.0 rule, and keeps those results beside the 1.1 ones. `hydra_batch --legacy-fills` does the same from the command line, and `hydra_fillcompare` shows every chart where the two rules disagree. It's for pricing runs recorded on 1.0.
 
 **Price a path by hand.** `hydra_replay` is a developer tool. It scores a path you type, a path pulled from a saved result, or a path the search never kept. It exists because the search folds equal-scoring paths together, so a real player's path is often in no result at all.
 

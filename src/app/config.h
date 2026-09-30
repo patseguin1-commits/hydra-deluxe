@@ -90,6 +90,12 @@ struct Settings {
     // sp_cap_enabled/sp_cap_value are ignored on load.
     int sp_cap = kCloneHeroSpCap;
 
+    // Spawn fills by Clone Hero 1.0's deadline instead of 1.1's (search/graph.h
+    // FillDeadlineRule). Off by default: 1.1 is the game people play now. Part
+    // of a result's key, like the SP cap. INI line: legacy_fills=0.
+    // hydra_batch ignores it and takes --legacy-fills instead.
+    bool legacy_fills = false;
+
     // Open the HTML path report in the browser as soon as a batch run builds
     // it; off by default (the finished modal offers an "Open report" button).
     bool auto_open_report = false;
@@ -136,8 +142,8 @@ struct Settings {
     // Which stored record the current SP cap asks for (store::CapQuery).
     store::CapQuery cap_query() const;
 
-    // The rest of the settings a stored result is keyed by: the ms limit and
-    // the score range, in the store's canonical form.
+    // The rest of the settings a stored result is keyed by: the ms limit, the
+    // score range and the fill rule, in the store's canonical form.
     store::Lens lens() const;
 
     // The identity of one chart's record under the current settings: this

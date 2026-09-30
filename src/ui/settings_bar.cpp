@@ -89,6 +89,17 @@ void render_sp_cap(AppState& app, bool locked) {
     ImGui::SameLine();
     ImGui::TextUnformatted("bars");
     end_disabled_input(locked);
+
+    // The other Clone Hero rule a result is keyed by: when fills spawn. It
+    // sits with the SP cap because both are "which game's rules".
+    ImGui::SameLine();
+    begin_disabled_checkbox(locked);
+    if (ImGui::Checkbox("1.0 fills", &app.settings.legacy_fills)) app.commit_settings();
+    end_disabled_checkbox(locked);
+    help_marker("Spawn drum fills by Clone Hero 1.0's rule instead of 1.1's. A fill only "
+                "appears if your Star Power was ready in time: 1.1 wants it 4 beats "
+                "before the fill, 1.0 about one fill-length before. For runs played on "
+                "1.0; current Clone Hero plays by 1.1.");
 }
 
 void render_score_range(AppState& app, bool locked) {

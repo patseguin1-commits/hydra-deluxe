@@ -396,6 +396,8 @@ GeneratedReport generate_report(store::RecordStore& store,
                             : "top " + std::to_string(options.max_paths) +
                                   " paths per chart";
     std::string cap_label = "SP cap " + std::to_string(options.cap.exact) + " bars";
+    // The normal rule goes unsaid, so a 1.1 page reads as it always has.
+    if (options.lens.legacy_fills) cap_label += " — Clone Hero 1.0 fills";
     std::string subtitle = counted(out.records, "record", "records") + " across " +
                            counted(out.songs, "chart", "charts") + " — " + shown + " — " +
                            cap_label;

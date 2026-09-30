@@ -3,8 +3,10 @@
 // strings as raw literals -- tally_fill_rows and the page's chip-color map
 // both compare them.
 //
-// The two rules are two whole databases (docs/adr/0010), so every case here
-// uses two in-memory stores holding the same chart hashes at different scores.
+// Every case here uses two in-memory stores holding the same chart hashes at
+// different scores: 1.0 results in the old one, 1.1 results in the new one.
+// Each result carries its rule in its key (docs/adr/0010), and the join reads
+// only 1.0 results from the old side and 1.1 results from the new.
 
 #include "doctest.h"
 
@@ -29,9 +31,10 @@ constexpr const char* kBoth = "aa11bb22cc33dd44ee55ff6677889900";
 constexpr const char* kOldOnly = "bb22cc33dd44ee55ff6677889900aa11";
 constexpr const char* kNewOnly = "cc33dd44ee55ff6677889900aa11bb22";
 
-store::RecordKey key_for(const std::string& hash) {
-    return store::RecordKey{hash, kMode, store::CapQuery::at(kCloneHeroSpCap),
-                            store::Lens{}};
+store::RecordKey key_for(const std::string& hash, bool legacy_fills) {
+    store::Lens lens;
+    lens.legacy_fills = legacy_fills ? 1 : 0;
+    return store::RecordKey{hash, kMode, store::CapQuery::at(kCloneHeroSpCap), lens};
 }
 
 // One analyzed corpus chart, kept alive for the whole file: it supplies a real
@@ -59,22 +62,34 @@ const app::AnalysisResult& sample_chart() {
     return result;
 }
 
-// Registers `hash` in `store` and files a result for it with exactly the
-// summary given. The structure/nodes come from a real record so the row is
-// well-formed; only the numbers the report reads are overridden.
-void put(store::RecordStore& store, const std::string& hash, int64_t score,
-         int acts, const std::string& bestpath) {
+// Registers `hash` in `store` and files a result for it under the given fill
+// rule with exactly the summary given. The structure/nodes come from a real
+// record so the row is well-formed; only the numbers the report reads are
+// overridden.
+void put(store::RecordStore& store, bool legacy_fills, const std::string& hash,
+         int64_t score, int acts, const std::string& bestpath) {
     const app::AnalysisResult& sample = sample_chart();
     store.add_song(hash, "Song " + hash.substr(0, 4), "Test Artist",
                    "Test Charter", sample.song);
 
-    store::PreparedRow row = store::prepare_row(key_for(hash), sample.record);
+    HydraRecord record = sample.record;
+    record.legacy_fills = legacy_fills;
+    store::PreparedRow row = store::prepare_row(key_for(hash, legacy_fills), record);
     row.hyhash = hash;
     row.bestpath = bestpath;
     row.summary.score = score;
     row.summary.actcount = acts;
     row.summary.notecount = 1234;
     store.add_row(row);
+}
+// A Clone Hero 1.0 result, and a 1.1 one.
+void put_ch10(store::RecordStore& store, const std::string& hash, int64_t score, int acts,
+              const std::string& bestpath) {
+    put(store, true, hash, score, acts, bestpath);
+}
+void put_ch11(store::RecordStore& store, const std::string& hash, int64_t score, int acts,
+              const std::string& bestpath) {
+    put(store, false, hash, score, acts, bestpath);
 }
 
 std::vector<FillCompareRow> compare(store::RecordStore& old_store,
@@ -98,8 +113,8 @@ TEST_CASE("collect_fill_rows: delta sign and status literals") {
     store::RecordStore new_store(":memory:");
 
     // 1.1 scores higher: the rare long-fill gain.
-    put(old_store, kBoth, 1000000, 3, "old-path-A");
-    put(new_store, kBoth, 1050000, 4, "new-path-A");
+    put_ch10(old_store,kBoth, 1000000, 3, "old-path-A");
+    put_ch11(new_store,kBoth, 1050000, 4, "new-path-A");
 
     std::vector<FillCompareRow> rows = compare(old_store, new_store);
     REQUIRE(rows.size() == 1);
@@ -124,11 +139,11 @@ TEST_CASE("collect_fill_rows: 1.0 higher and same") {
     store::RecordStore new_store(":memory:");
 
     // The common case: 4 beats is the stricter deadline, so 1.1 drops.
-    put(old_store, kBoth, 1050000, 4, "old-path-B");
-    put(new_store, kBoth, 1000000, 3, "new-path-B");
+    put_ch10(old_store,kBoth, 1050000, 4, "old-path-B");
+    put_ch11(new_store,kBoth, 1000000, 3, "new-path-B");
     // A chart where the rule change made no difference at all.
-    put(old_store, kOldOnly, 777000, 2, "tie-path");
-    put(new_store, kOldOnly, 777000, 2, "tie-path");
+    put_ch10(old_store,kOldOnly, 777000, 2, "tie-path");
+    put_ch11(new_store,kOldOnly, 777000, 2, "tie-path");
 
     std::vector<FillCompareRow> rows = compare(old_store, new_store);
     REQUIRE(rows.size() == 2);
@@ -148,8 +163,8 @@ TEST_CASE("collect_fill_rows: a chart in one database only still gets a row") {
     store::RecordStore old_store(":memory:");
     store::RecordStore new_store(":memory:");
 
-    put(old_store, kOldOnly, 900000, 2, "only-old-path");
-    put(new_store, kNewOnly, 800000, 5, "only-new-path");
+    put_ch10(old_store,kOldOnly, 900000, 2, "only-old-path");
+    put_ch11(new_store,kNewOnly, 800000, 5, "only-new-path");
 
     std::vector<FillCompareRow> rows = compare(old_store, new_store);
     REQUIRE(rows.size() == 2);  // the union of both key sets
@@ -169,6 +184,28 @@ TEST_CASE("collect_fill_rows: a chart in one database only still gets a row") {
     CHECK_FALSE(only_new->old_score.has_value());
     CHECK_FALSE(only_new->delta.has_value());
     CHECK(only_new->old_path.empty());
+}
+
+TEST_CASE("collect_fill_rows: each side reads only its own rule, even from one store") {
+    // One store holding both rules' results for a chart, as the app's own
+    // database does once "1.0 fills" has been used.
+    store::RecordStore both(":memory:");
+    put_ch10(both, kBoth, 1000000, 3, "old-path-E");
+    put_ch11(both, kBoth, 1050000, 4, "new-path-E");
+
+    std::vector<FillCompareRow> rows = compare(both, both);
+    REQUIRE(rows.size() == 1);
+    CHECK(rows[0].old_score == 1000000);
+    CHECK(rows[0].new_score == 1050000);
+    CHECK(rows[0].old_path == "old-path-E");
+    CHECK(rows[0].new_path == "new-path-E");
+
+    // A 1.1 result on the old side is not a 1.0 answer.
+    store::RecordStore ch11_only(":memory:");
+    put_ch11(ch11_only, kBoth, 1050000, 4, "new-path-E");
+    rows = compare(ch11_only, ch11_only);
+    REQUIRE(rows.size() == 1);
+    CHECK(rows[0].status == "only 1.1");
 }
 
 TEST_CASE("tally_fill_rows counts every status") {
@@ -193,8 +230,8 @@ TEST_CASE("tally_fill_rows counts every status") {
 TEST_CASE("build_fill_html substitutes every placeholder") {
     store::RecordStore old_store(":memory:");
     store::RecordStore new_store(":memory:");
-    put(old_store, kBoth, 1000000, 3, "old-path-C");
-    put(new_store, kBoth, 1050000, 4, "new-path-C");
+    put_ch10(old_store,kBoth, 1000000, 3, "old-path-C");
+    put_ch11(new_store,kBoth, 1050000, 4, "new-path-C");
 
     std::vector<FillCompareRow> rows = compare(old_store, new_store);
     REQUIRE(rows.size() == 1);
@@ -217,10 +254,10 @@ TEST_CASE("build_fill_html substitutes every placeholder") {
 TEST_CASE("generate_fill_report: tally and framing behind one seam") {
     store::RecordStore old_store(":memory:");
     store::RecordStore new_store(":memory:");
-    put(old_store, kBoth, 1000000, 3, "old-path-D");
-    put(new_store, kBoth, 1050000, 4, "new-path-D");   // 1.1 higher
-    put(old_store, kOldOnly, 900000, 2, "only-old");   // only 1.0
-    put(new_store, kNewOnly, 800000, 5, "only-new");   // only 1.1
+    put_ch10(old_store,kBoth, 1000000, 3, "old-path-D");
+    put_ch11(new_store,kBoth, 1050000, 4, "new-path-D");   // 1.1 higher
+    put_ch10(old_store,kOldOnly, 900000, 2, "only-old");   // only 1.0
+    put_ch11(new_store,kNewOnly, 800000, 5, "only-new");   // only 1.1
 
     app::fill_report::GeneratedFillReport result =
         app::fill_report::generate_fill_report(old_store, new_store, kMode,
@@ -252,8 +289,8 @@ TEST_CASE("collect_fill_rows: a blank stored song name reads (unknown)") {
 
     // A blank songmeta name from before the fallback. add_song keeps the latest
     // name it sees, so the blank name goes in after put()'s own "Song aa11".
-    put(old_store, kBoth, 1000000, 3, "old-path");
-    put(new_store, kBoth, 1000000, 3, "new-path");
+    put_ch10(old_store,kBoth, 1000000, 3, "old-path");
+    put_ch11(new_store,kBoth, 1000000, 3, "new-path");
     old_store.add_song(kBoth, "", "Test Artist", "Test Charter", sample_chart().song);
     new_store.add_song(kBoth, "", "Test Artist", "Test Charter", sample_chart().song);
 

@@ -87,19 +87,29 @@ hydra_fillcompare ... --no-open
 
 All three read the app's settings file, so they analyze, report and compare
 at the same chart mode, SP cap, timing limit and score range the app is set to.
+The fill rule is the exception, below.
 
-Clone Hero 1.1 changed when a drum fill appears. `--legacy-fills` scores by
-the older 1.0 rule instead. The rule is not stored on each result, so a 1.0
-run needs its own database, and hydra_batch refuses to write one into Hydra's
-own `hydra.db`. Each database is stamped with the rule that filled it, and
-hydra_batch refuses (exit code 2) a run whose rule disagrees with the stamp.
-`--reindex` never changes the stamp. To see what the rule change did, fill two
-databases and compare them:
+Clone Hero 1.1 changed when a drum fill appears. The app's **1.0 fills**
+setting scores by the older 1.0 rule instead. Each result remembers which rule
+made it, so a song's 1.0 and 1.1 results sit side by side in `hydra.db`.
+
+`hydra_batch --legacy-fills` does the same from the command line. It ignores
+the app's 1.0 fills setting and goes by the flag alone. It still refuses to
+write into Hydra's own `hydra.db`, so give it its own `--db`. Each database it
+fills is stamped with the rule, and hydra_batch refuses (exit code 2) a run
+whose rule disagrees with the stamp. `--reindex` never changes the stamp.
+`hydra_report` on a database stamped 1.0 reports its 1.0 results.
+
+To see what the rule change did, compare the two. `hydra_fillcompare` reads
+the 1.0 results from `--old` and the 1.1 results from `--new`. They can be two
+files, or the app's own database twice:
 
 ```
 hydra_batch --legacy-fills --db ch10.db
 hydra_batch --db ch11.db
 hydra_fillcompare --old ch10.db --new ch11.db
+
+hydra_fillcompare --old hydra.db --new hydra.db
 ```
 
 ## Building from source

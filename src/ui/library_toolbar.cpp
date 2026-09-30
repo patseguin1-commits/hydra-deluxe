@@ -95,7 +95,8 @@ void render_actions_row(AppState& app) {
     // only means anything there. Disabled elsewhere, with the reason on hover.
     const bool expert = app.settings.difficulty() == Difficulty::Expert;
     const bool ch_cap = app.settings.sp_cap == kCloneHeroSpCap;
-    const bool compare_off = !expert || !ch_cap;
+    const bool ch11_fills = !app.settings.legacy_fills;
+    const bool compare_off = !expert || !ch_cap || !ch11_fills;
     begin_disabled_button(compare_off);
     if (ImGui::Button("Compare with dmleaderboards...")) {
         // Fresh picker: drop a finished report (a running one is parked, not
@@ -113,6 +114,9 @@ void render_actions_row(AppState& app) {
             ImGui::SetTooltip("Needs SP cap %d, Clone Hero's rule: the leaderboard's scores "
                               "were played under it.",
                               kCloneHeroSpCap);
+        else if (!ch11_fills)
+            ImGui::SetTooltip("Needs Clone Hero 1.1 fills: untick \"1.0 fills\". The "
+                              "leaderboard is played on current Clone Hero.");
         else
             ImGui::SetTooltip("Compare a dmleaderboards.com player's scores against your library");
     }

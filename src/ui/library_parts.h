@@ -48,6 +48,7 @@ std::string format_duration(double seconds);
 struct BatchSettingsSummary {
     std::string difficulty;   // "Expert · Pro Drums · 2x Bass"
     std::string sp_cap;       // "4 bars (Clone Hero's rule)"
+    std::string fills;        // "Clone Hero 1.1" or "Clone Hero 1.0"
     std::string score_range;  // "2 scores" or "2,000 points"
     std::string path_limit;   // "10 ms" or "off"
 };

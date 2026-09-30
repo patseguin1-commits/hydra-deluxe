@@ -33,6 +33,7 @@
 #include "corpus_util.h"
 #include "parse/song.h"
 #include "record_bytes.h"
+#include "search/graph.h"
 #include "search/pather.h"
 #include "store/record_store.h"
 #include "store/stored_versions.h"
@@ -922,12 +923,13 @@ TEST_CASE("RecordKey compares on every part of the identity") {
     CHECK(CapQuery::at(4) != CapQuery::at(8));
     CHECK(CapQuery{} == CapQuery::at(kCloneHeroSpCap));
 
-    // Each of the lens's four fields is part of the identity...
+    // Each of the lens's five fields is part of the identity...
     CHECK(kLensA == Lens::from(10, 0, 20));
     CHECK(kLensA != Lens::from(11, 0, 20));
     CHECK(kLensA != Lens::from(10, 1, 20));
     CHECK(kLensA != Lens::from(10, 0, 21));
     CHECK(kLensA != Lens::from(std::nullopt, 0, 20));
+    CHECK(kLensA != Lens::from(10, 0, 20, /*legacy_fills=*/true));
 
     // ...except the ms value when the limit is off, which the engine ignores:
     // "off at 10" and "off at 42" ran the same search.
@@ -1170,7 +1172,135 @@ TEST_CASE("a database from Hydra 1.6 or older opens with nothing to show") {
     }
     // The old table is left alone: nothing read it and nothing rewrote it.
     CHECK(scalar(path, "SELECT COUNT(*) FROM records") == 1);
-    CHECK(scalar(path, "PRAGMA user_version") == 2);
+    CHECK(scalar(path, "PRAGMA user_version") == 3);
+    std::remove(path.c_str());
+}
+
+// ---- the fill rule in the key (docs/adr/0010) ------------------------------
+
+namespace {
+
+// The default Lens{} but for the fill rule, so a key differs from its 1.1
+// twin in nothing else.
+const Lens kLegacy = [] {
+    Lens lens;
+    lens.legacy_fills = 1;
+    return lens;
+}();
+
+HydraRecord legacy_at_cap(int cap) {
+    HydraRecord r = at_cap(cap);
+    r.legacy_fills = true;
+    return r;
+}
+
+// Turns a schema 3 file back into schema 2: the results table without its
+// legacy_fills column, every row and result_id kept, user_version 2.
+void downgrade_to_schema2(const std::string& path) {
+    exec_on_file(path,
+                 "ALTER TABLE results RENAME TO r3;"
+                 "CREATE TABLE results ("
+                 "  result_id INTEGER PRIMARY KEY, hyhash TEXT NOT NULL,"
+                 "  chartmode TEXT NOT NULL, hyversion TEXT NOT NULL,"
+                 "  sp_cap INTEGER NOT NULL, ms_enabled INTEGER NOT NULL,"
+                 "  ms_value INTEGER NOT NULL, depth_mode INTEGER NOT NULL,"
+                 "  depth_value INTEGER NOT NULL, bestpath TEXT NOT NULL,"
+                 "  structure BLOB NOT NULL, score INTEGER, actcount INTEGER,"
+                 "  maxskip INTEGER, hardest_ms REAL, avgmult REAL, notecount INTEGER,"
+                 "  sqin_count INTEGER, sqout_count INTEGER, pathcount INTEGER,"
+                 "  stars INTEGER,"
+                 "  UNIQUE (hyhash, chartmode, sp_cap, ms_enabled, ms_value, depth_mode,"
+                 "          depth_value));"
+                 "INSERT INTO results SELECT result_id, hyhash, chartmode, hyversion,"
+                 " sp_cap, ms_enabled, ms_value, depth_mode, depth_value, bestpath,"
+                 " structure, score, actcount, maxskip, hardest_ms, avgmult, notecount,"
+                 " sqin_count, sqout_count, pathcount, stars FROM r3;"
+                 "DROP TABLE r3;"
+                 "PRAGMA user_version = 2;");
+}
+
+}  // namespace
+
+TEST_CASE("1.0 and 1.1 results for one chart sit side by side") {
+    RecordStore store(":memory:");
+    store.add_song("h", "Song", "Artist", "Charter", fixture().song);
+    const RecordKey ch11{"h", "mode", CapQuery::at(4)};
+    const RecordKey ch10{"h", "mode", CapQuery::at(4), kLegacy};
+
+    store.add_record(ch11, at_cap(4));
+    CHECK(store.get_summary(ch10).status == RecordStatus::NotAnalyzed);
+    CHECK_FALSE(store.has_record(ch10));
+
+    // Writing the 1.0 result keeps the 1.1 one, and each lookup finds its own.
+    store.add_record(ch10, legacy_at_cap(4));
+    CHECK(store.counts().second == 2);
+    const RecordLookup old_rule = store.get_record(ch10);
+    const RecordLookup new_rule = store.get_record(ch11);
+    REQUIRE(old_rule.status == RecordStatus::Ready);
+    REQUIRE(new_rule.status == RecordStatus::Ready);
+    CHECK(old_rule.record->legacy_fills);
+    CHECK_FALSE(new_rule.record->legacy_fills);
+    CHECK(store.analyzed_hashes("mode", CapQuery::at(4), kLegacy).count("h") == 1);
+
+    // Re-analyzing under 1.0 replaces only the 1.0 row.
+    store.add_record(ch10, legacy_at_cap(4));
+    CHECK(store.counts().second == 2);
+    CHECK(store.get_record(ch11).status == RecordStatus::Ready);
+}
+
+TEST_CASE("prepare_row refuses a key that names the other fill rule") {
+    const RecordKey ch10{"h", "mode", CapQuery::at(4), kLegacy};
+    const RecordKey ch11{"h", "mode", CapQuery::at(4)};
+    CHECK_THROWS_AS(prepare_row(ch10, at_cap(4)), std::invalid_argument);
+    CHECK_THROWS_AS(prepare_row(ch11, legacy_at_cap(4)), std::invalid_argument);
+    CHECK(prepare_row(ch10, legacy_at_cap(4)).lens.legacy_fills == 1);
+}
+
+TEST_CASE("a schema 2 database keeps its results, filed under Clone Hero 1.1") {
+    const std::string path = temp_db("schema2");
+    std::remove(path.c_str());
+    const RecordKey key{"h", "mode", CapQuery::at(4)};
+    int64_t id_before = 0;
+    {
+        RecordStore seed(path);
+        seed.add_song("h", "Song", "Artist", "Charter", fixture().song);
+        seed.add_record(key, at_cap(4));
+    }
+    id_before = scalar(path, "SELECT result_id FROM results");
+    downgrade_to_schema2(path);
+    REQUIRE(scalar(path, "SELECT COUNT(*) FROM pragma_table_info('results')"
+                         " WHERE name='legacy_fills'") == 0);
+    {
+        RecordStore store(path);
+        // Still Ready: its paths come back through the kept result_id.
+        CHECK(store.get_record(key).status == RecordStatus::Ready);
+        CHECK(store.get_summary(RecordKey{"h", "mode", CapQuery::at(4), kLegacy}).status ==
+              RecordStatus::NotAnalyzed);
+    }
+    CHECK(scalar(path, "SELECT result_id FROM results") == id_before);
+    CHECK(scalar(path, "SELECT legacy_fills FROM results") == 0);
+    CHECK(scalar(path, "SELECT COUNT(*) FROM sqlite_master WHERE name='results_schema2'") == 0);
+    CHECK(scalar(path, "PRAGMA user_version") == 3);
+    std::remove(path.c_str());
+}
+
+TEST_CASE("a schema 2 database hydra_batch --legacy-fills filled is filed under 1.0") {
+    const std::string path = temp_db("schema2_ch10");
+    std::remove(path.c_str());
+    const RecordKey ch10{"h", "mode", CapQuery::at(4), kLegacy};
+    {
+        RecordStore seed(path);
+        seed.add_song("h", "Song", "Artist", "Charter", fixture().song);
+        seed.add_record(ch10, legacy_at_cap(4));
+        seed.set_engine_mode(engine_mode_stamp(FillDeadlineRule::Ch10));
+    }
+    downgrade_to_schema2(path);
+    {
+        RecordStore store(path);
+        CHECK(store.get_record(ch10).status == RecordStatus::Ready);
+        CHECK(store.get_summary(RecordKey{"h", "mode", CapQuery::at(4)}).status ==
+              RecordStatus::NotAnalyzed);
+    }
     std::remove(path.c_str());
 }
 

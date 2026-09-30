@@ -497,12 +497,11 @@ int cmd_dump(const Args& a) {
     }
 
     // Clone Hero 1.0 spawned fills 1.1 rejects, so a 1.0 run has to be priced
-    // under 1.0's fill deadline. Every row in the database was written under
-    // the 1.1 rule, which makes all of them the wrong answer here: the chart
-    // is always analyzed fresh, and --no-analyze has nothing to switch off.
-    // Nothing is written back — dump and target never touch a database — so
-    // ADR 0010's guard against storing results from non-default settings does
-    // not apply to either of them.
+    // under 1.0's fill deadline. The chart is always analyzed fresh here, and
+    // --no-analyze has nothing to switch off: this path predates stored 1.0
+    // results (the app's "1.0 fills" setting, docs/adr/0010) and was kept as
+    // it was. Nothing is written back — dump and target never touch a
+    // database.
     if (a.legacy_fills) {
         const Song song = load_songpath(a.chart, s.view_prodrums,
                                         s.effective_bass2x(), s.difficulty(), s.rules);
@@ -512,7 +511,7 @@ int cmd_dump(const Args& a) {
         }
         std::fprintf(stderr,
                      "--legacy-fills: analyzing under the Clone Hero 1.0 fill "
-                     "rule; the stored rows are 1.1 results and are ignored.\n");
+                     "rule; stored rows are not read.\n");
         SearchSettings cfg = s.to_analysis_settings();
         cfg.legacy_fill_deadline = true;
         const HydraRecord rec = analyze_chart(song, cfg);
@@ -636,8 +635,7 @@ int cmd_target(const Args& a) {
 
     SearchSettings cfg = s.to_analysis_settings();
     // Price the named path under Clone Hero 1.0's fill deadline when asked.
-    // target only ever prints, so ADR 0010's don't-store-non-default-settings
-    // guard has nothing to guard against here.
+    // target only ever prints; nothing is stored.
     cfg.legacy_fill_deadline = a.legacy_fills;
     HydraRecord rec;
     rec.paths = search_target(song, cfg, ticks);

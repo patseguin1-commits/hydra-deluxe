@@ -92,6 +92,53 @@ void test_cap_switch(ImGuiTestContext* ctx) {
     }
 }
 
+// "1.0 fills" keys a result like the SP cap does: ticking it shows the song as
+// not analyzed, an analysis under it is a 1.0 result, and unticking brings the
+// 1.1 result back without analyzing again. The leaderboard comparison greys
+// out while it is on.
+void test_legacy_fills(ImGuiTestContext* ctx) {
+    Harness& h = harness(ctx);
+    reset_app(h);
+    scan_library(ctx);
+    if (ctx->IsError()) return;
+    open_details(ctx, 0);
+    if (ctx->IsError()) return;
+    auto analyze = [&] {
+        ctx->ItemClick(analyze_button_ref(h).c_str());
+        return wait_until(ctx, [&] { return h.app->analyze_job == nullptr; }, 300) &&
+               h.app->viewed.record.has_value() && !h.app->viewed.record->paths.empty();
+    };
+    auto compare_disabled = [&] {
+        return (ctx->ItemInfo("//Hydra/Compare with dmleaderboards...").ItemFlags &
+                ImGuiItemFlags_Disabled) != 0;
+    };
+    IM_CHECK(analyze());
+    IM_CHECK(!h.app->viewed.record->legacy_fills);
+    const std::string best11 = h.app->viewed.record->best_path().pathstring();
+    IM_CHECK(!compare_disabled());
+
+    ctx->ItemCheck("//Hydra/**/1.0 fills");
+    IM_CHECK(wait_until(ctx, [&] { return h.app->settings.legacy_fills; }, 5));
+    IM_CHECK(h.app->library_row_at(0).status == hydra::store::RecordStatus::NotAnalyzed);
+    IM_CHECK(!h.app->viewed.record.has_value());
+    IM_CHECK(hydra::app::Settings::load_file(h.ini_path).legacy_fills);
+    IM_CHECK(compare_disabled());
+
+    IM_CHECK(analyze());
+    IM_CHECK(h.app->viewed.record->legacy_fills);
+    IM_CHECK(h.app->library_row_at(0).status == hydra::store::RecordStatus::Ready);
+    IM_CHECK(h.app->store->counts().second == 2);
+
+    ctx->ItemUncheck("//Hydra/**/1.0 fills");
+    IM_CHECK(wait_until(ctx, [&] { return !h.app->settings.legacy_fills; }, 5));
+    IM_CHECK(h.app->library_row_at(0).status == hydra::store::RecordStatus::Ready);
+    IM_CHECK(h.app->viewed.record.has_value());
+    IM_CHECK(!h.app->viewed.record->legacy_fills);
+    IM_CHECK(wait_until(ctx, [&] { return visible_text(h).find(best11) != std::string::npos; },
+                        5));
+    IM_CHECK(!compare_disabled());
+}
+
 void test_dynamics(ImGuiTestContext* ctx) {
     Harness& h = harness(ctx);
     reset_app(h);
@@ -677,6 +724,7 @@ const std::vector<TestEntry>& details_tests() {
     static const std::vector<TestEntry> entries = {
         {"analyze", test_analyze},
         {"cap-switch", test_cap_switch},
+        {"legacy-fills", test_legacy_fills},
         {"dynamics", test_dynamics},
         {"dynamics-stored", test_dynamics_stored},
         {"stars", test_stars},

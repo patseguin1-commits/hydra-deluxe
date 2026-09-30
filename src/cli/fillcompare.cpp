@@ -1,7 +1,9 @@
 // hydra_fillcompare — build a sortable HTML page comparing the same charts
 // scored under Clone Hero 1.0's fill-spawn rule against Clone Hero 1.1's.
-// The two answers live in two separate database files (docs/adr/0010); this
-// tool joins them by chart hash and reports where they agree or disagree.
+// It reads the 1.0 results from --old and the 1.1 results from --new, joins
+// them by chart hash and reports where they agree or disagree. Each result
+// carries its rule (docs/adr/0010), so --old and --new may name the same file:
+// the app's own hydra.db once it holds both.
 //
 //     hydra_fillcompare --old ch10.db --new ch11.db
 //     hydra_fillcompare --old ch10.db --new ch11.db --out fill_compare.html

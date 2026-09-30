@@ -392,8 +392,8 @@ void test_library_layout(ImGuiTestContext* ctx) {
     IM_CHECK_LE(bar->ContentSize.x, bar->ContentRegionRect.GetWidth() + 0.5f);
     ctx->SetRef(bar);
     const char* bar_items[] = {"##difficulty", "Pro Drums", "2x Bass", "##spcap",
-                               "##depthvalue", "##depthmode", "Path limit##mslimit",
-                               "##mslimitvalue"};
+                               "1.0 fills", "##depthvalue", "##depthmode",
+                               "Path limit##mslimit", "##mslimitvalue"};
     for (const char* item : bar_items)
         IM_CHECK_LE(ctx->ItemInfo(item).RectFull.Max.x, bar->InnerRect.Max.x + 0.5f);
     const float first_line_y = ctx->ItemInfo("##difficulty").RectFull.Min.y;
@@ -444,7 +444,8 @@ void test_library_layout(ImGuiTestContext* ctx) {
     ctx->SetRef(bar);
     IM_CHECK_LE(bar->ContentSize.x, bar->ContentRegionRect.GetWidth() + 0.5f);
     const float line_y = ctx->ItemInfo("##difficulty").RectFull.Min.y;
-    for (const char* item : {"Pro Drums", "2x Bass", "##spcap", "##depthvalue", "##mslimitvalue"})
+    for (const char* item :
+         {"Pro Drums", "2x Bass", "##spcap", "1.0 fills", "##depthvalue", "##mslimitvalue"})
         IM_CHECK_EQ(ctx->ItemInfo(item).RectFull.Min.y, line_y);
     // The whole row sits centred on the two caption lines ("Analysis
     // settings" over "for every song"), not level with the first of them.

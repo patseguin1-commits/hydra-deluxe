@@ -46,6 +46,7 @@ TEST_CASE("settings round-trip through an INI file") {
     s.hit_window_ms = 79;
     s.preview_volume = 23;
     s.sp_cap = 16;
+    s.legacy_fills = true;
     s.auto_open_report = true;
     s.dm_last_user = "123456789";
 
@@ -68,8 +69,24 @@ TEST_CASE("settings round-trip through an INI file") {
     CHECK(r.hit_window_ms == s.hit_window_ms);
     CHECK(r.preview_volume == s.preview_volume);
     CHECK(r.sp_cap == s.sp_cap);
+    CHECK(r.legacy_fills == s.legacy_fills);
     CHECK(r.auto_open_report == s.auto_open_report);
     CHECK(r.dm_last_user == s.dm_last_user);
+}
+
+TEST_CASE("the 1.0 fills setting reaches the search and the result's key together") {
+    Settings s;
+    CHECK_FALSE(s.legacy_fills);  // Clone Hero 1.1 by default
+    CHECK_FALSE(s.to_analysis_settings().legacy_fill_deadline);
+    CHECK(s.lens().legacy_fills == 0);
+
+    s.legacy_fills = true;
+    CHECK(s.to_analysis_settings().legacy_fill_deadline);
+    CHECK(s.lens().legacy_fills == 1);
+    CHECK(s.record_key("h").lens.legacy_fills == 1);
+    const hydra::app::BatchRun run = s.batch_run();
+    CHECK(run.settings.legacy_fill_deadline);
+    CHECK(run.lens.legacy_fills == 1);
 }
 
 TEST_CASE("a missing INI yields defaults") {
@@ -86,6 +103,7 @@ TEST_CASE("a missing INI yields defaults") {
     CHECK(r.backendlimit_value == 50);
     CHECK(r.hit_window_ms == 85);
     CHECK(r.preview_volume == 40);
+    CHECK_FALSE(r.legacy_fills);
 }
 
 TEST_CASE("malformed INI lines are tolerated") {

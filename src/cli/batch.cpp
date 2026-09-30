@@ -9,11 +9,12 @@
 //     hydra_batch --legacy-fills     # score fills by Clone Hero 1.0's rule
 //     hydra_batch --rules <path>     # rule choices from this file, not the exe's hydra_rules.ini
 //
-// --legacy-fills needs its own --db: the rule is not recorded on a row, so
-// 1.0 and 1.1 results must not share a file (docs/adr/0010). Each run stamps
-// its database with the rule it used, and a run whose rule disagrees with an
-// existing stamp exits 2 without writing. --reindex never stamps. Compare two
-// such databases with hydra_fillcompare.
+// --legacy-fills needs its own --db, and each run stamps its database with the
+// rule it used; a run whose rule disagrees with an existing stamp exits 2
+// without writing. --reindex never stamps. Compare two such databases with
+// hydra_fillcompare. Every result now carries its rule in its key, so the app
+// keeps 1.0 and 1.1 results side by side in hydra.db; these two guards are the
+// command line's behavior from before that, kept as it was (docs/adr/0010).
 //
 // Reads difficulty / pro drums / 2x bass / depth / SP cap from the app's
 // settings INI (app/config.h), so results match what the app would produce
@@ -114,16 +115,18 @@ int main() {
         std::fprintf(stderr, "%s\n", e.what());
         return 2;
     }
+    // The fill rule comes from the flag, never from the app's own "1.0 fills"
+    // setting, so a run means the same thing whatever the app was left on.
+    settings.legacy_fills = legacy_fills;
     hydra::app::BatchRun run = settings.batch_run();
-    run.settings.legacy_fill_deadline = legacy_fills;
     const hydra::app::AnalysisSettings& analysis = run.settings;
     const std::string& chartmode = run.chartmode;
     std::string db = dbpath ? *dbpath : hydra::app::db_path();
 
-    // A legacy run scores fills by a rule the app does not know about, and the
-    // rule is not part of a record's identity (docs/adr/0010) — a legacy row
-    // and a normal row for the same chart are indistinguishable once stored.
-    // So keep them in separate files, and refuse to write the one the GUI reads.
+    // A legacy run gets its own file, and never writes the one the GUI reads:
+    // the command line's rule from before results carried their fill rule
+    // (docs/adr/0010), kept unchanged. The app's "1.0 fills" setting is the
+    // way to put 1.0 results in hydra.db.
     if (legacy_fills && same_file(db, hydra::app::db_path())) {
         std::fprintf(stderr,
                      "--legacy-fills would write Clone Hero 1.0 results into the "
