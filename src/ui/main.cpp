@@ -144,8 +144,6 @@ int main()
                   : hydra::ui::ScreenRect{ 100, 100, 100 + (int)(1280 * main_scale),
                                            100 + (int)(720 * main_scale) };
 
-    // hymisc.HYDRA_VERSION as of this port; matches the "{EDITION_NAME} v..."
-    // title dpg.create_viewport builds. Bump alongside HYDRA_VERSION.
     HWND hwnd = ::CreateWindowW(
         wc.lpszClassName, hydra::kWindowTitleW, WS_OVERLAPPEDWINDOW, rect.left, rect.top,
         rect.width(), rect.height(), nullptr, nullptr, wc.hInstance, nullptr);

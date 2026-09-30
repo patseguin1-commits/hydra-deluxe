@@ -1,7 +1,8 @@
 // The app version, single-sourced from CMake's project(Hydra VERSION ...)
-// via target_compile_definitions. Everything that needs the version string
-// (window titles, the record staleness stamp, the HTTP User-Agent) derives
-// from HYDRA_VERSION so a release bump is one edit in CMakeLists.txt.
+// via target_compile_definitions. The HTTP User-Agent is the one thing in the
+// app that uses it; the installer reads the same number from CMakeLists.txt,
+// so a release bump is one edit there. Stored results are stamped separately
+// (src/store/stored_versions.h).
 
 #ifndef HYDRA_CORE_VERSION_H
 #define HYDRA_CORE_VERSION_H
@@ -17,10 +18,10 @@
 
 namespace hydra {
 // Window title and the taskbar identity (AppUserModelID; must match
-// installer/hydra.iss). The app shows itself as "Hydra Deluxe", but the
+// installer/hydra.iss). The title is the bare name, with no version. The
 // AppUserModelID keeps its old value so existing taskbar pins still group
 // with the running window.
-inline constexpr const wchar_t* kWindowTitleW = L"Hydra Deluxe v" HYDRA_VERSION_W;
+inline constexpr const wchar_t* kWindowTitleW = L"Hydra Deluxe";
 inline constexpr const wchar_t* kAppUserModelIDW = L"Hydra.Hydra";
 }  // namespace hydra
 
