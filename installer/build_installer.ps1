@@ -3,7 +3,7 @@
 #   .\installer\build_installer.ps1              # build Release, stage, compile setup.exe
 #   .\installer\build_installer.ps1 -SkipBuild   # reuse the existing ship build
 #
-# Output: build-cpp\installer\Hydra-<version>-setup.exe
+# Output: build-cpp\installer\HydraDeluxe-<version>-setup.exe
 #
 # It builds the "ship" preset in build-ship\, where Hydra.exe has no attached
 # GUI tests and so no repo paths. The staging step uses `cmake --install`,
@@ -88,4 +88,4 @@ Write-Host "Using ISCC: $iscc"
     (Join-Path $root "hydra.iss")
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
-Write-Host "Installer written to build-cpp\installer\Hydra-$version-setup.exe"
+Write-Host "Installer written to build-cpp\installer\HydraDeluxe-$version-setup.exe"

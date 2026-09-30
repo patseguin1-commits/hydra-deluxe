@@ -18,6 +18,10 @@
 ;     upgrade, since the installer otherwise leaves files it no longer ships.
 ;   * AppId must never change across releases, or upgrades stop replacing
 ;     the existing install and Add/Remove gets duplicate entries.
+;   * The app is shown as "Hydra Deluxe" (AppName, shortcut, Add/Remove), but
+;     the folder, Hydra.exe and the data files keep their old names, so an
+;     upgrade finds the user's records where they were. [InstallDelete]
+;     removes the old "Hydra" Start Menu shortcut the rename replaced.
 
 #ifndef HYDRA_VERSION
   #error Pass /DHYDRA_VERSION (use installer\build_installer.ps1)
@@ -25,9 +29,9 @@
 
 [Setup]
 AppId={{638FCDD7-88E0-438D-9C52-388C6C9CF4E3}
-AppName=Hydra
+AppName=Hydra Deluxe
 AppVersion={#HYDRA_VERSION}
-AppVerName=Hydra {#HYDRA_VERSION}
+AppVerName=Hydra Deluxe {#HYDRA_VERSION}
 DefaultDirName={autopf}\Hydra
 PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
@@ -37,7 +41,7 @@ SetupIconFile={#SourcePath}..\resource\icon_app.ico
 UninstallDisplayIcon={app}\Hydra.exe
 DisableProgramGroupPage=yes
 OutputDir={#SourcePath}..\build-cpp\installer
-OutputBaseFilename=Hydra-{#HYDRA_VERSION}-setup
+OutputBaseFilename=HydraDeluxe-{#HYDRA_VERSION}-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -54,16 +58,17 @@ Source: "{#HYDRA_REDIST}\VC_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafte
 [InstallDelete]
 Type: files; Name: "{app}\HydraUncapped.exe"
 Type: files; Name: "{autoprograms}\Hydra Uncapped.lnk"
+Type: files; Name: "{autoprograms}\Hydra.lnk"
 
 [Icons]
 ; The AppUserModelID must match src/core/version.h so taskbar pins group with
 ; the running process. CLI tools get no shortcuts.
-Name: "{autoprograms}\Hydra"; Filename: "{app}\Hydra.exe"; AppUserModelID: "Hydra.Hydra"
+Name: "{autoprograms}\Hydra Deluxe"; Filename: "{app}\Hydra.exe"; AppUserModelID: "Hydra.Hydra"
 
 [Run]
 Filename: "{tmp}\VC_redist.x64.exe"; Parameters: "/install /quiet /norestart"; \
     StatusMsg: "Installing Microsoft Visual C++ Runtime..."; Check: VCRedistNeeded
-Filename: "{app}\Hydra.exe"; Description: "Launch Hydra"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Hydra.exe"; Description: "Launch Hydra Deluxe"; Flags: nowait postinstall skipifsilent
 
 [Code]
 // Skip the redistributable when the x64 VC++ 2015+ runtime is already there.
@@ -83,7 +88,7 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if (CurUninstallStep = usPostUninstall) and not UninstallSilent then
-    MsgBox('Your Hydra records and settings were kept in ' +
+    MsgBox('Your Hydra Deluxe records and settings were kept in ' +
            ExpandConstant('{app}') + '.' + #13#10 +
            'Delete that folder manually if you no longer want them.',
            mbInformation, MB_OK);

@@ -1,22 +1,22 @@
-# Hydra User Guide
+# Hydra Deluxe User Guide
 
-This guide walks through Hydra's screen in the order you meet it. First the toolbar, then the analysis settings, then the library and its search. After that comes the song panel with its four tabs, then analyzing the whole library, and last the reports.
+This guide walks through Hydra Deluxe's screen in the order you meet it. First the toolbar, then the analysis settings, then the library and its search. After that comes the song panel with its four tabs, then analyzing the whole library, and last the reports.
 
-It covers this version of Hydra. The public Hydra by DragonDelgar has a different screen; see [how the two differ](differences-from-public-hydra.md). For what the path notation and squeezes mean, see the [public Hydra wiki](https://github.com/DragonDelgar/hydra/wiki).
+It covers Hydra Deluxe. The public Hydra by DragonDelgar has a different screen; see [how the two differ](differences-from-public-hydra.md). For what the path notation and squeezes mean, see the [public Hydra wiki](https://github.com/DragonDelgar/hydra/wiki).
 
 ## The main screen
 
-Hydra has one main screen. The toolbar runs along the top. The **Analysis settings** bar sits under it. The library fills the rest of the window.
+Hydra Deluxe has one main screen. The toolbar runs along the top. The **Analysis settings** bar sits under it. The library fills the rest of the window.
 
-Click a song and the **song panel** opens beside the library. Drag the library's right edge to give either side more room. Hydra remembers the width.
+Click a song and the **song panel** opens beside the library. Drag the library's right edge to give either side more room. Hydra Deluxe remembers the width.
 
 When something goes wrong, a message appears under the toolbar. A plain notice fades by itself. A problem stays in orange until you dismiss it with its `X`.
 
 ### Toolbar
 
-**`Manage folders... (N)`** opens the **Song folders** window. N is how many folders you have. Add your Clone Hero song folder (or any folder of charts) with `Add folder...`. Hydra finds every chart in its subfolders. Each folder has a red `X` to remove it, with a confirmation, because removing a folder changes what the next scan finds.
+**`Manage folders... (N)`** opens the **Song folders** window. N is how many folders you have. Add your Clone Hero song folder (or any folder of charts) with `Add folder...`. Hydra Deluxe finds every chart in its subfolders. Each folder has a red `X` to remove it, with a confirmation, because removing a folder changes what the next scan finds.
 
-Hydra reads `notes.mid`/`notes.chart` + `song.ini` folders, `.sng` archives, and the `.srb` bundles Clone Hero's built-in setlist ships with. Adding the game's own `Clone Hero_Data\StreamingAssets\songs` folder brings in the default songs too.
+Hydra Deluxe reads `notes.mid`/`notes.chart` + `song.ini` folders, `.sng` archives, and the `.srb` bundles Clone Hero's built-in setlist ships with. Adding the game's own `Clone Hero_Data\StreamingAssets\songs` folder brings in the default songs too.
 
 **`Scan library`** reads your folders and updates the song list. A song needs a valid ini file to show up. A song that fails is skipped, and the scan window lists the problems when it finishes. Re-scans are fast: a chart whose file size and timestamp haven't changed is not read again. You can cancel a scan part-way; the old library stays as it was.
 
@@ -52,13 +52,13 @@ For example, say you analyzed a song with 2x Bass on and want to see it with 1x 
 
 ## Searching the library
 
-The library lists every song from the latest scan. Its columns are **Title**, **Artist**, **Charter**, **Folder** and **Best path**. Click a column heading to sort by it. Columns can be resized and hidden, and Hydra remembers them, the sort included. The columns always stay in this order. While the song panel is open, the Charter and Folder columns step aside to save room, and the folder shows under the title.
+The library lists every song from the latest scan. Its columns are **Title**, **Artist**, **Charter**, **Folder** and **Best path**. Click a column heading to sort by it. Columns can be resized and hidden, and Hydra Deluxe remembers them, the sort included. The columns always stay in this order. While the song panel is open, the Charter and Folder columns step aside to save room, and the folder shows under the title.
 
 The **Best path** cell shows the song's state under the current analysis settings:
 
 - `Not analyzed` means there is no result yet.
 - A score and a path, like `378,315  3- 1 2`, is the optimal path.
-- `Stale` means the result is out of date. Either another Hydra version made it, or it was made under different rules in `hydra_rules.ini`. Re-analyze to refresh it. If the cause was a rules edit, switching the rules back brings the result back.
+- `Stale` means the result is out of date. Either another version of the app made it, or it was made under different rules in `hydra_rules.ini`. Re-analyze to refresh it. If the cause was a rules edit, switching the rules back brings the result back.
 
 Hover the cell for the same explanation.
 
@@ -68,7 +68,7 @@ The chips above the table filter by state: `All`, `Not analyzed`, `Stale` and `A
 
 Type in the search box to narrow the list. `Ctrl+F` jumps to it. `Escape` or its `X` clears it. The heading above shows how many songs match, like `Library 5 of 97 charts`.
 
-Searching ignores case and accents, so `ALLISTER` finds Allister and `beyonce` finds Beyoncé. Colour and style tags in song names are ignored too. The examples below come from Hydra's test library.
+Searching ignores case and accents, so `ALLISTER` finds Allister and `beyonce` finds Beyoncé. Colour and style tags in song names are ignored too. The examples below come from Hydra Deluxe's test library.
 
 | You type | What it matches | Example |
 |---|---|---|
@@ -83,7 +83,7 @@ Searching ignores case and accents, so `ALLISTER` finds Allister and `beyonce` f
 
 You can mix them: `charter:hoph2o stars:7`. `squeeze<N` works the same as `squeeze<=N`. A path with no squeeze at all passes any squeeze limit.
 
-`stars:` and `squeeze<=` only look at current results. A song that is not analyzed, or whose result is Stale, never matches them. A filter Hydra can't read, like `stars:9`, shows a short note under the search box and is left out of the search.
+`stars:` and `squeeze<=` only look at current results. A song that is not analyzed, or whose result is Stale, never matches them. A filter Hydra Deluxe can't read, like `stars:9`, shows a short note under the search box and is left out of the search.
 
 Under the table, a search shows a `Clear search` button. When a match came from a column that is hidden, a note there says so, like `Matched on folder.`
 
@@ -91,7 +91,7 @@ Under the table, a search shows a `Clear search` button. When a match came from 
 
 Click a song to open its panel beside the library. The top shows the title, the artist and the charter. The `<` and `>` buttons step to the previous and next song in the list. The `X` button, or `Escape`, closes the panel.
 
-**`Hide library`**, left of `<`, gives the song panel the whole window. It then reads `Show library`, which puts the library back at the width you left it. `<` and `>` still step through the list while it's hidden. Closing the panel always brings the library back. Hydra remembers the choice, so the next song opens the same way, even after a restart.
+**`Hide library`**, left of `<`, gives the song panel the whole window. It then reads `Show library`, which puts the library back at the width you left it. `<` and `>` still step through the list while it's hidden. Closing the panel always brings the library back. Hydra Deluxe remembers the choice, so the next song opens the same way, even after a restart.
 
 The button on the right analyzes the song. It reads `Analyze this song` when there is no result, and `Re-analyze` when there is one. A long analysis shows a progress bar and can be cancelled. Closing the panel does not stop it: the analysis finishes, is saved, and the library row updates.
 
@@ -107,7 +107,7 @@ The left side lists the paths the analysis kept, grouped by score. **Optimal** c
 
 Each path shows its own hardest timing right after it, like `378,315 · 3- 1 2   163.0 ms`: the hardest squeeze or early fill that path needs. It turns orange past the difficult limit. A path that needs no timing shows nothing there.
 
-The right side starts with a summary, like `Activations 3 · no SP left over`. Under it, a timeline runs from the first measure to the last, with a mark for each activation. For a result saved before Hydra 1.9, the timeline appears a moment after you open the song: Hydra reads the chart once for its length and remembers it. Nothing is re-analyzed.
+The right side starts with a summary, like `Activations 3 · no SP left over`. Under it, a timeline runs from the first measure to the last, with a mark for each activation. For a result saved before version 1.9, the timeline appears a moment after you open the song: Hydra Deluxe reads the chart once for its length and remembers it. Nothing is re-analyzed.
 
 Each activation is one row. It shows the activation's number, its notation, its measure (like `m32.1.0`), how many bars of SP you spend, and a badge for a squeeze, like `squeeze out 163 ms`. Click a row to open it, or use `Expand all` and `Collapse all`.
 
@@ -167,7 +167,7 @@ This tab counts the chart's ghost and accent notes. Ghosts and accents are the s
 
 The **Pads** table shows, for each pad (and each cymbal separately under Pro Drums), how many notes are ghosts, accents and normal hits. **Kicks** does the same for kicks, with 2x kicks on their own row and a line saying how many kick notes are 2x. When 2x Bass is off, the 2x kick row stays visible but greyed out and is left out of the totals. **Totals** adds them up.
 
-The **Chart** box says whether the chart has dynamics turned on. A MIDI chart has to opt in. Without that flag Clone Hero ignores the velocity markings, so Hydra shows the counts but notes that the game won't apply them.
+The **Chart** box says whether the chart has dynamics turned on. A MIDI chart has to opt in. Without that flag Clone Hero ignores the velocity markings, so Hydra Deluxe shows the counts but notes that the game won't apply them.
 
 Counts are worked out the first time you open the tab and saved, so it opens instantly after that. Analyzing a song with 2x Bass on also saves them.
 
@@ -202,7 +202,7 @@ When it finishes, the strip changes to a summary: how many songs were analyzed, 
 
 A finished batch builds the **path report**, `hydra_paths.html`. It is a sortable, searchable web page of every analyzed song's paths, squeeze timings and scores. It follows the current analysis settings.
 
-Reports are saved in your **Documents\Hydra** folder. Hydra makes the folder if it's missing. If Windows can't find your Documents folder, the report goes next to Hydra's database instead. A report an older Hydra saved next to `hydra.db` stays there; the next batch writes a new one in Documents\Hydra.
+Reports are saved in your **Documents\Hydra** folder. Hydra Deluxe makes the folder if it's missing. If Windows can't find your Documents folder, the report goes next to Hydra Deluxe's database instead. A report an older version saved next to `hydra.db` stays there; the next batch writes a new one in Documents\Hydra.
 
 The finished strip offers:
 
@@ -215,11 +215,11 @@ The finished strip offers:
 
 ### Compare with dmleaderboards
 
-`Compare with dmleaderboards...` compares a [dmleaderboards.com](https://dmleaderboards.com) player's posted scores with your stored optimals. Pick a player from the searchable list; Hydra remembers the last pick. Hydra fetches their scores, matches them to your analyzed songs by chart hash, and saves a sortable page, `hydra_dmcompare.html`, in the same Documents\Hydra folder. The page lists each score, Hydra's optimal, the points left, and a status per row.
+`Compare with dmleaderboards...` compares a [dmleaderboards.com](https://dmleaderboards.com) player's posted scores with your stored optimals. Pick a player from the searchable list; Hydra Deluxe remembers the last pick. Hydra Deluxe fetches their scores, matches them to your analyzed songs by chart hash, and saves a sortable page, `hydra_dmcompare.html`, in the same Documents\Hydra folder. The page lists each score, Hydra Deluxe's optimal, the points left, and a status per row.
 
 When it's done, the window counts the scores that matched, the ones above optimal, the ones for songs you haven't analyzed, and the ones for songs not in your library.
 
-Rows above optimal are expected, not errors. Hydra's optimal leaves out several score backends on purpose. Many leaderboard scores were also set on older Clone Hero versions, whose fill rules allowed totals that are impossible now.
+Rows above optimal are expected, not errors. Hydra Deluxe's optimal leaves out several score backends on purpose. Many leaderboard scores were also set on older Clone Hero versions, whose fill rules allowed totals that are impossible now.
 
 The comparison needs Expert, an SP cap of 4 and `1.0 fills` off, because the leaderboard only holds Expert scores played under Clone Hero's rules. Only songs analyzed under the current settings can match, so analyze your library first for a full comparison.
 
@@ -227,12 +227,12 @@ The first request after a while can take tens of seconds, because the leaderboar
 
 ## Scoring rules (`hydra_rules.ini`)
 
-A few of Hydra's rules are judgment calls, not facts read from Clone Hero. You can change them in `hydra_rules.ini`, a plain text file next to Hydra.exe. The app and every command line tool read the same file.
+A few of Hydra Deluxe's rules are judgment calls, not facts read from Clone Hero. You can change them in `hydra_rules.ini`, a plain text file next to Hydra.exe. The app and every command line tool read the same file.
 
 The file is optional. A missing file, or a missing line, means the default below. Each line is `key = value`. A line starting with `#` is a comment. There are no `[section]` headers.
 
 ```ini
-# Hydra's defaults
+# Hydra Deluxe's defaults
 backend_leeway_ms = 3.0
 sqout_rule = first_note
 max_tied_paths = 4
@@ -246,24 +246,18 @@ What each line does:
 
 - **`backend_leeway_ms`** (default `3.0`): how far past the Star Power end a backend note can land and still count in the score.
 - **`sqout_rule`** (default `first_note`): what a squeeze-out costs. `first_note` removes the Star Power doubling from one note of the chord (the lowest-value one). `whole_chord` removes it from every note in the chord.
-- **`max_tied_paths`** (default `4`): how many paths Hydra keeps when several reach the same score. More paths means longer lists and slower analysis.
-- **`fill_cooldown_measures`** (default `4`): for charts with no authored fills, how many measures must pass after an activation point before Hydra places the next one.
+- **`max_tied_paths`** (default `4`): how many paths Hydra Deluxe keeps when several reach the same score. More paths means longer lists and slower analysis.
+- **`fill_cooldown_measures`** (default `4`): for charts with no authored fills, how many measures must pass after an activation point before Hydra Deluxe places the next one.
 - **`fill_max_distance_beats`** (default `0.5`): for charts with no authored fills, how far from a measure line a note can sit and still get a fill.
-- **`fill_length_measures`** (default `0.5`): for charts with no authored fills, how long each fill Hydra places is, in measures.
+- **`fill_length_measures`** (default `0.5`): for charts with no authored fills, how long each fill Hydra Deluxe places is, in measures.
 - **`fill_land_slop_beats`** (default `0.03125`, a 32nd of a beat): how close a fill's end must be to a note for the fill to count. This one applies to authored fills too.
 
-Older files may still have `auto_cap_ladder` or `auto_budget_s` lines. Hydra reads and ignores them, so those files keep working.
+Older files may still have `auto_cap_ladder` or `auto_budget_s` lines. Hydra Deluxe reads and ignores them, so those files keep working.
 
-A value Hydra can't read, or a key it doesn't know, is an error that names the key. The command line tools print the error and stop with exit code 2. The app still opens and shows the error, but analysis stays off until you fix the file and restart Hydra. Hydra never analyzes on the defaults behind your back.
+A value Hydra Deluxe can't read, or a key it doesn't know, is an error that names the key. The command line tools print the error and stop with exit code 2. The app still opens and shows the error, but analysis stays off until you fix the file and restart Hydra Deluxe. Hydra Deluxe never analyzes on the defaults behind your back.
 
 Every result remembers the rules it was made with. After you change the file, results made under the old rules show `Stale` until you re-analyze them. Switching the rules back brings those results back.
 
-## Command line tools
+## For power users: command line tools
 
-Three console programs ship alongside the app and share its settings and library:
-
-- **`hydra_batch`** runs the same batch analysis as `Analyze library...`, printing one line per chart. Flags: `--redo` (re-analyze existing results), `--reindex`, `--db <path>`, `--rules <path>`, `--legacy-fills`. `--legacy-fills` prices charts under Clone Hero 1.0's fill rule instead of 1.1's. It refuses to write the app's own database, so give it its own `--db`. To put 1.0 results in the app's database, use the `1.0 fills` setting instead. `hydra_batch` ignores that setting and goes by the flag.
-- **`hydra_report`** rebuilds the HTML path report from stored results. Flags: `--paths N`, `--all-paths`, `--out <path>`, `--no-open`, `--db <path>`, `--rules <path>`.
-- **`hydra_fillcompare`** reads the 1.0 results from `--old` and the 1.1 results from `--new`, and writes a sortable page of every chart where the fill rules disagree. Both flags can name the same file, such as `hydra.db` once you've analyzed with `1.0 fills` both on and off. Flags: `--old <path>`, `--new <path>`, `--out <path>`, `--no-open`, `--rules <path>`.
-
-All three use the analysis settings from the app's settings file. All three read the scoring rules from `hydra_rules.ini` next to Hydra.exe, or from the file `--rules` names. If that file has an error, they print it and stop with exit code 2.
+You never need these; everything they do is in the app. Three console programs sit next to Hydra.exe and share its settings and library. `hydra_batch` analyzes the library, `hydra_report` rebuilds the path report, and `hydra_fillcompare` compares Clone Hero 1.0 and 1.1 fill results. The [developer page](development.md#command-line-tools) lists their flags.

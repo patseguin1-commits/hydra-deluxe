@@ -1,14 +1,14 @@
-# How this Hydra differs from the public Hydra
+# How Hydra Deluxe differs from the public Hydra
 
 The public Hydra is DragonDelgar's, at [DragonDelgar/hydra](https://github.com/DragonDelgar/hydra). It is a Python app. Its latest release is v1.3.1, from August 7, 2026.
 
-This Hydra started from that v1.3.1 and has been developed on its own since, from 1.4.1 up to 1.9.6. Nothing flows between the two automatically. The public version has kept changing too (see [What the public version has](#what-the-public-version-has-that-this-one-doesnt)).
+Hydra Deluxe started from that v1.3.1 and has been developed on its own since, from 1.4.1 up to 1.9.7. Up to 1.9.7 it was also called Hydra; the new name tells the two apart. Nothing flows between the two automatically. The public version has kept changing too (see [What the public version has](#what-the-public-version-has-that-this-one-doesnt)).
 
 Both do the same job. They read Clone Hero drum charts and find the Star Power paths that give the best score. The path notation is the same, and the mechanics pages on the [public wiki](https://github.com/DragonDelgar/hydra/wiki) (squeezes, early fills, the optimal checklist) apply to both.
 
 ## At a glance
 
-| | Public Hydra 1.3.1 | This Hydra 1.9.6 |
+| | Public Hydra 1.3.1 | Hydra Deluxe 1.9.7 |
 |---|---|---|
 | Written in | Python | C++, a native Windows app |
 | Install | Unzip anywhere, run `Hydra.exe` | Installer into `C:\Program Files\Hydra` |
@@ -71,11 +71,9 @@ Two changes affect only the display, never the path search. The hit window is 85
 
 **Try a different SP cap.** Clone Hero's meter holds 4 bars. This version lets you set another number to see what the cap costs a chart. Scores at any cap other than 4 can't be reached in the game.
 
-**Change the judgment calls.** A few rules are Hydra's own choices, not facts read from Clone Hero. Examples are the backend leeway, what a squeeze-out costs, and how many tied paths to keep. `hydra_rules.ini` lets you change them. The [user guide](UserGuide.md#scoring-rules-hydra_rulesini) lists every key.
+**Change the judgment calls.** A few rules are Hydra Deluxe's own choices, not facts read from Clone Hero. Examples are the backend leeway, what a squeeze-out costs, and how many tied paths to keep. `hydra_rules.ini` lets you change them. The [user guide](UserGuide.md#scoring-rules-hydra_rulesini) lists every key.
 
 **Score by Clone Hero 1.0's fill rule.** Clone Hero 1.1 changed when a drum fill appears. The `1.0 fills` setting analyzes under the old 1.0 rule, and keeps those results beside the 1.1 ones. `hydra_batch --legacy-fills` does the same from the command line, and `hydra_fillcompare` shows every chart where the two rules disagree. It's for pricing runs recorded on 1.0.
-
-**Price a path by hand.** `hydra_replay` is a developer tool. It scores a path you type, a path pulled from a saved result, or a path the search never kept. It exists because the search folds equal-scoring paths together, so a real player's path is often in no result at all.
 
 ## What the public version has that this one doesn't
 
@@ -100,8 +98,8 @@ This version doesn't read `records.json`, so your old results don't carry over. 
 | 1.6.0 | The Preview, and the SP cap as a setting |
 | 1.7.0 | One saved result per settings combination, and the Preview follows the chosen path |
 | 1.7.3 | Backends for a last activation that runs past the end of the chart |
-| 1.7.6 | The Clone Hero 1.0 fill rule and `hydra_fillcompare`, and the Preview's SP meter |
-| 1.7.7 | The exact SP end saved with each result, and `hydra_replay` |
+| 1.7.6 | The Clone Hero 1.0 fill rule (command line only), and the Preview's SP meter |
+| 1.7.7 | The exact SP end saved with each result |
 | 1.7.9 | Ghost and accent kicks, the overfill warning, the 60 ms early fill window, `.srb` audio |
 | 1.7.10 | The Dynamics tab |
 | 1.8.0 | `hydra_rules.ini`, and a running score and step controls in the Preview |
@@ -111,5 +109,6 @@ This version doesn't read `records.json`, so your old results don't carry over. 
 | 1.8.4 | Results stay current across releases that don't change the analysis |
 | 1.9.0 | The redesigned screen: song panel, sortable library, search filters, timeline |
 | 1.9.1 to 1.9.6 | Polish: early-fill badges, clearer squeeze tips, every timing scale shown |
+| 1.9.7 | The `1.0 fills` setting in the app |
 
-Each release's full notes are on the [releases page](https://github.com/patseguin1-commits/hydra-test/releases).
+Each release's full notes are on the [releases page](https://github.com/patseguin1-commits/hydra-deluxe/releases).

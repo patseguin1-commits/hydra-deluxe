@@ -17,8 +17,10 @@
 
 namespace hydra {
 // Window title and the taskbar identity (AppUserModelID; must match
-// installer/hydra.iss).
-inline constexpr const wchar_t* kWindowTitleW = L"Hydra v" HYDRA_VERSION_W;
+// installer/hydra.iss). The app shows itself as "Hydra Deluxe", but the
+// AppUserModelID keeps its old value so existing taskbar pins still group
+// with the running window.
+inline constexpr const wchar_t* kWindowTitleW = L"Hydra Deluxe v" HYDRA_VERSION_W;
 inline constexpr const wchar_t* kAppUserModelIDW = L"Hydra.Hydra";
 }  // namespace hydra
 
