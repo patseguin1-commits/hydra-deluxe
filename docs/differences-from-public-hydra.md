@@ -112,4 +112,4 @@ This version doesn't read `records.json`, so your old results don't carry over. 
 | 1.9.7 | The `1.0 fills` setting in the app |
 | 2.0.0 | The new name, Hydra Deluxe |
 
-Each release's full notes are on the [releases page](https://github.com/patseguin1-commits/hydra-deluxe/releases).
+Each release's full notes are on the [releases page](https://github.com/splax77/hydra-deluxe/releases).

@@ -36,7 +36,7 @@ Same content, no bullet wall, no isolated file:line list with no sentences aroun
 
 ### Issue tracker
 
-Issues live as GitHub issues in `patseguin1-commits/hydra-deluxe`, managed with the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues live as GitHub issues in `splax77/hydra-deluxe`, managed with the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

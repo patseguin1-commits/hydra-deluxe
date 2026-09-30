@@ -21,7 +21,7 @@ It reads `.mid`, `.chart`, `.sng` and `.srb` charts, on any difficulty, with or 
 
 ## Getting started
 
-1. Download the installer (the `-setup.exe` file) from the [latest release](https://github.com/patseguin1-commits/hydra-deluxe/releases/latest) and run it. It installs to `C:\Program Files\Hydra`, adds a Start Menu shortcut, and installs the Microsoft VC++ runtime if your PC doesn't have it. The installer isn't code-signed, so Windows SmartScreen may warn — choose "More info" → "Run anyway".
+1. Download the installer (the `-setup.exe` file) from the [latest release](https://github.com/splax77/hydra-deluxe/releases/latest) and run it. It installs to `C:\Program Files\Hydra`, adds a Start Menu shortcut, and installs the Microsoft VC++ runtime if your PC doesn't have it. The installer isn't code-signed, so Windows SmartScreen may warn — choose "More info" → "Run anyway".
 2. Run Hydra Deluxe from the Start Menu.
 3. Click `Manage folders...`, then `Add folder...`, and pick your Clone Hero songs folder (or whichever folder contains the songs you want to add).
 4. Click `Scan library`.
