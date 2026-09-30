@@ -2,6 +2,8 @@
 
 This guide walks through Hydra's screen in the order you meet it. First the toolbar, then the analysis settings, then the library and its search. After that comes the song panel with its four tabs, then analyzing the whole library, and last the reports.
 
+It covers this version of Hydra. The public Hydra by DragonDelgar has a different screen; see [how the two differ](differences-from-public-hydra.md). For what the path notation and squeezes mean, see the [public Hydra wiki](https://github.com/DragonDelgar/hydra/wiki).
+
 ## The main screen
 
 Hydra has one main screen. The toolbar runs along the top. The **Analysis settings** bar sits under it. The library fills the rest of the window.
@@ -256,9 +258,10 @@ Every result remembers the rules it was made with. After you change the file, re
 
 ## Command line tools
 
-Two console programs ship alongside the app and share its settings and library:
+Three console programs ship alongside the app and share its settings and library:
 
 - **`hydra_batch`** runs the same batch analysis as `Analyze library...`, printing one line per chart. Flags: `--redo` (re-analyze existing results), `--reindex`, `--db <path>`, `--rules <path>`, `--legacy-fills`. `--legacy-fills` prices charts under Clone Hero 1.0's fill rule instead of 1.1's. It is a command-line-only mode, and it refuses to write the app's own database, so give it its own `--db`.
 - **`hydra_report`** rebuilds the HTML path report from stored results. Flags: `--paths N`, `--all-paths`, `--out <path>`, `--no-open`, `--db <path>`, `--rules <path>`.
+- **`hydra_fillcompare`** compares a Clone Hero 1.0 database with a 1.1 one and writes a sortable page of every chart where the fill rules disagree. Flags: `--old <path>`, `--new <path>`, `--out <path>`, `--no-open`, `--rules <path>`.
 
-Both use the analysis settings from the app's settings file. Both read the scoring rules from `hydra_rules.ini` next to Hydra.exe, or from the file `--rules` names. If that file has an error, they print it and stop with exit code 2.
+All three use the analysis settings from the app's settings file. All three read the scoring rules from `hydra_rules.ini` next to Hydra.exe, or from the file `--rules` names. If that file has an error, they print it and stop with exit code 2.

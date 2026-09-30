@@ -5,17 +5,36 @@ Featuring a song browsing UI to make information convenient to access even for l
 
 <br><p align="center"><img src="/resource/icon_app.png" width="200"></p>
 
+This is a separate version of [DragonDelgar's Hydra](https://github.com/DragonDelgar/hydra). It started from the public v1.3.1 in August 2026 and was rewritten in C++. It has grown a lot since. [How this version differs from the public Hydra](docs/differences-from-public-hydra.md) covers every change, and why scores can differ between the two.
+
+## What Hydra does
+
+Hydra reads your Clone Hero drum charts and finds the Star Power paths that give the best score. It keeps a few paths just below optimal too, in case the best one is awkward to play.
+
+For each path it tells you how to play it. Each activation says where it is, which chord to activate on, and which squeezes it needs. Each squeeze is a sentence saying which note to hit early or late, by how much, and what it's worth. A score breakdown matches the categories on Clone Hero's results screen.
+
+The **Preview** plays the chart as a 3D note highway with the song's audio. It draws the path on it, with a running score and a Star Power meter. The **Dynamics** tab counts ghost and accent notes. The **Stars** tab shows the score each star needs.
+
+Hydra can analyze your whole library in the background and build a sortable HTML report of every song's paths. It can also compare a player's [dmleaderboards](https://dmleaderboards.com) scores with your optimals.
+
+It reads `.mid`, `.chart`, `.sng` and `.srb` charts, on any difficulty, with or without Pro Drums and 2x Bass.
+
 ## Essential Info
+
+* [Hydra User Guide](docs/UserGuide.md): every button and tab, in the order you meet them.
+* [How this version differs from the public Hydra](docs/differences-from-public-hydra.md)
+
+The public Hydra wiki explains the playing mechanics. They apply to this version too:
 
 * [Path Notation Quick Reference](https://github.com/DragonDelgar/hydra/wiki/Path-Notation-Quick-Reference)
 * [Optimal Checklist](https://github.com/DragonDelgar/hydra/wiki/Optimal-Checklist)
-* [Hydra User Guide](https://github.com/DragonDelgar/hydra/wiki/Hydra-User-Guide)
+* [Squeezes and early fills](https://github.com/DragonDelgar/hydra/wiki): the wiki's "Detailed Mechanics" pages.
 
-Hungry for more info? Check out [the wiki](https://github.com/DragonDelgar/hydra/wiki).
+The wiki's own user guide describes the public app's older screen, not this one.
 
 ## Quick-start guide
 
-1. Download the installer (`Hydra-<version>-setup.exe`) from the [latest release](https://github.com/DragonDelgar/hydra/releases) and run it. It installs to `C:\Program Files\Hydra`, adds Start Menu shortcuts, and installs the Microsoft VC++ runtime if your PC doesn't have it. The installer isn't code-signed, so Windows SmartScreen may warn — choose "More info" → "Run anyway".
+1. Download the installer (`Hydra-<version>-setup.exe`) from the [latest release](https://github.com/patseguin1-commits/hydra-test/releases/latest) and run it. It installs to `C:\Program Files\Hydra`, adds Start Menu shortcuts, and installs the Microsoft VC++ runtime if your PC doesn't have it. The installer isn't code-signed, so Windows SmartScreen may warn — choose "More info" → "Run anyway".
 2. Run Hydra from the Start Menu.
 3. Click `Manage folders...`, then `Add folder...`, and pick your Clone Hero songs folder (or whichever folder contains the songs you want to add). Hydra reads `.mid`, `.chart`, `.sng`, and `.srb` charts.
 4. Click `Scan library`.
@@ -178,6 +197,8 @@ Results saved under the automatic setting are deleted the first time the new
 version opens the database.
 
 ## Acknowledgements
+- DragonDelgar, who wrote Hydra and whose public version this one grew from
+- Onyx, whose drum previewer the Preview's highway is ported from
 - Boddy, Beud, and Nick (BongOfDestiny) for active beta testing
 - Boddy for reference footage / images shown in the Hydra Wiki
 - Drummer's Monthly for being an awesome CH drums community, and for testing some of the first paths ever made by Hydra
