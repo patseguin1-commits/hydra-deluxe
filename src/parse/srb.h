@@ -1,6 +1,6 @@
 // Clone Hero bundled-song (.srb) container reading.
 //
-// The 31 songs that ship with Clone Hero (Clone Hero_Data/StreamingAssets/
+// The 30 songs that ship with Clone Hero (Clone Hero_Data/StreamingAssets/
 // songs/*.srb) use an undocumented container. Reverse-engineered and verified
 // against all of them, the layout is a 16-byte header followed by back-to-back
 // raw DEFLATE streams (no zlib/gzip framing):
@@ -9,7 +9,10 @@
 //   offset 12..15  u32 LE, purpose unknown (never needed for reading)
 //   offset 16      stream 1: metadata block
 //   right after    stream 2: the notes file bytes (a standard notes.mid or
-//                  notes.chart); later streams hold audio/art and are ignored
+//                  notes.chart); streams 3 and 4 are JPEG art, ignored here.
+//                  The audio is not a DEFLATE stream: it follows the chain in
+//                  an encrypted section (see extract_srb_audio in
+//                  app/preview_source.cpp).
 //
 // Decompressed, stream 1 is a 4-byte prefix ("4b4\x01" in every known file)
 // followed by eight length-prefixed strings (u32 LE length + UTF-8 bytes) in

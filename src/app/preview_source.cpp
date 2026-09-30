@@ -266,10 +266,14 @@ std::vector<PreviewAudioStem> extract_srb_audio(const std::string& path) {
     if (!stems.empty()) return stems;
 
     // Real Clone Hero .srb files store audio in an AES-128-CFB-encrypted
-    // section after the DEFLATE chain.  Layout:
-    //   u64 (purpose unclear — not the blob count; skip it)
-    //   blob 0:  16-byte header + u64 size + data[size]
-    //   blob 1+: u64 type_id + 16-byte header + u64 size + data[size]
+    // section after the DEFLATE chain.  Every blob is
+    //   u64 type_id + 16-byte header + u64 size + data[size]
+    // Blob 0's type_id is skipped just below, before the loop; each later
+    // one is skipped inside the loop.  Across all 30 bundled
+    // songs the leading value is 1, 6 or 7 and the later ones 0, 2, 3, 6-12 or
+    // all bits set, which is why it is taken as blob 0's tag rather than a
+    // count.  Which tag means which instrument is unknown, so stems are
+    // labelled by position.
     if (offset + 8 > buf.size()) return stems;
     size_t cursor = offset + 8;  // skip the leading u64
 
